@@ -12,9 +12,10 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM}
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Shell::{NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
-    GWLP_USERDATA, GetCursorPos, GetMessageW, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, IMAGE_ICON,
-    IsWindowVisible, LR_DEFAULTCOLOR, LoadImageW, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage,
+    AppendMenuW, ChangeWindowMessageFilterEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
+    DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetCursorPos, GetMessageW, GetSystemMetrics, GetWindowLongPtrW,
+    GetWindowRect, IMAGE_ICON, IsWindowVisible, LR_DEFAULTCOLOR, LoadImageW, MF_SEPARATOR, MF_STRING, MSG,
+    MSGFLT_ALLOW, PostMessageW, PostQuitMessage,
     RegisterClassW, RegisterWindowMessageW, SM_CXSMICON, SM_CYSMICON, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
     SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos,
     ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE,
@@ -91,7 +92,13 @@ unsafe fn laco(overlay: isize, avisar: mpsc::Sender<isize>) {
             return;
         }
         SetWindowLongPtrW(janela, GWLP_USERDATA, overlay);
-        BARRA_RECRIADA.store(RegisterWindowMessageW(utf16("TaskbarCreated").as_ptr()), Ordering::Relaxed);
+        let barra_recriada = RegisterWindowMessageW(utf16("TaskbarCreated").as_ptr());
+        BARRA_RECRIADA.store(barra_recriada, Ordering::Relaxed);
+        // A release roda como administrador e o Explorer não: sem isto o Windows (UIPI) pode
+        // barrar os cliques no ícone e o aviso de Explorer reiniciado.
+        for mensagem in [AVISO, barra_recriada] {
+            ChangeWindowMessageFilterEx(janela, mensagem, MSGFLT_ALLOW, std::ptr::null_mut());
+        }
         // Sem Explorer agora: o TaskbarCreated põe o ícone quando ele voltar.
         icone_na_bandeja(janela, NIM_ADD);
         SetTimer(janela, 1, CONFERIR_A_CADA_MS, None);

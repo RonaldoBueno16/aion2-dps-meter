@@ -63,8 +63,8 @@ cargo build --release -p overlay
 - Clicar no overlay não tira o foco do teclado do jogo (`WS_EX_NOACTIVATE`, reaplicado a
   cada quadro porque o winit apaga o bit ao mostrar a janela; conferido no jogo em
   2026-10-02, junto com expandir jogador). O arraste é próprio desde a 0.3.0 (cursor +
-  `SetWindowPos`): o `StartDrag` do winit ignorava arrastes depois de um que não entrou no
-  laço de mover do Windows.
+  `SetWindowPos`): o `StartDrag` do winit ignora arrastes enquanto não vê o fim do
+  anterior, e um arraste que não entra no laço de mover do Windows podia travar os seguintes.
 - Rede: a captura é passiva, mas o medidor faz requisições próprias ao questlog.gg (só o
   código da skill) e ao CDN da NCSoft (ícones), uma vez por skill, depois fica no cache.
 - Abas **DPS | Tank | Healer**: a luta é a mesma (duração, "Zerar" e o tempo sem dano
