@@ -129,17 +129,20 @@ pacote de troca de alvo do mob também não foi achado.
 
 ## 6. Escala do dano (medido)
 
-O valor do campo `dano` não é o que sai do HP do alvo. Em 150 intervalos entre dois
+O campo `dano` é o número que o jogo mostra ao bater: um golpe de 2.574 na tela é 2.574 no
+campo (conferido em 2026-10-02, quando o medidor ainda multiplicava por 18,82 e mostrou
+48,4K). O medidor exibe o campo como vem, nas três abas.
+
+O que sai da barra de HP do mob é outra conta. Em 150 intervalos entre dois
 `0x8D00` do mesmo mob com um único golpe no meio, **queda de HP / campo = 18,82
 (mediana)** nos 8 mobs, com variação de 18,75 a 18,93 entre skills. Os valores abaixo
 disso são golpes finais (a queda fica limitada pelo HP restante).
 
 - Dano em **jogador** não tem esse fator: um golpe de mob com campo 166 tirou exatamente
-  166 do HP do jogador (chave 0 do `0x8D00`), conferido nesse golpe só. O medidor usa 1
-  (`FATOR_ESCALA_JOGADOR` em `medidor.rs`) na aba Tank e, por suposição, na aba Healer, até uma
-  captura com curandeiro.
-- O medidor multiplica o campo por `18,82` (`FATOR_ESCALA`). O mesmo fator vale
-  para todos, então ranking e porcentagens não dependem dele.
+  166 do HP do jogador (chave 0 do `0x8D00`), conferido nesse golpe só.
+- Até a 0.5.1 o medidor multiplicava o campo por `18,82` para mostrar HP do mob. Saiu
+  porque não bate com o número da tela; como era igual para todos, ranking e
+  porcentagens não mudam.
 - A queda de HP **não** é usada para atribuir dano: num alvo com vários jogadores ela
   mistura o dano de todos. A atribuição vem do autor e da skill de cada `0x3804`.
 - Medido só com Ranger. Conferir com outras classes numa captura em grupo
