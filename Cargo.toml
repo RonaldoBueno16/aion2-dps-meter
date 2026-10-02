@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["crates/nucleo", "crates/replay"]
+
+[workspace.package]
+# SemVer. A release usa a versão da tag (v0.2.0 → 0.2.0); manter igual à tag ao lançar.
+version = "0.2.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+nucleo = { path = "crates/nucleo" }
+indexmap = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+windows-sys = "0.61"
+
+# Executável pequeno: o tamanho é o motivo da troca de C# para Rust.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
