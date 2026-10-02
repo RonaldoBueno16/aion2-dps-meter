@@ -539,7 +539,8 @@ impl Overlay {
             Lado::Esquerda => CornerRadius { nw: 0, sw: 0, ne: 6, se: 6 },
             Lado::Direita => CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 },
         };
-        let alfa = if resposta.hovered() { 0xF2 } else { 0xD9 };
+        let fundo = self.config.alfa_do_fundo();
+        let alfa = if resposta.hovered() { fundo.max(0xF2) } else { fundo };
         ui.painter().rect_filled(rect, raio, Color32::from_rgba_unmultiplied(0x10, 0x14, 0x18, alfa));
         ui.painter().rect_stroke(rect, raio, Stroke::new(1.0_f32, branco(0x33)), StrokeKind::Inside);
         let rotulo = TEXTO_DA_ABA[usize::from(lado == Lado::Direita)];
@@ -619,7 +620,7 @@ impl eframe::App for Overlay {
             }
 
             let quadro = egui::Frame::new()
-                .fill(Color32::from_rgba_unmultiplied(0x10, 0x14, 0x18, 0xD9))
+                .fill(Color32::from_rgba_unmultiplied(0x10, 0x14, 0x18, self.config.alfa_do_fundo()))
                 .stroke(Stroke::new(1.0_f32, branco(0x33)))
                 .corner_radius(6)
                 .inner_margin(8)

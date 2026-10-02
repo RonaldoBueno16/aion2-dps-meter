@@ -66,6 +66,8 @@ cargo build --release -p overlay
     captura em grupo mostrar o pacote do grupo.
   - **Luta**: segundos sem dano até a luta zerar, de 5 a 120.
   - **Tamanho**: de 60% a 200%, escalando a janela inteira.
+  - **Transparência do fundo**: de 0% a 90%, em passos de 5% (padrão 15%). Texto, barras e
+    borda continuam opacos.
 - ‹ ou › (a seta aponta para a borda mais perto) desliza a janela até a borda do jogo e
   deixa só a aba "Overlay"; clicar nela traz a janela de volta ao
   mesmo lugar. Recolhido, o medidor continua contando. Com as animações do Windows
