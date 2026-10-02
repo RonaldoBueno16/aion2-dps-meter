@@ -336,21 +336,22 @@ impl Overlay {
     }
 
     fn status(&mut self, ui: &mut Ui) {
-        let mut status = match &self.erro_captura {
-            Some(erro) => erro.clone(),
+        // O endereço do servidor não aparece: o rodapé só avisa o que ainda falta ou o que parou.
+        let mut partes: Vec<String> = Vec::new();
+        match &self.erro_captura {
+            Some(erro) => partes.push(erro.clone()),
             None => {
-                let mut status = match &self.fluxo {
-                    None => "Procurando o servidor do jogo...".to_string(),
-                    Some(fluxo) => format!("Servidor {}", fluxo.split(' ').next().unwrap_or(fluxo)),
-                };
-                if self.catalogo.quantidade() == 0 {
-                    status += "  ·  baixando nomes das skills...";
+                if self.fluxo.is_none() {
+                    partes.push("Procurando o servidor do jogo...".into());
                 }
-                status
+                if self.catalogo.quantidade() == 0 {
+                    partes.push("baixando nomes das skills...".into());
+                }
             }
-        };
+        }
         // Versão do build, para os amigos dizerem qual usam.
-        status += concat!("  ·  v", env!("CARGO_PKG_VERSION"));
+        partes.push(concat!("v", env!("CARGO_PKG_VERSION")).into());
+        let status = partes.join("  ·  ");
         ui.add(egui::Label::new(RichText::new(status).font(fonte(10.0, false)).color(branco(0x99))).wrap());
     }
 
