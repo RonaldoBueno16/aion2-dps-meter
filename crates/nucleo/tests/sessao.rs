@@ -125,3 +125,22 @@ fn fluxo_sem_syn_so_assume_depois_de_5s_de_silencio_do_atual() {
     sessao.ao_segmento(&outra.dados(HEARTBEAT), t + segundos(6.0));
     assert_eq!(sessao.fluxo.as_deref(), Some(outra.chave().as_str()));
 }
+
+#[test]
+fn download_https_com_heartbeat_por_acaso_nao_vira_o_servidor_do_jogo() {
+    let mut sessao = Sessao::default();
+    let mut download = Conexao::nova("140.82.112.4", 51000, 443);
+    let mut jogo = Conexao::nova("193.202.112.171", 62225, 13328);
+    let mut t = T0;
+
+    // Patch baixado por HTTPS: 0E 00 36 aparece por acaso a cada ~16 MB.
+    for _ in 0..5 {
+        sessao.ao_segmento(&download.dados(HEARTBEAT), passar(&mut t, 100));
+    }
+    assert_eq!(sessao.fluxo, None);
+
+    for _ in 0..3 {
+        sessao.ao_segmento(&jogo.dados(HEARTBEAT), passar(&mut t, 50));
+    }
+    assert_eq!(sessao.fluxo.as_deref(), Some(jogo.chave().as_str()));
+}

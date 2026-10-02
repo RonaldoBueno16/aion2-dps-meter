@@ -163,7 +163,8 @@ fn trabalhar(estado: &Estado, fila: &Receiver<String>) {
     }
 }
 
-fn cliente_http() -> ureq::Agent {
+/// Também usado pela atualização do overlay (a API do GitHub recusa pedido sem user-agent).
+pub fn cliente_http() -> ureq::Agent {
     use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(20)))

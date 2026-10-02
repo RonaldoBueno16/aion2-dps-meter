@@ -33,6 +33,14 @@ cargo build --release -p overlay
 - Cada jogador ocupa duas linhas: o nome em cima e `Classe · Nv · GS` embaixo (classe em
   inglês, por escolha; GS é o número que o jogo mostra como Power). `?` = ainda não
   chegou; `~31` = valor da memória, visto numa sessão anterior e talvez velho.
+- Nas três abas aparecem só os 10 primeiros, cada um com a posição antes do nome. Se você
+  está abaixo do 10º, a sua linha aparece embaixo, depois de um traço, com a sua posição
+  (ex.: `37.`). Com "Só o meu dano", a posição mostrada é a real.
+- **Atualização**: na abertura, o Axon consulta a última release do GitHub. Com versão
+  nova, o rodapé mostra `v0.5.0 → v0.5.1` e o botão Atualizar, que baixa o `Axon.exe` da
+  release, confere tamanho e SHA-256 (o `digest` que a API do GitHub publica), troca o exe
+  (o atual vira `Axon.exe.old`, apagado na abertura seguinte) e reabre o Axon. Funciona a
+  partir da 0.5.0; quem está numa versão anterior baixa a nova pela página de Releases.
 - Cada aba tem uma tabela à direita de cada jogador. Expandido, cada skill que aconteceu
   aparece com as mesmas colunas (aí o % é a parte da skill no total do jogador):
   - **DPS**: `DPS | Damage(%) | CRIT | AVG | MAX`. Damage é o dano com a parte do jogador
@@ -104,7 +112,7 @@ cargo build --release -p overlay
 |---|---|
 | `crates/nucleo` | Protocolo (varint, LZ4, framing, parsers), captura (raw socket, pcapng, remontagem TCP), medição (placar, catálogo de skills) e formatação pt-BR |
 | `crates/nucleo/tests` | LZ4 contra o `lz4_flex`, framing, remontagem TCP, parsers com bytes reais, placar e troca de servidor (`cargo test`). O teste de rede do catálogo é opcional: `cargo test -p nucleo --test catalogo -- --ignored` |
-| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada) |
+| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y] [--limite N] [--nova-versao]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada) |
 | `crates/overlay/assets` | `logo-axon.jpg` (a logo original) e `axon.ico`, o hexágono recortado dela com fundo transparente, de 16 a 256 px |
 | `crates/replay` | Replay de `.pcapng` com diagnóstico e modo `ao-vivo` no console |
 | `dados/skills.json` | Opcional, fora do repositório e das releases: nomes em inglês do RATmeter (GPL-3.0, ver PROTOCOLO.md §9), só reserva quando o questlog não tem a skill |
@@ -119,12 +127,13 @@ cargo build --release -p overlay
    0.3.1). A versão aparece no rodapé do overlay.
 2. Com a mudança já no `main`: `git tag v0.3.0` e `git push origin v0.3.0`.
 3. O workflow confere se a tag bate com o `Cargo.toml`, roda os testes e publica a release
-   com `Aion2Meter-0.3.0-win-x64.zip` (acompanhe com `gh run watch`).
+   com `Aion2Meter-0.3.0-win-x64.zip` e o `Axon.exe` solto, que é o que a atualização pelo
+   rodapé baixa (acompanhe com `gh run watch`).
 
 Enquanto o Actions deste repositório falhar antes de criar os jobs (`startup_failure`,
 visto em 2026-10-02), gere o zip num clone limpo da tag (`cargo build --release -p
-overlay`, zip só com o `Axon.exe`) e publique com `gh release create` usando
-`.github/notas-da-release.md`.
+overlay`, zip só com o `Axon.exe`) e publique com `gh release create`, com o zip e o
+`target/release/Axon.exe` como assets, usando `.github/notas-da-release.md`.
 
 ## Depois de um patch do jogo
 

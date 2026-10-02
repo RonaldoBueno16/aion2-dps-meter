@@ -7,6 +7,6 @@
 
 Se o rodapé do overlay disser que o firewall está barrando, libere o `Axon.exe` no firewall do seu antivírus (Kaspersky, Avast, Norton...). Se disser que o servidor não foi encontrado, feche VPN, ExitLag ou programa parecido e abra o Axon de novo.
 
-Não precisa instalar nada: é um executável único de cerca de 2 MB. Para atualizar, feche pelo ✕ do overlay ou em "Fechar Axon" no ícone ao lado do relógio e troque o `.exe` pelo da versão nova. Desde a 0.3.0 o executável se chama `Axon.exe`: pode apagar o `Aion2Meter.exe` antigo (e o `Aion2Meter.Overlay.exe`, de quem vem da 0.1.0). Os dados salvos ficam em `%LOCALAPPDATA%\Aion2Meter` e continuam valendo de uma versão para outra.
+Não precisa instalar nada: é um executável único de cerca de 2 MB. A partir da 0.5.0, quando sair uma versão nova, o rodapé do overlay mostra o botão Atualizar, que baixa, confere e reabre o Axon sozinho. Para atualizar à mão, feche pelo ✕ do overlay ou em "Fechar Axon" no ícone ao lado do relógio e troque o `.exe` pelo da versão nova. Desde a 0.3.0 o executável se chama `Axon.exe`: pode apagar o `Aion2Meter.exe` antigo (e o `Aion2Meter.Overlay.exe`, de quem vem da 0.1.0). Os dados salvos ficam em `%LOCALAPPDATA%\Aion2Meter` e continuam valendo de uma versão para outra.
 
 O medidor só lê os pacotes que o servidor manda para o seu PC: não injeta código, não lê a memória do jogo, não envia nada ao servidor e não automatiza ações. Mesmo assim, nenhum medidor de DPS é aprovado pela NCSoft: o uso é por sua conta e risco.

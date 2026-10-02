@@ -27,6 +27,7 @@ use nucleo::medicao::sessao::Sessao;
 use recolher::{Dobra, Lado};
 use serde::{Deserialize, Serialize};
 
+use crate::atualizacao::{self, Atualizacao, Estado};
 use crate::bandeja::Bandeja;
 use crate::config::{self, Config};
 use crate::jogo;
@@ -107,6 +108,9 @@ pub struct Overlay {
     replay: bool,
     /// Só no debug (--expandir): abre todas as linhas, para conferir o desenho sem clicar.
     expandir_tudo: bool,
+    /// Quantos jogadores a lista mostra (LIMITE_DE_LINHAS; no debug, --limite N para ver o "você
+    /// abaixo" com uma captura de poucos jogadores).
+    limite: usize,
     config: Config,
     tela: Tela,
     dobra: Dobra,
@@ -119,6 +123,9 @@ pub struct Overlay {
     amostra: Option<LinhaJogador>,
     /// Ícone ao lado do relógio; None se o Windows não deixou criar.
     bandeja: Option<Bandeja>,
+    atualizacao: Atualizacao,
+    /// Depois de trocar o exe: Ok com a versão nova aberta (esta fecha), Err se não abriu.
+    reabertura: Option<Result<(), String>>,
     /// Só no debug (--recolher / --recolher-e-voltar): recolhe aos 2 s e volta aos 4,5 s.
     teste_dobra: Option<(Instant, bool, bool)>,
 }
@@ -171,6 +178,12 @@ impl Overlay {
             escala_aplicada: 0.0,
             replay: replay.is_some(),
             expandir_tudo: tem("--expandir"),
+            limite: opcoes_debug
+                .iter()
+                .skip_while(|a| *a != "--limite")
+                .nth(1)
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(LIMITE_DE_LINHAS),
             config,
             tela: if tem("--config") { Tela::Configuracoes } else { Tela::Medidor },
             dobra: Dobra::Aberto,
@@ -178,6 +191,8 @@ impl Overlay {
             arraste: None,
             amostra: None,
             bandeja: None,
+            atualizacao: if tem("--nova-versao") { Atualizacao::falsa() } else { Atualizacao::iniciar() },
+            reabertura: None,
             teste_dobra: (tem("--recolher") || tem("--recolher-e-voltar"))
                 .then(|| (Instant::now(), tem("--recolher-e-voltar"), false)),
         };
@@ -358,8 +373,19 @@ impl Overlay {
         }
 
         let maior = tabela.jogadores[0].total;
-        for j in &tabela.jogadores {
-            self.linha_jogador(ui, j, maior, &colunas);
+        let voce = tabela.jogadores.iter().position(|j| j.voce);
+        let (primeiras, abaixo) = linhas_mostradas(tabela.jogadores.len(), voce, self.limite);
+        // Posição no placar inteiro da aba: com "Só o meu dano" a sua continua a real, e não 1.
+        let bruta = &self.tabela_bruta().jogadores;
+        let posicao = |j: &LinhaJogador| bruta.iter().position(|b| b.id == j.id).map_or(0, |i| i + 1);
+        let mostradas: Vec<(usize, usize)> =
+            primeiras.chain(abaixo).map(|i| (i, posicao(&tabela.jogadores[i]))).collect();
+        for (i, posicao) in mostradas {
+            if Some(i) == abaixo {
+                separador(ui);
+            }
+            let j = &tabela.jogadores[i];
+            self.linha_jogador(ui, j, posicao, maior, &colunas);
             if self.expandidos.contains(&(self.aba, j.id)) {
                 // Todas as skills que aconteceram, com as mesmas colunas do jogador.
                 for s in &j.skills {
@@ -386,7 +412,7 @@ impl Overlay {
         texto
     }
 
-    fn linha_jogador(&mut self, ui: &mut Ui, j: &LinhaJogador, maior: f64, colunas: &Colunas) {
+    fn linha_jogador(&mut self, ui: &mut Ui, j: &LinhaJogador, posicao: usize, maior: f64, colunas: &Colunas) {
         let largura = ui.available_width();
         let expandido = self.expandidos.contains(&(self.aba, j.id));
         let tank = self.aba == Aba::Tank;
@@ -418,7 +444,9 @@ impl Overlay {
         let mut nome = LayoutJob::default();
         let seta = if expandido { "▾" } else { "▸" };
         let voce = if j.voce { " (você)" } else { "" };
-        trecho(&mut nome, &format!("{seta} {}{voce}", j.nome), 12.0, j.voce, texto());
+        trecho(&mut nome, &format!("{seta} "), 12.0, j.voce, texto());
+        trecho(&mut nome, &format!("{posicao}. "), 12.0, false, branco(0x88));
+        trecho(&mut nome, &format!("{}{voce}", j.nome), 12.0, j.voce, texto());
         nome.wrap = uma_linha((max_esquerda - largura_selos).max(40.0));
         let nome = montar(ui, nome);
 
@@ -509,10 +537,40 @@ impl Overlay {
                 }
             }
         }
-        // Versão do build, para os amigos dizerem qual usam.
-        partes.push(concat!("v", env!("CARGO_PKG_VERSION")).into());
-        let status = partes.join("  ·  ");
-        ui.add(egui::Label::new(RichText::new(status).font(fonte(10.0, false)).color(branco(0x99))).wrap());
+        // Versão do build, para os amigos dizerem qual usam; com versão nova no GitHub, o botão.
+        let versao = concat!("v", env!("CARGO_PKG_VERSION"));
+        let estado = self.atualizacao.estado();
+        partes.push(match &estado {
+            Estado::Nada => versao.to_string(),
+            Estado::Disponivel(n) => format!("{versao} → v{}", n.versao),
+            Estado::Baixando(n) => format!("{versao} → v{}: baixando...", n.versao),
+            Estado::Falhou(n, erro) => format!("{versao} → v{}: {erro}", n.versao),
+            Estado::Pronta(n) => match &self.reabertura {
+                Some(Err(erro)) => format!("v{} instalada, mas não deu para {erro}: abra o Axon de novo", n.versao),
+                _ => format!("v{} instalada, reabrindo...", n.versao),
+            },
+        });
+        let status = RichText::new(partes.join("  ·  ")).font(fonte(10.0, false)).color(branco(0x99));
+        let rotulo = match estado {
+            Estado::Disponivel(_) => "Atualizar",
+            Estado::Falhou(..) => "Tentar de novo",
+            _ => {
+                ui.add(egui::Label::new(status).wrap());
+                return;
+            }
+        };
+        // Botão à direita; o texto ocupa o resto, alinhado à esquerda como sem o botão.
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                let dica = "Baixa a versão nova do GitHub, confere o arquivo e reabre o Axon";
+                if botao(ui, rotulo, true).on_hover_text(dica).clicked() {
+                    self.atualizacao.atualizar();
+                }
+                ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
+                    ui.add(egui::Label::new(status).wrap());
+                });
+            });
+        });
     }
 
     /// Sem o servidor do jogo ainda, diz o que os contadores da captura apontam.
@@ -589,6 +647,15 @@ impl eframe::App for Overlay {
         }
         if self.salvo_em.elapsed() >= SALVAR_A_CADA {
             self.salvar_memoria();
+        }
+        // Exe trocado: grava a memória antes de a versão nova ler, abre a nova e fecha esta.
+        if self.reabertura.is_none() && matches!(self.atualizacao.estado(), Estado::Pronta(_)) {
+            self.salvar_memoria();
+            let aberta = atualizacao::abrir_novo();
+            if aberta.is_ok() {
+                ctx.send_viewport_cmd(ViewportCommand::Close);
+            }
+            self.reabertura = Some(aberta);
         }
         self.testar_dobra(ctx);
 
@@ -691,6 +758,21 @@ fn amostra(tabela: &Tabela, eu: Option<String>, perfis: &IndexMap<String, Perfil
         maximo: 0.0,
         skills: Vec::new(),
     }
+}
+
+/// A lista mostra os 10 primeiros; quem está abaixo (você incluído) só aparece na sua linha à parte.
+const LIMITE_DE_LINHAS: usize = 10;
+
+/// Índices das linhas mostradas: as `limite` primeiras e, à parte, a sua se ficou abaixo delas.
+fn linhas_mostradas(total: usize, voce: Option<usize>, limite: usize) -> (std::ops::Range<usize>, Option<usize>) {
+    (0..total.min(limite), voce.filter(|&i| i >= limite))
+}
+
+/// Traço discreto entre os 10 primeiros e a sua linha, quando você está mais abaixo.
+fn separador(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 9.0), Sense::hover());
+    let y = rect.center().y;
+    ui.painter().hline(rect.x_range().shrink(6.0), y, Stroke::new(1.0_f32, branco(0x33)));
 }
 
 const PROCURANDO: &str = "Procurando o servidor do jogo...";
@@ -1106,6 +1188,20 @@ fn compacto(valor: f64) -> String {
 #[cfg(test)]
 mod testes {
     use super::*;
+
+    #[test]
+    fn lista_mostra_os_10_primeiros_e_voce_abaixo_deles() {
+        // Você entre os 10: só as 10 linhas.
+        assert_eq!(linhas_mostradas(40, Some(3), 10), (0..10, None));
+        // Você em 37º: as 10 e a sua (índice 36) à parte.
+        assert_eq!(linhas_mostradas(40, Some(36), 10), (0..10, Some(36)));
+        // Logo depois do corte.
+        assert_eq!(linhas_mostradas(11, Some(10), 10), (0..10, Some(10)));
+        // Ainda não reconhecido: só as 10.
+        assert_eq!(linhas_mostradas(40, None, 10), (0..10, None));
+        // Menos de 10 jogadores: todos.
+        assert_eq!(linhas_mostradas(4, Some(2), 10), (0..4, None));
+    }
 
     #[test]
     fn rodape_aponta_firewall_ou_trafego_escondido_so_depois_de_esperar() {

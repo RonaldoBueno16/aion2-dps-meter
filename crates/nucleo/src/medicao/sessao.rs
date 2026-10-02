@@ -55,6 +55,12 @@ impl Sessao {
     }
 
     pub fn ao_segmento(&mut self, seg: &SegmentoTcp, hora: Hora) {
+        // ACK sem dados não leva nada ao montador e, guardado, nunca chega ao limite de bytes: a
+        // memória cresceria enquanto o fluxo durasse. HTTPS e HTTP nunca são o jogo, e um download
+        // grande traz 0E 00 36 por acaso a cada ~16 MB: três bastariam para tomar o lugar do jogo.
+        if (seg.dados.is_empty() && !seg.syn) || [seg.porta_origem, seg.porta_destino].iter().any(|p| matches!(p, 443 | 80)) {
+            return;
+        }
         if self.fluxo.as_deref() != Some(seg.chave.as_str()) {
             self.guardar(seg, hora);
         }
@@ -127,11 +133,6 @@ impl Sessao {
     }
 
     fn guardar(&mut self, seg: &SegmentoTcp, hora: Hora) {
-        // HTTPS e HTTP nunca são o jogo; sem isso um download enche a memória.
-        if matches!(seg.porta_origem, 443 | 80) || matches!(seg.porta_destino, 443 | 80) {
-            return;
-        }
-
         let g = self.guardados.entry(seg.chave.clone()).or_insert_with(|| Guardado {
             segmentos: Vec::new(),
             bytes: 0,
