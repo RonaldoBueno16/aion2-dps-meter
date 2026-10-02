@@ -379,8 +379,10 @@ impl eframe::App for Overlay {
         ctx.request_repaint_after(INTERVALO);
 
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
-            // Arrasta a janela pelo fundo; botões e linhas ficam por cima e pegam o clique.
-            let fundo = ui.interact(ui.max_rect(), ui.id().with("arrastar"), Sense::drag());
+            // Arrasta a janela pelo fundo; botões e linhas ficam por cima e pegam o clique. click_and_drag
+            // e não só drag: widget só de drag começa o arraste já no press, e o laço de mover janela
+            // do Windows engoliria o soltar do botão (nenhum clique chegaria às linhas nem ao ✕).
+            let fundo = ui.interact(ui.max_rect(), ui.id().with("arrastar"), Sense::click_and_drag());
             if fundo.drag_started() {
                 ctx.send_viewport_cmd(ViewportCommand::StartDrag);
             }
