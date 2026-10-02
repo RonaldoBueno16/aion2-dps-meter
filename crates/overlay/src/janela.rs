@@ -21,7 +21,8 @@ use nucleo::medicao::medidor::{LinhaJogador, LinhaSkill, Medidor, PerfilJogador,
 use nucleo::medicao::sessao::Sessao;
 use serde::{Deserialize, Serialize};
 
-pub const LARGURA: f32 = 390.0;
+/// 470 e não os 390 do WPF: a tabela da aba DPS precisa de ~280 px ao lado do nome.
+pub const LARGURA: f32 = 470.0;
 const INTERVALO: Duration = Duration::from_millis(500);
 const SALVAR_A_CADA: Duration = Duration::from_secs(30);
 const SEMIBOLD: &str = "semibold";
@@ -218,10 +219,23 @@ impl Overlay {
             return;
         }
 
+        // Aba DPS: tabela DPS | Damage(%) | CRIT | AVG | MAX na linha e nas skills expandidas.
+        let colunas = (self.aba == Aba::Dps).then(|| Colunas::medir(ui));
+        if let Some(colunas) = &colunas {
+            colunas.cabecalho(ui);
+        }
+
         let maior = tabela.jogadores[0].total;
         for j in &tabela.jogadores {
-            self.linha_jogador(ui, j, maior);
+            self.linha_jogador(ui, j, maior, colunas.as_ref());
             if !self.expandidos.contains(&(self.aba, j.id)) {
+                continue;
+            }
+            if let Some(colunas) = &colunas {
+                // Todas as skills que aconteceram, com as mesmas colunas do jogador.
+                for s in &j.skills {
+                    self.linha_skill_tabela(ui, s, colunas);
+                }
                 continue;
             }
 
@@ -257,16 +271,33 @@ impl Overlay {
         texto
     }
 
-    fn linha_jogador(&mut self, ui: &mut Ui, j: &LinhaJogador, maior: f64) {
+    fn linha_jogador(&mut self, ui: &mut Ui, j: &LinhaJogador, maior: f64, colunas: Option<&Colunas>) {
         let largura = ui.available_width();
         let expandido = self.expandidos.contains(&(self.aba, j.id));
         let tank = self.aba == Aba::Tank;
 
-        let mut direita = LayoutJob::default();
-        trecho(&mut direita, &format!("{} {}", compacto(j.por_segundo), self.aba.por_segundo()), 12.0, true, texto());
-        trecho(&mut direita, &format!("  {}  {}", compacto(j.total), p(j.porcentagem, 0)), 12.0, false, texto());
-        let direita = montar(ui, direita);
-        let max_esquerda = (largura - direita.size().x - 6.0 - 6.0 - 8.0).max(40.0);
+        // Lado direito: as células da tabela (aba DPS) ou "X DTPS  total  %" (Tank e Healer).
+        let (celulas, direita, largura_direita) = match colunas {
+            Some(colunas) => {
+                let textos = celulas(j.por_segundo, j.total, j.porcentagem, j.criticos, j.golpes, j.maximo);
+                let celulas: Vec<Arc<Galley>> = textos
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, t)| montar(ui, LayoutJob::single_section(t, TextFormat::simple(fonte(12.0, i == 0), texto()))))
+                    .collect();
+                (celulas, None, colunas.largura_total())
+            }
+            None => {
+                let mut direita = LayoutJob::default();
+                trecho(&mut direita, &format!("{} {}", compacto(j.por_segundo), self.aba.por_segundo()), 12.0, true, texto());
+                trecho(&mut direita, &format!("  {}  {}", compacto(j.total), p(j.porcentagem, 0)), 12.0, false, texto());
+                let direita = montar(ui, direita);
+                let largura_direita = direita.size().x + 6.0;
+                (Vec::new(), Some(direita), largura_direita)
+            }
+        };
+        let altura_direita = celulas.iter().chain(direita.iter()).fold(0.0_f32, |maior, g| maior.max(g.size().y));
+        let max_esquerda = (largura - largura_direita - 6.0 - 8.0).max(40.0);
 
         let mut nome = LayoutJob::default();
         let seta = if expandido { "▾" } else { "▸" };
@@ -286,7 +317,7 @@ impl Overlay {
         perfil.wrap = uma_linha(max_esquerda - 12.0);
         let perfil = montar(ui, perfil);
 
-        let altura = (nome.size().y + perfil.size().y + 4.0).max(direita.size().y);
+        let altura = (nome.size().y + perfil.size().y + 4.0).max(altura_direita);
         let (rect, resposta) = ui.allocate_exact_size(vec2(largura, altura + 2.0), Sense::click());
         let linha = rect.shrink2(vec2(0.0, 1.0));
         let pintor = ui.painter();
@@ -300,8 +331,13 @@ impl Overlay {
         let topo = linha.min.y + (linha.height() - (altura_nome + perfil.size().y + 4.0)) / 2.0;
         pintor.galley(pos2(linha.min.x + 6.0, topo + 2.0), nome, texto());
         pintor.galley(pos2(linha.min.x + 18.0, topo + 2.0 + altura_nome), perfil, texto());
-        let y_direita = linha.center().y - direita.size().y / 2.0;
-        pintor.galley(pos2(linha.max.x - 6.0 - direita.size().x, y_direita), direita, texto());
+        if let Some(direita) = direita {
+            let y_direita = linha.center().y - direita.size().y / 2.0;
+            pintor.galley(pos2(linha.max.x - 6.0 - direita.size().x, y_direita), direita, texto());
+        }
+        if let Some(colunas) = colunas {
+            colunas.pintar(pintor, linha, celulas);
+        }
 
         if resposta.on_hover_cursor(CursorIcon::PointingHand).clicked() && !self.expandidos.remove(&(self.aba, j.id)) {
             self.expandidos.insert((self.aba, j.id));
@@ -333,6 +369,34 @@ impl Overlay {
         ui.painter().galley(pos2(linha.min.x + inicio_nome, centro - nome.size().y / 2.0), nome, texto());
         let x_numeros = linha.max.x - 6.0 - numeros.size().x;
         ui.painter().galley(pos2(x_numeros, centro - numeros.size().y / 2.0), numeros, texto());
+    }
+
+    /// Skill expandida na aba DPS: ícone e nome à esquerda, as mesmas colunas do jogador à direita.
+    fn linha_skill_tabela(&mut self, ui: &mut Ui, s: &LinhaSkill, colunas: &Colunas) {
+        let largura = ui.available_width();
+        let textos = celulas(s.por_segundo, s.total, s.porcentagem, s.criticos, s.golpes, s.maximo);
+        let formato = TextFormat::simple(fonte(11.0, false), texto().gamma_multiply(0.85));
+        let celulas: Vec<Arc<Galley>> =
+            textos.into_iter().map(|t| montar(ui, LayoutJob::single_section(t, formato.clone()))).collect();
+
+        // Moldura fixa: a linha não pula quando o ícone termina de baixar.
+        let inicio_nome = 18.0 + 18.0 + 6.0;
+        let mut nome = LayoutJob::single_section(s.nome.clone(), TextFormat::simple(fonte(11.0, false), texto().gamma_multiply(0.9)));
+        nome.wrap = uma_linha((largura - inicio_nome - 8.0 - colunas.largura_total()).max(40.0));
+        let nome = montar(ui, nome);
+
+        let altura = celulas.iter().fold(nome.size().y.max(18.0), |maior, g| maior.max(g.size().y));
+        let (rect, _) = ui.allocate_exact_size(vec2(largura, altura + 2.0), Sense::hover());
+        let linha = Rect::from_min_size(rect.min, vec2(largura, altura));
+
+        let moldura = Rect::from_min_size(pos2(linha.min.x + 18.0, linha.min.y), vec2(18.0, 18.0));
+        ui.painter().rect_filled(moldura, 3, branco(0x22));
+        if let Some(icone) = s.icone.as_deref().and_then(|c| self.textura(ui.ctx(), c)) {
+            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+            ui.painter().image(icone.id(), moldura, uv, Color32::WHITE);
+        }
+        ui.painter().galley(pos2(linha.min.x + inicio_nome, linha.center().y - nome.size().y / 2.0), nome, texto());
+        colunas.pintar(ui.painter(), linha, celulas);
     }
 
     fn status(&mut self, ui: &mut Ui) {
@@ -481,7 +545,8 @@ fn linha_perfil(j: &LinhaJogador) -> LayoutJob {
     };
     trecho(&mut job, "  ·  Nv ", 10.0, false, normal);
     valor(&mut job, j.nivel, j.nivel_lembrado);
-    trecho(&mut job, "  ·  Power ", 10.0, false, normal);
+    // "GS" é o mesmo número que o jogo mostra como Power (rótulo escolhido pelo usuário).
+    trecho(&mut job, "  ·  GS ", 10.0, false, normal);
     valor(&mut job, j.poder, j.poder_lembrado);
     job
 }
@@ -503,6 +568,75 @@ fn botao(ui: &mut Ui, rotulo: &str, ativo: bool) -> egui::Response {
     }
     ui.painter().galley(rect.min + vec2(7.0, 1.0), galley, branco(0xCC));
     resposta.on_hover_cursor(CursorIcon::PointingHand)
+}
+
+/// Colunas da tabela da aba DPS. Largura fixa pelo pior caso de cada coluna, para a tabela não
+/// dançar quando os números crescem no meio da luta.
+struct Colunas {
+    larguras: [f32; 5],
+}
+
+const COLUNAS: [(&str, &str); 5] =
+    [("DPS", "999,9K"), ("Damage(%)", "99,99M (100%)"), ("CRIT", "100%"), ("AVG", "999,9K"), ("MAX", "999,9K")];
+const ESPACO_ENTRE_COLUNAS: f32 = 10.0;
+const MARGEM_DIREITA: f32 = 6.0;
+
+impl Colunas {
+    fn medir(ui: &Ui) -> Self {
+        let largura = |amostra: &str, tamanho: f32, negrito: bool| {
+            ui.fonts_mut(|f| f.layout_no_wrap(amostra.to_string(), fonte(tamanho, negrito), texto()).size().x)
+        };
+        let mut larguras = [0.0; 5];
+        for (i, (titulo, pior)) in COLUNAS.iter().enumerate() {
+            larguras[i] = largura(titulo, 10.0, false).max(largura(pior, 12.0, i == 0)).ceil();
+        }
+        Self { larguras }
+    }
+
+    fn largura_total(&self) -> f32 {
+        self.larguras.iter().sum::<f32>() + ESPACO_ENTRE_COLUNAS * 4.0 + MARGEM_DIREITA
+    }
+
+    /// Distância da borda direita da linha até a borda direita de cada coluna.
+    fn direitas(&self) -> [f32; 5] {
+        let mut direitas = [MARGEM_DIREITA; 5];
+        for i in (0..4).rev() {
+            direitas[i] = direitas[i + 1] + self.larguras[i + 1] + ESPACO_ENTRE_COLUNAS;
+        }
+        direitas
+    }
+
+    /// Títulos das colunas, alinhados à direita como os números.
+    fn cabecalho(&self, ui: &mut Ui) {
+        let titulos: Vec<Arc<Galley>> = COLUNAS
+            .iter()
+            .map(|(titulo, _)| ui.fonts_mut(|f| f.layout_no_wrap(titulo.to_string(), fonte(10.0, false), branco(0x99))))
+            .collect();
+        let altura = titulos.iter().fold(0.0_f32, |maior, g| maior.max(g.size().y));
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), altura + 2.0), Sense::hover());
+        self.pintar(ui.painter(), Rect::from_min_size(rect.min, vec2(rect.width(), altura)), titulos);
+    }
+
+    /// Cada célula alinhada à direita na sua coluna e centrada na altura da linha.
+    fn pintar(&self, pintor: &egui::Painter, linha: Rect, celulas: Vec<Arc<Galley>>) {
+        for (celula, direita) in celulas.into_iter().zip(self.direitas()) {
+            let posicao = pos2(linha.max.x - direita - celula.size().x, linha.center().y - celula.size().y / 2.0);
+            pintor.galley(posicao, celula, texto());
+        }
+    }
+}
+
+/// DPS | Damage(%) | CRIT | AVG | MAX. O % é a parte no total de quem está sendo medido
+/// (do jogador no grupo, ou da skill no jogador).
+fn celulas(por_segundo: f64, total: f64, porcentagem: f64, criticos: i32, golpes: i32, maximo: f64) -> [String; 5] {
+    let media = if golpes > 0 { total / f64::from(golpes) } else { 0.0 };
+    [
+        compacto(por_segundo),
+        format!("{} ({})", compacto(total), p(porcentagem, 0)),
+        p(razao(criticos, golpes), 0),
+        compacto(media),
+        compacto(maximo),
+    ]
 }
 
 fn configurar_estilo(ctx: &egui::Context) -> Result<(), String> {

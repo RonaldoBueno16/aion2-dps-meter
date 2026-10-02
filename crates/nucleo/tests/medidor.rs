@@ -39,6 +39,9 @@ fn separa_por_jogador_e_por_skill_e_soma_invocacao_no_dono() {
     assert_eq!(yoshi.criticos, 1);
     assert_eq!(yoshi.skills.len(), 3);
     assert_eq!(yoshi.skills[0].skill, 14170000);
+    // Tabela da aba DPS: maior golpe do jogador e DPS de cada skill na mesma duração da luta.
+    quase_igual(200.0 * FATOR_ESCALA, yoshi.maximo);
+    quase_igual(200.0 * FATOR_ESCALA / 4.0, yoshi.skills[0].por_segundo);
     let critica: Vec<_> = yoshi.skills.iter().filter(|s| s.golpes == 1 && s.criticos == 1).collect();
     assert_eq!(critica.len(), 1);
     assert_eq!(critica[0].skill, 14030000);

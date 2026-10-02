@@ -17,9 +17,15 @@ cargo build --release -p overlay
 
 - O Windows pede permissão de administrador ao abrir (a captura por raw socket exige).
 - O jogo precisa estar em "tela cheia em janela" (borderless), que é o padrão atual.
-- Cada jogador ocupa duas linhas: nome, DPS (DTPS no Tank, HPS no Healer), total e % em
-  cima; `Classe · Nv · Power` sempre embaixo (classe em inglês, por escolha). `?` = ainda
-  não chegou; `~31` = valor da memória, visto numa sessão anterior e talvez velho.
+- Cada jogador ocupa duas linhas: o nome em cima e `Classe · Nv · GS` embaixo (classe em
+  inglês, por escolha; GS é o número que o jogo mostra como Power). `?` = ainda não
+  chegou; `~31` = valor da memória, visto numa sessão anterior e talvez velho.
+- Aba DPS: à direita de cada jogador, a tabela `DPS | Damage(%) | CRIT | AVG | MAX`.
+  Damage é o dano com a parte do jogador no total do grupo medido; CRIT é a fração de
+  golpes críticos; AVG, o dano médio por golpe; MAX, o maior golpe. Expandido, cada skill
+  que aconteceu aparece com as mesmas colunas (aí o % é a parte da skill no total do
+  jogador). Tank e Healer mostram DTPS/HPS, total e % e, expandidos, o detalhe e as 8
+  maiores skills.
 - A memória (`%LOCALAPPDATA%\Aion2Meter\jogadores.json`) guarda o último level e Power de
   cada nome, inclusive o seu, a cada 30 s e ao fechar. Com o overlay aberto no meio da
   sessão, você é reconhecido pelo nome no primeiro abate ou invocação. Valor lido na

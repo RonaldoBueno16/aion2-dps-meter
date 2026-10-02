@@ -21,6 +21,9 @@ pub struct LinhaSkill {
     pub nome: String,
     pub icone: Option<PathBuf>,
     pub total: f64,
+    /// Total da skill dividido pela duração da luta (a mesma do DPS do jogador).
+    pub por_segundo: f64,
+    /// Parte da skill no total do jogador.
     pub porcentagem: f64,
     pub golpes: i32,
     pub criticos: i32,
@@ -46,6 +49,8 @@ pub struct LinhaJogador {
     pub aparos: i32,
     pub mortes: i32,
     pub segurando_aggro: i32,
+    /// Maior golpe (ou cura) do jogador na luta.
+    pub maximo: f64,
     pub skills: Vec<LinhaSkill>,
 }
 
@@ -416,6 +421,7 @@ impl Medidor {
                         nome: dados_jogo::nome_skill(skill),
                         icone: dados_jogo::icone_skill(skill),
                         total: s.total,
+                        por_segundo: s.total / segundos,
                         porcentagem: if a.total > 0.0 { s.total / a.total } else { 0.0 },
                         golpes: s.golpes,
                         criticos: s.criticos,
@@ -444,6 +450,7 @@ impl Medidor {
                     aparos: a.aparos,
                     mortes: a.mortes,
                     segurando_aggro: segurando.get(&id).copied().unwrap_or(0),
+                    maximo: a.skills.values().fold(0.0, |maior, s| maior.max(s.maximo)),
                     skills,
                 }
             })
