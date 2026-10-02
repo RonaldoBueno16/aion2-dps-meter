@@ -10,6 +10,9 @@ pub const INATIVIDADE_MIN: u32 = 5;
 pub const INATIVIDADE_MAX: u32 = 120;
 pub const ZOOM_MIN: f32 = 0.6;
 pub const ZOOM_MAX: f32 = 2.0;
+pub const TRANSPARENCIA_PADRAO: u32 = 15;
+/// Até 90%: com o fundo todo transparente, o overlay some sobre cenas claras do jogo.
+pub const TRANSPARENCIA_MAX: u32 = 90;
 
 /// Quem entra na medição. Party ainda não funciona: falta uma captura em grupo para ler o 0x9702.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +42,8 @@ pub struct Config {
     pub inatividade: u32,
     /// Escala da janela inteira (1 = 470 px de largura).
     pub zoom: f32,
+    /// Transparência do fundo, em %. Texto, barras e borda não mudam.
+    pub transparencia: u32,
 }
 
 impl Default for Config {
@@ -54,6 +59,7 @@ impl Default for Config {
             alcance: Alcance::Proximidade,
             inatividade: 15,
             zoom: 1.0,
+            transparencia: TRANSPARENCIA_PADRAO,
         }
     }
 }
@@ -80,9 +86,16 @@ impl Config {
     pub fn dentro_das_faixas(mut self) -> Self {
         self.inatividade = self.inatividade.clamp(INATIVIDADE_MIN, INATIVIDADE_MAX);
         self.zoom = if self.zoom.is_finite() { arredondar_zoom(self.zoom) } else { 1.0 };
+        self.transparencia = self.transparencia.min(TRANSPARENCIA_MAX);
         // Party ainda não lê o grupo: uma config feita à mão com Party volta para Proximidade.
         self.alcance = Alcance::Proximidade;
         self
+    }
+
+    /// Alfa do fundo do overlay. Os 15% padrão dão 0xD9, o fundo de antes da opção.
+    pub fn alfa_do_fundo(&self) -> u8 {
+        // Em inteiros, arredondando: 85% de 255 = 216,75 → 217.
+        (((100 - self.transparencia.min(100)) * 255 + 50) / 100) as u8
     }
 
     /// Classe, Nv e GS abaixo do nome, nessa ordem.
@@ -106,7 +119,8 @@ mod testes {
 
     #[test]
     fn arquivo_antigo_ou_torto_fica_com_padrao_e_dentro_das_faixas() {
-        let parcial: Config = serde_json::from_str(r#"{"so_meu_dano":true,"inatividade":3,"zoom":7.0}"#).unwrap();
+        let parcial: Config =
+            serde_json::from_str(r#"{"so_meu_dano":true,"inatividade":3,"zoom":7.0,"transparencia":250}"#).unwrap();
         let c = parcial.dentro_das_faixas();
         assert!(c.so_meu_dano);
         assert_eq!(c.colunas, [true; 5]);
@@ -115,5 +129,10 @@ mod testes {
         assert_eq!(c.inatividade, INATIVIDADE_MIN);
         assert_eq!(c.zoom, ZOOM_MAX);
         assert_eq!(arredondar_zoom(1.234), 1.25);
+        assert_eq!(c.transparencia, TRANSPARENCIA_MAX);
+        assert_eq!(c.alfa_do_fundo(), 26);
+        // Sem o campo (config da 0.3.x): o fundo de antes.
+        assert_eq!(Config::default().alfa_do_fundo(), 0xD9);
+        assert_eq!(Config { transparencia: 0, ..Config::default() }.alfa_do_fundo(), 0xFF);
     }
 }

@@ -1,6 +1,7 @@
 //! Tela de configurações. O que aparece em cada linha se escolhe clicando numa linha de amostra (a
 //! sua, ou um esboço com o seu nome): o que está escondido fica no lugar, apagado e riscado. O resto
-//! é quem entra na medição, quando a luta zera e o tamanho. Tudo vale na hora e fica salvo.
+//! é quem entra na medição, quando a luta zera, o tamanho e a transparência do fundo. Tudo vale na
+//! hora e fica salvo.
 
 use std::sync::Arc;
 
@@ -12,7 +13,9 @@ use eframe::egui::{
 use super::{
     Colunas, Numeros, Overlay, Tela, botao, branco, celulas, cor_da_classe, fonte, montar, segmentos_do_perfil, texto,
 };
-use crate::config::{self, INATIVIDADE_MAX, INATIVIDADE_MIN, ZOOM_MAX, ZOOM_MIN};
+use crate::config::{
+    self, INATIVIDADE_MAX, INATIVIDADE_MIN, TRANSPARENCIA_MAX, TRANSPARENCIA_PADRAO, ZOOM_MAX, ZOOM_MIN,
+};
 
 const NOMES_DO_PERFIL: [&str; 3] = ["a classe", "o level", "o GS"];
 
@@ -83,6 +86,28 @@ impl Overlay {
                 ui.add_space(6.0);
                 if botao(ui, "Restaurar", false).on_hover_text("Volta a 100%").clicked() {
                     self.config.zoom = 1.0;
+                }
+            }
+        });
+
+        ui.add_space(14.0);
+        secao(ui, "Transparência do fundo");
+        dica(ui, "Texto e barras continuam opacos.");
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let t = self.config.transparencia;
+            if passo(ui, "−", t > 0) {
+                self.config.transparencia = t.saturating_sub(5);
+            }
+            valor(ui, &format!("{t}%"), 48.0);
+            if passo(ui, "+", t < TRANSPARENCIA_MAX) {
+                self.config.transparencia = (t + 5).min(TRANSPARENCIA_MAX);
+            }
+            if t != TRANSPARENCIA_PADRAO {
+                ui.add_space(6.0);
+                let volta = format!("Volta a {TRANSPARENCIA_PADRAO}%");
+                if botao(ui, "Restaurar", false).on_hover_text(volta).clicked() {
+                    self.config.transparencia = TRANSPARENCIA_PADRAO;
                 }
             }
         });
