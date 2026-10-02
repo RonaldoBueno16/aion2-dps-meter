@@ -1,0 +1,25 @@
+[package]
+name = "overlay"
+description = "Janela sempre no topo do medidor de DPS do AION 2"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# O executável da release: Aion2Meter.exe.
+[[bin]]
+name = "Aion2Meter"
+path = "src/main.rs"
+
+[dependencies]
+nucleo.workspace = true
+indexmap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Sem as fontes embutidas do egui (usa a Segoe UI do Windows) e só o renderizador OpenGL.
+eframe = { version = "0.33", default-features = false, features = ["glow"] }
+png = "0.18"
+raw-window-handle = "0.6"
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
+[build-dependencies]
+embed-manifest = "1.5"

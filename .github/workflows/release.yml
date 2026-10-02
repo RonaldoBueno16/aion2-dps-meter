@@ -1,4 +1,4 @@
-# Tag v* (ex.: v0.2.0) → testes → executável único com o .NET embutido → release com o zip.
+# Tag v* (ex.: v0.3.0) → testes → Aion2Meter.exe → release com o zip.
 name: Release
 
 on:
@@ -14,21 +14,25 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: '10.0.x'
+      - uses: dtolnay/rust-toolchain@stable
+
+      # O rodapé do overlay mostra a versão do Cargo.toml, não a da tag.
+      - name: Conferir versão
+        shell: pwsh
+        run: |
+          $versao = '${{ github.ref_name }}'.TrimStart('v')
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ($cargo -ne $versao) { throw "Tag v$versao, mas o Cargo.toml diz $cargo" }
 
       - name: Testes
-        run: dotnet test tests/Aion2Meter.Testes -c Release
+        run: cargo test --workspace
 
       - name: Publicar
         shell: pwsh
         run: |
           $versao = '${{ github.ref_name }}'.TrimStart('v')
-          dotnet publish src/Aion2Meter.Overlay/Aion2Meter.Overlay.csproj -c Release -r win-x64 --self-contained true `
-            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true `
-            -p:DebugType=none -p:Version=$versao -o publicar
-          Compress-Archive -Path publicar/* -DestinationPath "Aion2Meter-$versao-win-x64.zip"
+          cargo build --release -p overlay
+          Compress-Archive -Path target/release/Aion2Meter.exe -DestinationPath "Aion2Meter-$versao-win-x64.zip"
 
       - name: Criar release
         shell: pwsh
