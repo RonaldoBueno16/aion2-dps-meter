@@ -84,7 +84,8 @@ cargo build --release -p overlay
   desligadas, a janela vai direto, sem deslizar.
 - O rodapé mostra a versão e só avisa enquanto procura o servidor do jogo, enquanto baixa
   os nomes das skills ou quando a captura para.
-- Dano exibido em unidades de HP do alvo (campo do pacote × 18,82, ver PROTOCOLO.md §6).
+- O dano é o número que o jogo mostra ao bater (o campo do pacote, sem conversão). Até a
+  0.5.1 ele era multiplicado por 18,82 (HP do mob, ver PROTOCOLO.md §6) e não batia com a tela.
 - Invocações, pets e armadilhas somam na linha do dono.
 - Skills aparecem em português e com ícone. Nomes: questlog.gg (base comunitária montada
   do cliente Global, API não documentada); ícones: CDN oficial da NCSoft. Tudo fica em
@@ -152,12 +153,11 @@ overlay`, zip só com o `Axon.exe`) e publique com `gh release create`, com o zi
   sozinha (PROTOCOLO.md §8) e começa uma luta nova. O dos outros chega quando eles entram no seu
   campo de visão (`0x3645`). Depois de um level up o número fica velho até o próximo
   login (ou até o jogador sair e voltar à sua visão): o pacote de level up não é conhecido.
-- **Fator 18,82 medido só com Ranger.** Conferir com outras classes numa captura em grupo.
 - **DoT** (`0x3805`): layout não conferido (Ranger não gerou nenhum).
 - **Healer não conferido**: nenhuma captura teve curandeiro, e a escala 1:1 da cura é
   suposição. Golpe de jogador em mob com skill que o questlog marca como cura (dreno, por
-  exemplo) sai do DPS e entra no Healer com fator 1 em vez de 18,82. Só mexer nessa regra
-  quando uma captura mostrar uma skill assim.
+  exemplo) sai do DPS e entra no Healer. Só mexer nessa regra quando uma captura mostrar
+  uma skill assim.
 - **Tank**: escala 1:1 conferida num golpe só. "aggro" é inferido do último golpe de
   cada mob, porque o pacote de troca de alvo não foi achado.
 - Invocação de jogador sem legião: o vínculo depende só do nome do dono.

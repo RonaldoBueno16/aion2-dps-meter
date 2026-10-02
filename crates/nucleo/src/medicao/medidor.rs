@@ -96,15 +96,6 @@ pub struct Placar {
     pub voce_reconhecido: bool,
 }
 
-/// Dano em mob: campo × fator = HP descontado do mob. Medido em 2026-10-01: mediana 18,82 em 150
-/// golpes isolados, 8 mobs (PROTOCOLO.md §6). Medido só com Ranger e mobs comuns; assumido igual
-/// para todos (e para chefes) até conferir numa captura em grupo.
-pub const FATOR_ESCALA: f64 = 18.82;
-
-/// Dano em jogador: o campo já é o HP do jogador (golpe de 166 → HP caiu 166, §6).
-/// Cura usa o mesmo fator por suposição: nenhuma captura teve curandeiro.
-pub const FATOR_ESCALA_JOGADOR: f64 = 1.0;
-
 /// Mob que atacou alguém nesse intervalo conta como "segurando aggro" nesse jogador.
 const JANELA_AGGRO: i64 = 8 * TICKS_POR_SEGUNDO;
 
@@ -309,15 +300,18 @@ impl Medidor {
             self.iniciar_ou_continuar_luta(hora);
             let autor = self.resolver_autor(e.autor_id);
             self.contar_prefixo(autor, e.skill);
-            somar(&mut self.cura_candidata, autor, e.skill, e.dano as f64 * FATOR_ESCALA_JOGADOR, &e);
+            somar(&mut self.cura_candidata, autor, e.skill, e.dano as f64, &e);
         } else if autor_jogador {
             self.iniciar_ou_continuar_luta(hora);
             let autor = self.resolver_autor(e.autor_id);
             self.contar_prefixo(autor, e.skill);
-            somar(&mut self.dano, autor, e.skill, e.dano as f64 * FATOR_ESCALA, &e);
+            // O campo é o número que sobe na tela ao bater (golpe de 2.574 no jogo = 2.574 no
+            // campo). A barra de HP do mob cai ~18,82 vezes isso (PROTOCOLO.md §6), mas o medidor
+            // mostra o número do jogo.
+            somar(&mut self.dano, autor, e.skill, e.dano as f64, &e);
         } else if alvo_jogador && !self.eh_invocacao(e.alvo_id) {
             self.iniciar_ou_continuar_luta(hora);
-            let a = somar(&mut self.recebido, e.alvo_id, e.skill, e.dano as f64 * FATOR_ESCALA_JOGADOR, &e);
+            let a = somar(&mut self.recebido, e.alvo_id, e.skill, e.dano as f64, &e);
             if e.aparo {
                 a.aparos += 1;
                 if let Some(s) = a.skills.get_mut(&dados_jogo::skill_base(e.skill)) {

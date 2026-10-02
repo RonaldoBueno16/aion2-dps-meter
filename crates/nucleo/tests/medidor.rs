@@ -1,7 +1,7 @@
 mod comum;
 
 use comum::{T0, quase_igual, segundos};
-use nucleo::medicao::medidor::{FATOR_ESCALA, FATOR_ESCALA_JOGADOR, Medidor, PerfilJogador};
+use nucleo::medicao::medidor::{Medidor, PerfilJogador};
 use nucleo::protocolo::combate::EventoDano;
 
 const MOB: u32 = 46027;
@@ -34,14 +34,14 @@ fn separa_por_jogador_e_por_skill_e_soma_invocacao_no_dono() {
     let yoshi = dano.jogadores.iter().find(|j| j.id == 11174).unwrap();
     assert_eq!(yoshi.nome, "Yoshi");
     assert_eq!(yoshi.classe, "Ranger");
-    quase_igual(350.0 * FATOR_ESCALA, yoshi.total);
+    quase_igual(350.0, yoshi.total);
     assert_eq!(yoshi.golpes, 3);
     assert_eq!(yoshi.criticos, 1);
     assert_eq!(yoshi.skills.len(), 3);
     assert_eq!(yoshi.skills[0].skill, 14170000);
     // Tabela da aba DPS: maior golpe do jogador e DPS de cada skill na mesma duração da luta.
-    quase_igual(200.0 * FATOR_ESCALA, yoshi.maximo);
-    quase_igual(200.0 * FATOR_ESCALA / 4.0, yoshi.skills[0].por_segundo);
+    quase_igual(200.0, yoshi.maximo);
+    quase_igual(200.0 / 4.0, yoshi.skills[0].por_segundo);
     let critica: Vec<_> = yoshi.skills.iter().filter(|s| s.golpes == 1 && s.criticos == 1).collect();
     assert_eq!(critica.len(), 1);
     assert_eq!(critica[0].skill, 14030000);
@@ -49,7 +49,7 @@ fn separa_por_jogador_e_por_skill_e_soma_invocacao_no_dono() {
     let outro = dano.jogadores.iter().find(|j| j.id == 22222).unwrap();
     assert_eq!(outro.classe, "Gladiator");
     quase_igual(300.0 / 650.0, outro.porcentagem);
-    quase_igual(300.0 * FATOR_ESCALA / 4.0, outro.por_segundo);
+    quase_igual(300.0 / 4.0, outro.por_segundo);
 
     assert!(p.dano_recebido.jogadores.is_empty());
     assert!(p.cura.jogadores.is_empty());
@@ -66,7 +66,7 @@ fn golpe_de_mob_em_jogador_vai_para_dano_recebido_e_marca_aggro() {
     assert_eq!(p.dano_recebido.jogadores.len(), 1);
     let tank = &p.dano_recebido.jogadores[0];
     assert_eq!(tank.id, 11174);
-    quase_igual((166.0 + 191.0) * FATOR_ESCALA_JOGADOR, tank.total);
+    quase_igual(166.0 + 191.0, tank.total);
     assert_eq!(tank.golpes, 2);
     assert_eq!(tank.aparos, 1);
     assert_eq!(tank.skills[0].aparos, 1); // coluna PARRY da skill expandida
@@ -87,11 +87,11 @@ fn cura_em_aliado_e_em_si_mesmo_vai_para_healer_e_nao_para_dano() {
     let clerigo = &p.cura.jogadores[0];
     assert_eq!(clerigo.id, 30303);
     assert_eq!(clerigo.classe, "Cleric");
-    quase_igual(780.0 * FATOR_ESCALA_JOGADOR, clerigo.total);
+    quase_igual(780.0, clerigo.total);
     assert_eq!(clerigo.skills.len(), 1);
     assert_eq!(clerigo.skills[0].skill, 17120000);
 
-    quase_igual(50.0 * FATOR_ESCALA, p.dano.jogadores.iter().find(|j| j.id == 30303).unwrap().total);
+    quase_igual(50.0, p.dano.jogadores.iter().find(|j| j.id == 30303).unwrap().total);
     assert!(p.dano_recebido.jogadores.is_empty());
 }
 
@@ -197,7 +197,7 @@ fn so_o_meu_dano_deixa_so_a_sua_linha_com_a_porcentagem_sobre_voce() {
     let so_voce = dano.so_voce();
     assert_eq!(so_voce.jogadores.len(), 1);
     assert_eq!(so_voce.jogadores[0].nome, "Yoshi");
-    quase_igual(100.0 * FATOR_ESCALA, so_voce.total);
+    quase_igual(100.0, so_voce.total);
     quase_igual(1.0, so_voce.jogadores[0].porcentagem);
 
     // Sem você reconhecido (overlay aberto no meio da sessão, antes de um abate): tabela vazia.
@@ -218,4 +218,15 @@ fn luta_nova_depois_de_inatividade() {
     let p = m.obter_placar();
     assert_eq!(p.dano.jogadores[0].golpes, 1);
     assert_eq!(p.duracao, 0);
+}
+
+#[test]
+fn golpe_mostra_o_mesmo_numero_que_o_jogo() {
+    // Na tela subiu 2.574; até a 0.5.1 o medidor mostrava 48,4K (× 18,82).
+    let mut m = Medidor::default();
+    m.definir_jogador(11174, "Yoshi", 32, true);
+    m.registrar(golpe(11174, 14340000, 2574), T0);
+    let yoshi = &m.obter_placar().dano.jogadores[0];
+    quase_igual(2574.0, yoshi.total);
+    quase_igual(2574.0, yoshi.maximo);
 }
