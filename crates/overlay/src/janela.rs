@@ -107,6 +107,9 @@ pub struct Overlay {
     replay: bool,
     /// Só no debug (--expandir): abre todas as linhas, para conferir o desenho sem clicar.
     expandir_tudo: bool,
+    /// Quantos jogadores a lista mostra (LIMITE_DE_LINHAS; no debug, --limite N para ver o "você
+    /// abaixo" com uma captura de poucos jogadores).
+    limite: usize,
     config: Config,
     tela: Tela,
     dobra: Dobra,
@@ -171,6 +174,12 @@ impl Overlay {
             escala_aplicada: 0.0,
             replay: replay.is_some(),
             expandir_tudo: tem("--expandir"),
+            limite: opcoes_debug
+                .iter()
+                .skip_while(|a| *a != "--limite")
+                .nth(1)
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(LIMITE_DE_LINHAS),
             config,
             tela: if tem("--config") { Tela::Configuracoes } else { Tela::Medidor },
             dobra: Dobra::Aberto,
@@ -358,8 +367,19 @@ impl Overlay {
         }
 
         let maior = tabela.jogadores[0].total;
-        for j in &tabela.jogadores {
-            self.linha_jogador(ui, j, maior, &colunas);
+        let voce = tabela.jogadores.iter().position(|j| j.voce);
+        let (primeiras, abaixo) = linhas_mostradas(tabela.jogadores.len(), voce, self.limite);
+        // Posição no placar inteiro da aba: com "Só o meu dano" a sua continua a real, e não 1.
+        let bruta = &self.tabela_bruta().jogadores;
+        let posicao = |j: &LinhaJogador| bruta.iter().position(|b| b.id == j.id).map_or(0, |i| i + 1);
+        let mostradas: Vec<(usize, usize)> =
+            primeiras.chain(abaixo).map(|i| (i, posicao(&tabela.jogadores[i]))).collect();
+        for (i, posicao) in mostradas {
+            if Some(i) == abaixo {
+                separador(ui);
+            }
+            let j = &tabela.jogadores[i];
+            self.linha_jogador(ui, j, posicao, maior, &colunas);
             if self.expandidos.contains(&(self.aba, j.id)) {
                 // Todas as skills que aconteceram, com as mesmas colunas do jogador.
                 for s in &j.skills {
@@ -386,7 +406,7 @@ impl Overlay {
         texto
     }
 
-    fn linha_jogador(&mut self, ui: &mut Ui, j: &LinhaJogador, maior: f64, colunas: &Colunas) {
+    fn linha_jogador(&mut self, ui: &mut Ui, j: &LinhaJogador, posicao: usize, maior: f64, colunas: &Colunas) {
         let largura = ui.available_width();
         let expandido = self.expandidos.contains(&(self.aba, j.id));
         let tank = self.aba == Aba::Tank;
@@ -418,7 +438,9 @@ impl Overlay {
         let mut nome = LayoutJob::default();
         let seta = if expandido { "▾" } else { "▸" };
         let voce = if j.voce { " (você)" } else { "" };
-        trecho(&mut nome, &format!("{seta} {}{voce}", j.nome), 12.0, j.voce, texto());
+        trecho(&mut nome, &format!("{seta} "), 12.0, j.voce, texto());
+        trecho(&mut nome, &format!("{posicao}. "), 12.0, false, branco(0x88));
+        trecho(&mut nome, &format!("{}{voce}", j.nome), 12.0, j.voce, texto());
         nome.wrap = uma_linha((max_esquerda - largura_selos).max(40.0));
         let nome = montar(ui, nome);
 
@@ -691,6 +713,21 @@ fn amostra(tabela: &Tabela, eu: Option<String>, perfis: &IndexMap<String, Perfil
         maximo: 0.0,
         skills: Vec::new(),
     }
+}
+
+/// A lista mostra os 10 primeiros; quem está abaixo (você incluído) só aparece na sua linha à parte.
+const LIMITE_DE_LINHAS: usize = 10;
+
+/// Índices das linhas mostradas: as `limite` primeiras e, à parte, a sua se ficou abaixo delas.
+fn linhas_mostradas(total: usize, voce: Option<usize>, limite: usize) -> (std::ops::Range<usize>, Option<usize>) {
+    (0..total.min(limite), voce.filter(|&i| i >= limite))
+}
+
+/// Traço discreto entre os 10 primeiros e a sua linha, quando você está mais abaixo.
+fn separador(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 9.0), Sense::hover());
+    let y = rect.center().y;
+    ui.painter().hline(rect.x_range().shrink(6.0), y, Stroke::new(1.0_f32, branco(0x33)));
 }
 
 const PROCURANDO: &str = "Procurando o servidor do jogo...";
@@ -1106,6 +1143,20 @@ fn compacto(valor: f64) -> String {
 #[cfg(test)]
 mod testes {
     use super::*;
+
+    #[test]
+    fn lista_mostra_os_10_primeiros_e_voce_abaixo_deles() {
+        // Você entre os 10: só as 10 linhas.
+        assert_eq!(linhas_mostradas(40, Some(3), 10), (0..10, None));
+        // Você em 37º: as 10 e a sua (índice 36) à parte.
+        assert_eq!(linhas_mostradas(40, Some(36), 10), (0..10, Some(36)));
+        // Logo depois do corte.
+        assert_eq!(linhas_mostradas(11, Some(10), 10), (0..10, Some(10)));
+        // Ainda não reconhecido: só as 10.
+        assert_eq!(linhas_mostradas(40, None, 10), (0..10, None));
+        // Menos de 10 jogadores: todos.
+        assert_eq!(linhas_mostradas(4, Some(2), 10), (0..4, None));
+    }
 
     #[test]
     fn rodape_aponta_firewall_ou_trafego_escondido_so_depois_de_esperar() {
