@@ -45,8 +45,8 @@ cargo build --release -p overlay
     direita faz o mesmo arrastando.
 - ‹ ou › (a seta aponta para a borda mais perto) desliza a janela até a borda da área de
   trabalho do monitor e deixa só a aba "Overlay"; clicar nela traz a janela de volta ao
-  mesmo lugar. Recolhido, o medidor continua contando. Com "Efeitos de animação"
-  desligado no Windows, a janela vai direto, sem deslizar.
+  mesmo lugar. Recolhido, o medidor continua contando. Com as animações do Windows
+  desligadas, a janela vai direto, sem deslizar.
 - O rodapé mostra a versão e só avisa enquanto procura o servidor do jogo, enquanto baixa
   os nomes das skills ou quando a captura para.
 - Dano exibido em unidades de HP do alvo (campo do pacote × 18,82, ver PROTOCOLO.md §6).
