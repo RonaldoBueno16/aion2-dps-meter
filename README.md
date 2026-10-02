@@ -7,12 +7,12 @@ processo do jogo. Formato do protocolo e medições em [PROTOCOLO.md](PROTOCOLO.
 ## Usar
 
 Pela release: baixe o zip da última versão em Releases, extraia e abra o
-`Aion2Meter.Overlay.exe` (o .NET vai dentro do executável; passo a passo nas notas da
-release). Para compilar daqui:
+`Aion2Meter.exe` (executável único de ~2 MB, sem instalar nada; passo a passo nas notas
+da release). Para compilar daqui (Rust estável, testado com 1.99 MSVC):
 
 ```powershell
-dotnet build -c Release
-.\src\Aion2Meter.Overlay\bin\Release\net10.0-windows\Aion2Meter.Overlay.exe
+cargo build --release -p overlay
+.\target\release\Aion2Meter.exe
 ```
 
 - O Windows pede permissão de administrador ao abrir (a captura por raw socket exige).
@@ -21,17 +21,21 @@ dotnet build -c Release
   cima; `Classe · Nv · Power` sempre embaixo (classe em inglês, por escolha). `?` = ainda
   não chegou; `~31` = valor da memória, visto numa sessão anterior e talvez velho.
 - A memória (`%LOCALAPPDATA%\Aion2Meter\jogadores.json`) guarda o último level e Power de
-  cada nome, inclusive o seu. Com o overlay aberto no meio da sessão, você é reconhecido
-  pelo nome no primeiro abate ou invocação. Valor lido na conexão atual sempre vence.
+  cada nome, inclusive o seu, a cada 30 s e ao fechar. Com o overlay aberto no meio da
+  sessão, você é reconhecido pelo nome no primeiro abate ou invocação. Valor lido na
+  conexão atual sempre vence.
 - Arraste a janela pelo fundo. Clique num jogador para ver as skills. "Zerar" começa
   uma luta nova; ela também zera sozinha depois de 15 s sem dano.
+- O rodapé mostra a versão e só avisa enquanto procura o servidor do jogo, enquanto baixa
+  os nomes das skills ou quando a captura para.
 - Dano exibido em unidades de HP do alvo (campo do pacote × 18,82, ver PROTOCOLO.md §6).
 - Invocações, pets e armadilhas somam na linha do dono.
 - Skills aparecem em português e com ícone. Nomes: questlog.gg (base comunitária montada
   do cliente Global, API não documentada); ícones: CDN oficial da NCSoft. Tudo fica em
   `%LOCALAPPDATA%\Aion2Meter` (`skills-pt.json` e `icones/`); apague a pasta para rebaixar.
-- Clicar no overlay não deveria tirar o foco do teclado do jogo (`WS_EX_NOACTIVATE`;
-  a confirmar no jogo, junto com arrastar e expandir jogador).
+- Clicar no overlay não tira o foco do teclado do jogo (`WS_EX_NOACTIVATE`, reaplicado a
+  cada quadro porque o winit apaga o bit ao mostrar a janela; conferido no jogo em
+  2026-10-02, junto com arrastar e expandir jogador).
 - Rede: a captura é passiva, mas o medidor faz requisições próprias ao questlog.gg (só o
   código da skill) e ao CDN da NCSoft (ícones), uma vez por skill, depois fica no cache.
 - Abas **DPS | Tank | Healer**: a luta é a mesma (duração, "Zerar" e os 15 s valem para
@@ -50,30 +54,36 @@ dotnet build -c Release
 
 | Pasta | Conteúdo |
 |---|---|
-| `src/Aion2Meter.Core` | Protocolo (varint, LZ4, framing, parsers), captura (raw socket, pcapng, remontagem TCP), medição (placar) |
-| `src/Aion2Meter.Overlay` | Janela WPF sempre no topo |
-| `src/Aion2Meter.Cli` | Replay de `.pcapng` com diagnóstico e modo `ao-vivo` no console |
-| `tests/Aion2Meter.Testes` | LZ4 contra o compressor de referência (K4os), framing, remontagem TCP, parsers com bytes reais e placar (`dotnet test`) |
+| `crates/nucleo` | Protocolo (varint, LZ4, framing, parsers), captura (raw socket, pcapng, remontagem TCP), medição (placar, catálogo de skills) e formatação pt-BR |
+| `crates/nucleo/tests` | LZ4 contra o `lz4_flex`, framing, remontagem TCP, parsers com bytes reais, placar e troca de servidor (`cargo test`). O teste de rede do catálogo é opcional: `cargo test -p nucleo --test catalogo -- --ignored` |
+| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Aion2Meter.exe`. O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir]` para ver a janela sem o jogo |
+| `crates/replay` | Replay de `.pcapng` com diagnóstico e modo `ao-vivo` no console |
 | `dados/skills.json` | Opcional, fora do repositório e das releases: nomes em inglês do RATmeter (GPL-3.0, ver PROTOCOLO.md §9), só reserva quando o questlog não tem a skill |
 | `capturar.ps1` | Grava `captura.pcapng` com o pktmon do Windows (admin). Capturas ficam fora do repositório: têm o seu tráfego |
-| `ao-vivo.ps1` | Roda o modo `ao-vivo` do CLI como admin e grava `ao-vivo-log.txt` |
-| `.github/workflows/release.yml` | Tag `v*` → testes → executável único → release com o zip |
+| `ao-vivo.ps1` | Roda o modo `ao-vivo` do replay como admin e grava `ao-vivo-log.txt` (antes: `cargo build --release -p replay`) |
+| `.github/workflows/release.yml` | Tag `v*` → testes → `Aion2Meter.exe` → release com o zip |
 
 ## Lançar uma versão
 
-1. Ajuste `Version` em `Directory.Build.props` (SemVer: funcionalidade nova sobe a casa do
-   meio e zera a última, 0.1.0 → 0.2.0; correção sobe a última, 0.2.0 → 0.2.1).
-2. Com a mudança já no `main`: `git tag v0.2.0` e `git push origin v0.2.0`.
-3. O workflow roda os testes e publica a release com `Aion2Meter-0.2.0-win-x64.zip`
-   (acompanhe com `gh run watch`). A versão aparece no rodapé do overlay.
+1. Ajuste `version` em `[workspace.package]` do `Cargo.toml` (SemVer: funcionalidade nova
+   sobe a casa do meio e zera a última, 0.2.0 → 0.3.0; correção sobe a última, 0.3.0 →
+   0.3.1). A versão aparece no rodapé do overlay.
+2. Com a mudança já no `main`: `git tag v0.3.0` e `git push origin v0.3.0`.
+3. O workflow confere se a tag bate com o `Cargo.toml`, roda os testes e publica a release
+   com `Aion2Meter-0.3.0-win-x64.zip` (acompanhe com `gh run watch`).
+
+Enquanto o Actions deste repositório falhar antes de criar os jobs (`startup_failure`,
+visto em 2026-10-02), gere o zip num clone limpo da tag (`cargo build --release -p
+overlay`, zip só com o `Aion2Meter.exe`) e publique com `gh release create` usando
+`.github/notas-da-release.md`.
 
 ## Depois de um patch do jogo
 
 1. Com o jogo aberto, rode `capturar.ps1` como administrador e bata em mobs no bipe.
-2. `dotnet run -c Release --project src/Aion2Meter.Cli -- captura.pcapng`
+2. `cargo run --release -p replay -- captura.pcapng`
 3. Confira: "sincronizado=True", eventos de dano válidos > 0, "Razão queda/dano" perto
    de 18,8 e o placar no fim. Se o dano sumir, os opcodes mudaram: use `--op XXXX --hex N`
-   para inspecionar e atualize `Protocolo/Opcodes.cs`.
+   para inspecionar e atualize `crates/nucleo/src/protocolo/opcodes.rs`.
 
 ## Pendências conhecidas
 
@@ -97,3 +107,5 @@ dotnet build -c Release
 - Crítico: dentro da mesma skill, `tipo_dano 3` tem média 1,6 vez maior que o tipo 2
   (Disparo Rápido: 384 contra 238), então a leitura de crítico está certa. O 0% do teste
   ao vivo (153 golpes) é dado real daquela luta.
+- Port de C# para Rust (0.1.0 → 0.2.0): o replay em Rust deu saída idêntica à do CLI em
+  C# nas 5 capturas locais, inclusive nas opções de diagnóstico.

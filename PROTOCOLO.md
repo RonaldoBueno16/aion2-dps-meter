@@ -17,7 +17,7 @@ por raw socket (45 s). O que está marcado como **hipótese** ainda não foi con
 | Modo de tela | `FullscreenMode=1` (tela cheia em janela): overlay sempre no topo aparece por cima |
 | Janela | título `AION2` (não traz nome do personagem) |
 | Logs locais | `%LOCALAPPDATA%\AION2\Saved_Steam\Logs` só tem `cef3.log` (navegador embutido) |
-| Runtimes | .NET 10 (SDK 10.0.302), Node 24, JDK 17. O `python` do PATH é o atalho da Microsoft Store; há CPython 3.11/3.13 gerenciado pelo `uv` (usado pelos servidores MCP) |
+| Runtimes | Rust 1.99 (MSVC, compila o medidor desde a 0.2.0), .NET 10 (SDK 10.0.302, a 0.1.0 era em C#), Node 24, JDK 17. O `python` do PATH é o atalho da Microsoft Store; há CPython 3.11/3.13 gerenciado pelo `uv` (usado pelos servidores MCP) |
 
 Addon dentro do jogo exigiria injetar código no processo protegido pelo NCGuard: fora
 de questão. O medidor é um programa externo que lê o tráfego de rede passivamente e
@@ -136,9 +136,9 @@ disso são golpes finais (a queda fica limitada pelo HP restante).
 
 - Dano em **jogador** não tem esse fator: um golpe de mob com campo 166 tirou exatamente
   166 do HP do jogador (chave 0 do `0x8D00`), conferido nesse golpe só. O medidor usa 1
-  (`Medidor.FatorEscalaJogador`) na aba Tank e, por suposição, na aba Healer, até uma
+  (`FATOR_ESCALA_JOGADOR` em `medidor.rs`) na aba Tank e, por suposição, na aba Healer, até uma
   captura com curandeiro.
-- O medidor multiplica o campo por `18,82` (`Medidor.FatorEscala`). O mesmo fator vale
+- O medidor multiplica o campo por `18,82` (`FATOR_ESCALA`). O mesmo fator vale
   para todos, então ranking e porcentagens não dependem dele.
 - A queda de HP **não** é usada para atribuir dano: num alvo com vários jogadores ela
   mistura o dano de todos. A atribuição vem do autor e da skill de cada `0x3804`.
