@@ -30,6 +30,10 @@ pub type AoSegmento = Arc<dyn Fn(SegmentoTcp, Hora) + Send + Sync>;
 pub struct Contadores {
     pub recebidos: AtomicU64,
     pub segmentos_tcp: AtomicU64,
+    /// Segmentos TCP que chegam a este PC e que saem dele. Saída sem entrada nenhuma = algo (o
+    /// firewall) descarta o que chega antes de o socket ver.
+    pub tcp_entrada: AtomicU64,
+    pub tcp_saida: AtomicU64,
 }
 
 pub struct CapturaSocketBruto {
@@ -66,7 +70,7 @@ impl CapturaSocketBruto {
                 (captura.parando.clone(), captura.contadores.clone(), ao_segmento.clone());
             std::thread::Builder::new()
                 .name(format!("captura {endereco}"))
-                .spawn(move || receber(s, &parando, &contadores, &*ao_segmento))
+                .spawn(move || receber(s, endereco, &parando, &contadores, &*ao_segmento))
                 .map_err(|e| e.to_string())?;
         }
         Ok(captura)
@@ -141,7 +145,13 @@ fn abrir(endereco: Ipv4Addr) -> Result<SOCKET, String> {
     }
 }
 
-fn receber(s: SOCKET, parando: &AtomicBool, contadores: &Contadores, ao_segmento: &(dyn Fn(SegmentoTcp, Hora) + Send + Sync)) {
+fn receber(
+    s: SOCKET,
+    endereco: Ipv4Addr,
+    parando: &AtomicBool,
+    contadores: &Contadores,
+    ao_segmento: &(dyn Fn(SegmentoTcp, Hora) + Send + Sync),
+) {
     let mut buffer = vec![0u8; 65536];
     while !parando.load(Ordering::SeqCst) {
         let n = unsafe { recv(s, buffer.as_mut_ptr(), buffer.len() as i32, 0) };
@@ -152,6 +162,11 @@ fn receber(s: SOCKET, parando: &AtomicBool, contadores: &Contadores, ao_segmento
         contadores.recebidos.fetch_add(1, Ordering::Relaxed);
         let Some(seg) = SegmentoTcp::extrair(&buffer[..n as usize], ENLACE_IPV4) else { continue };
         contadores.segmentos_tcp.fetch_add(1, Ordering::Relaxed);
+        if seg.destino == endereco {
+            contadores.tcp_entrada.fetch_add(1, Ordering::Relaxed);
+        } else if seg.origem == endereco {
+            contadores.tcp_saida.fetch_add(1, Ordering::Relaxed);
+        }
         ao_segmento(seg, crate::agora());
     }
 }

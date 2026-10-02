@@ -2,8 +2,10 @@
 
 1. Baixe o `Aion2Meter-<versão>-win-x64.zip` abaixo e extraia numa pasta.
 2. Abra o `Axon.exe` **antes de entrar no mundo** (assim ele lê o seu level e Power no login). Ele fica como ícone ao lado do relógio (na seta ^) e o overlay aparece quando o jogo está na frente.
-3. Aceite o pedido de administrador: a leitura do tráfego do jogo exige.
+3. Aceite o pedido de administrador: a leitura do tráfego do jogo exige. Com ele, o Axon também se libera no Firewall do Windows (regra "Axon (captura)", só para o próprio exe).
 4. Se o Windows mostrar "O Windows protegeu o computador", clique em "Mais informações" e "Executar assim mesmo" (o executável não tem assinatura digital).
+
+Se o rodapé do overlay disser que o firewall está barrando, libere o `Axon.exe` no firewall do seu antivírus (Kaspersky, Avast, Norton...). Se disser que o servidor não foi encontrado, feche VPN, ExitLag ou programa parecido e abra o Axon de novo.
 
 Não precisa instalar nada: é um executável único de cerca de 2 MB. Para atualizar, feche pelo ✕ do overlay ou em "Fechar Axon" no ícone ao lado do relógio e troque o `.exe` pelo da versão nova. Desde a 0.3.0 o executável se chama `Axon.exe`: pode apagar o `Aion2Meter.exe` antigo (e o `Aion2Meter.Overlay.exe`, de quem vem da 0.1.0). Os dados salvos ficam em `%LOCALAPPDATA%\Aion2Meter` e continuam valendo de uma versão para outra.
 

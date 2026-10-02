@@ -4,6 +4,7 @@
 
 mod bandeja;
 mod config;
+mod firewall;
 mod janela;
 mod jogo;
 
