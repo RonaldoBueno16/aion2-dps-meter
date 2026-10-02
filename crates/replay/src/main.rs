@@ -115,8 +115,8 @@ fn ao_vivo(duracao: u64) {
             std::process::exit(1);
         }
     };
-    let enderecos: Vec<String> = captura.enderecos.iter().map(ToString::to_string).collect();
-    println!("Capturando em {} por {duracao} s", enderecos.join(", "));
+    let enderecos = || captura.enderecos().iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+    println!("Capturando em {} por {duracao} s", enderecos());
 
     let fim = std::time::Instant::now() + Duration::from_secs(duracao);
     while std::time::Instant::now() < fim {
@@ -124,8 +124,9 @@ fn ao_vivo(duracao: u64) {
         let s = sessao.lock().unwrap();
         let contadores = &captura.contadores;
         println!(
-            "[{}] IP recebidos {}, TCP {}, fluxo {}, pacotes {}, lacunas {}, dessinc. {}, jogadores {}",
+            "[{}] em {}: IP recebidos {}, TCP {}, fluxo {}, pacotes {}, lacunas {}, dessinc. {}, jogadores {}",
             hora_local(),
+            enderecos(),
             contadores.recebidos.load(std::sync::atomic::Ordering::Relaxed),
             contadores.segmentos_tcp.load(std::sync::atomic::Ordering::Relaxed),
             s.fluxo.as_deref().unwrap_or("(procurando)"),
