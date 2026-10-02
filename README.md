@@ -16,6 +16,13 @@ cargo build --release -p overlay
 ```
 
 - O Windows pede permissão de administrador ao abrir (a captura por raw socket exige).
+- Ao abrir, o Axon cria no Firewall do Windows a regra de entrada "Axon (captura)", só
+  para o próprio exe, e apaga as regras de entrada antigas dele (inclusive o bloqueio que
+  um "Cancelar" no aviso do Windows deixa). Sem ela, o firewall pode descartar o que chega
+  do servidor e o medidor fica em "Procurando o servidor do jogo...". Antivírus com
+  firewall próprio (Kaspersky, Avast, Norton...) não usam essa regra: aí é preciso liberar
+  o `Axon.exe` nele. O rodapé avisa quando só sai tráfego e nada chega, e também quando o
+  jogo está aberto há 2 minutos sem o servidor aparecer (VPN, ExitLag e similares).
 - O jogo precisa estar em "tela cheia em janela" (borderless), que é o padrão atual.
 - O Axon fica como ícone na área de notificação (a seta ao lado do relógio), fora da barra
   de tarefas. O overlay só aparece com o jogo em primeiro plano: aberto com outro programa
@@ -141,6 +148,8 @@ overlay`, zip só com o `Axon.exe`) e publique com `gh release create` usando
 - **Tank**: escala 1:1 conferida num golpe só. "aggro" é inferido do último golpe de
   cada mob, porque o pacote de troca de alvo não foi achado.
 - Invocação de jogador sem legião: o vínculo depende só do nome do dono.
+- **Firewall**: a regra automática não foi conferida num PC com o Firewall do Windows
+  ativo (o PC de desenvolvimento usa o firewall do Kaspersky).
 - **Party** (só quem está no seu grupo): o pacote do grupo (`0x9702` em outros medidores)
   não apareceu em nenhuma captura local; falta uma captura em grupo.
 

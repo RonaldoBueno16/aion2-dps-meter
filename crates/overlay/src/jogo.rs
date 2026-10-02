@@ -28,6 +28,11 @@ pub fn em_primeiro_plano() -> bool {
     jogo != 0 && unsafe { GetForegroundWindow() } as isize == jogo
 }
 
+/// Com o jogo aberto, mesmo minimizado ou atrás de outra janela.
+pub fn aberto() -> bool {
+    janela() != 0
+}
+
 /// Área do jogo na tela (esquerda, topo, direita, base), em pixels físicos. None com o jogo
 /// fechado ou minimizado.
 pub fn area() -> Option<[i32; 4]> {

@@ -7,6 +7,7 @@ mod recolher;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -91,6 +92,10 @@ pub struct Overlay {
     // segura o Mutex que as threads de captura usam.
     placar: Placar,
     fluxo: Option<String>,
+    /// Quando a captura abriu e quando o jogo apareceu aberto: o rodapé só aponta um problema
+    /// depois de dar tempo de o servidor aparecer.
+    captura_desde: Instant,
+    jogo_desde: Option<Instant>,
     lido_em: Instant,
     salvo_em: Instant,
     icones: HashMap<PathBuf, Option<TextureHandle>>,
@@ -157,6 +162,8 @@ impl Overlay {
             expandidos: HashSet::new(),
             placar: Placar::default(),
             fluxo: None,
+            captura_desde: Instant::now(),
+            jogo_desde: None,
             lido_em: Instant::now(),
             salvo_em: Instant::now(),
             icones: HashMap::new(),
@@ -186,6 +193,9 @@ impl Overlay {
         let memoria = (self.tela == Tela::Configuracoes).then(|| sessao.medidor.exportar_memoria());
         drop(sessao);
         self.lido_em = Instant::now();
+        if self.jogo_desde.is_none() && jogo::aberto() {
+            self.jogo_desde = Some(self.lido_em);
+        }
         if let Some((eu, perfis)) = memoria {
             self.amostra = Some(amostra(self.tabela_bruta(), eu, &perfis));
         }
@@ -492,7 +502,7 @@ impl Overlay {
             Some(erro) => partes.push(erro.clone()),
             None => {
                 if self.fluxo.is_none() {
-                    partes.push("Procurando o servidor do jogo...".into());
+                    partes.push(self.procurando().into());
                 }
                 if self.catalogo.quantidade() == 0 {
                     partes.push("baixando nomes das skills...".into());
@@ -503,6 +513,18 @@ impl Overlay {
         partes.push(concat!("v", env!("CARGO_PKG_VERSION")).into());
         let status = partes.join("  ·  ");
         ui.add(egui::Label::new(RichText::new(status).font(fonte(10.0, false)).color(branco(0x99))).wrap());
+    }
+
+    /// Sem o servidor do jogo ainda, diz o que os contadores da captura apontam.
+    fn procurando(&self) -> &'static str {
+        let Some(captura) = &self.captura else { return PROCURANDO };
+        let c = &captura.contadores;
+        procurando(
+            c.tcp_entrada.load(Ordering::Relaxed),
+            c.tcp_saida.load(Ordering::Relaxed),
+            self.captura_desde.elapsed(),
+            self.jogo_desde.map(|t| t.elapsed()),
+        )
     }
 
     /// Recolhido: só a aba "Overlay ›" colada na borda; clicar traz a janela de volta.
@@ -670,7 +692,23 @@ fn amostra(tabela: &Tabela, eu: Option<String>, perfis: &IndexMap<String, Perfil
     }
 }
 
+const PROCURANDO: &str = "Procurando o servidor do jogo...";
+
+/// `entrada`/`saida`: segmentos TCP capturados desde que a captura abriu, há `aberta`; `com_jogo`:
+/// há quanto tempo a janela do jogo apareceu. Espera antes de acusar algo, para não piscar aviso na
+/// abertura nem na tela de login.
+fn procurando(entrada: u64, saida: u64, aberta: Duration, com_jogo: Option<Duration>) -> &'static str {
+    if aberta >= Duration::from_secs(15) && saida >= 20 && entrada == 0 {
+        "O firewall está barrando o que chega da internet: libere o Axon no Firewall do Windows ou no antivírus."
+    } else if com_jogo.is_some_and(|t| t >= Duration::from_secs(120)) {
+        "Jogo aberto e servidor não encontrado: VPN, ExitLag e similares podem esconder o tráfego do jogo."
+    } else {
+        PROCURANDO
+    }
+}
+
 fn iniciar_captura(sessao: &Arc<Mutex<Sessao>>) -> (Option<CapturaSocketBruto>, Option<String>) {
+    crate::firewall::liberar();
     let alimentar = sessao.clone();
     match CapturaSocketBruto::iniciar(Arc::new(move |seg, hora| travar(&alimentar).ao_segmento(&seg, hora))) {
         Ok(captura) => (Some(captura), None),
@@ -1061,5 +1099,25 @@ fn compacto(valor: f64) -> String {
         format!("{}K", f(valor / 1_000.0, 1))
     } else {
         n(valor, 0)
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn rodape_aponta_firewall_ou_trafego_escondido_so_depois_de_esperar() {
+        let s = Duration::from_secs;
+        // Abrindo: procurando, mesmo sem nada chegar ainda.
+        assert_eq!(procurando(0, 500, s(5), None), PROCURANDO);
+        // Só sai pacote: o firewall descarta o que chega.
+        assert!(procurando(0, 500, s(20), None).contains("firewall"));
+        // Pouco tráfego ainda não acusa.
+        assert_eq!(procurando(0, 3, s(20), None), PROCURANDO);
+        // Chega pacote e o jogo abriu há pouco (login, seleção de personagem).
+        assert_eq!(procurando(900, 500, s(60), Some(s(30))), PROCURANDO);
+        // Jogo aberto há mais de 2 min sem o servidor aparecer.
+        assert!(procurando(900, 500, s(200), Some(s(150))).contains("VPN"));
     }
 }
