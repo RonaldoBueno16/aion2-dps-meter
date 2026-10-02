@@ -27,6 +27,7 @@ use nucleo::medicao::sessao::Sessao;
 use recolher::{Dobra, Lado};
 use serde::{Deserialize, Serialize};
 
+use crate::atualizacao::{self, Atualizacao, Estado};
 use crate::bandeja::Bandeja;
 use crate::config::{self, Config};
 use crate::jogo;
@@ -122,6 +123,9 @@ pub struct Overlay {
     amostra: Option<LinhaJogador>,
     /// Ícone ao lado do relógio; None se o Windows não deixou criar.
     bandeja: Option<Bandeja>,
+    atualizacao: Atualizacao,
+    /// Depois de trocar o exe: Ok com a versão nova aberta (esta fecha), Err se não abriu.
+    reabertura: Option<Result<(), String>>,
     /// Só no debug (--recolher / --recolher-e-voltar): recolhe aos 2 s e volta aos 4,5 s.
     teste_dobra: Option<(Instant, bool, bool)>,
 }
@@ -187,6 +191,8 @@ impl Overlay {
             arraste: None,
             amostra: None,
             bandeja: None,
+            atualizacao: if tem("--nova-versao") { Atualizacao::falsa() } else { Atualizacao::iniciar() },
+            reabertura: None,
             teste_dobra: (tem("--recolher") || tem("--recolher-e-voltar"))
                 .then(|| (Instant::now(), tem("--recolher-e-voltar"), false)),
         };
@@ -531,10 +537,40 @@ impl Overlay {
                 }
             }
         }
-        // Versão do build, para os amigos dizerem qual usam.
-        partes.push(concat!("v", env!("CARGO_PKG_VERSION")).into());
-        let status = partes.join("  ·  ");
-        ui.add(egui::Label::new(RichText::new(status).font(fonte(10.0, false)).color(branco(0x99))).wrap());
+        // Versão do build, para os amigos dizerem qual usam; com versão nova no GitHub, o botão.
+        let versao = concat!("v", env!("CARGO_PKG_VERSION"));
+        let estado = self.atualizacao.estado();
+        partes.push(match &estado {
+            Estado::Nada => versao.to_string(),
+            Estado::Disponivel(n) => format!("{versao} → v{}", n.versao),
+            Estado::Baixando(n) => format!("{versao} → v{}: baixando...", n.versao),
+            Estado::Falhou(n, erro) => format!("{versao} → v{}: {erro}", n.versao),
+            Estado::Pronta(n) => match &self.reabertura {
+                Some(Err(erro)) => format!("v{} instalada, mas não deu para {erro}: abra o Axon de novo", n.versao),
+                _ => format!("v{} instalada, reabrindo...", n.versao),
+            },
+        });
+        let status = RichText::new(partes.join("  ·  ")).font(fonte(10.0, false)).color(branco(0x99));
+        let rotulo = match estado {
+            Estado::Disponivel(_) => "Atualizar",
+            Estado::Falhou(..) => "Tentar de novo",
+            _ => {
+                ui.add(egui::Label::new(status).wrap());
+                return;
+            }
+        };
+        // Botão à direita; o texto ocupa o resto, alinhado à esquerda como sem o botão.
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                let dica = "Baixa a versão nova do GitHub, confere o arquivo e reabre o Axon";
+                if botao(ui, rotulo, true).on_hover_text(dica).clicked() {
+                    self.atualizacao.atualizar();
+                }
+                ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
+                    ui.add(egui::Label::new(status).wrap());
+                });
+            });
+        });
     }
 
     /// Sem o servidor do jogo ainda, diz o que os contadores da captura apontam.
@@ -611,6 +647,15 @@ impl eframe::App for Overlay {
         }
         if self.salvo_em.elapsed() >= SALVAR_A_CADA {
             self.salvar_memoria();
+        }
+        // Exe trocado: grava a memória antes de a versão nova ler, abre a nova e fecha esta.
+        if self.reabertura.is_none() && matches!(self.atualizacao.estado(), Estado::Pronta(_)) {
+            self.salvar_memoria();
+            let aberta = atualizacao::abrir_novo();
+            if aberta.is_ok() {
+                ctx.send_viewport_cmd(ViewportCommand::Close);
+            }
+            self.reabertura = Some(aberta);
         }
         self.testar_dobra(ctx);
 
