@@ -31,7 +31,22 @@ cargo build --release -p overlay
   sessão, você é reconhecido pelo nome no primeiro abate ou invocação. Valor lido na
   conexão atual sempre vence.
 - Arraste a janela pelo fundo. Clique num jogador para ver as skills. "Zerar" começa
-  uma luta nova; ela também zera sozinha depois de 15 s sem dano.
+  uma luta nova; ela também zera sozinha depois de 15 s sem dano (ajustável).
+- ⚙ abre as configurações, que valem na hora e ficam em
+  `%LOCALAPPDATA%\Aion2Meter\config.json`:
+  - **Linha de cada jogador**: clique numa coluna da tabela da aba DPS ou em Classe, Nv
+    ou GS na linha de amostra para esconder ou mostrar (o escondido fica riscado).
+  - **Só o meu dano**: só a sua linha, nas três abas; a % fica sempre em 100%. Enquanto
+    você não foi reconhecido (ver Pendências), a lista fica vazia com um aviso.
+  - **Alcance**: Proximidade (todos que aparecem perto). Party está desativado até uma
+    captura em grupo mostrar o pacote do grupo.
+  - **Luta**: segundos sem dano até a luta zerar, de 5 a 120.
+  - **Tamanho**: de 60% a 200%, escalando a janela inteira. A alça no canto de baixo à
+    direita faz o mesmo arrastando.
+- ‹ ou › (a seta aponta para a borda mais perto) desliza a janela até a borda da área de
+  trabalho do monitor e deixa só a aba "Overlay"; clicar nela traz a janela de volta ao
+  mesmo lugar. Recolhido, o medidor continua contando. Com "Efeitos de animação"
+  desligado no Windows, a janela vai direto, sem deslizar.
 - O rodapé mostra a versão e só avisa enquanto procura o servidor do jogo, enquanto baixa
   os nomes das skills ou quando a captura para.
 - Dano exibido em unidades de HP do alvo (campo do pacote × 18,82, ver PROTOCOLO.md §6).
@@ -44,8 +59,8 @@ cargo build --release -p overlay
   2026-10-02, junto com arrastar e expandir jogador).
 - Rede: a captura é passiva, mas o medidor faz requisições próprias ao questlog.gg (só o
   código da skill) e ao CDN da NCSoft (ícones), uma vez por skill, depois fica no cache.
-- Abas **DPS | Tank | Healer**: a luta é a mesma (duração, "Zerar" e os 15 s valem para
-  as três), cada aba com o seu total e o detalhe por skill:
+- Abas **DPS | Tank | Healer**: a luta é a mesma (duração, "Zerar" e o tempo sem dano
+  valem para as três), cada aba com o seu total e o detalhe por skill:
   - **DPS**: dano causado em monstros.
   - **Tank**: dano recebido de monstros (DTPS), golpes aparados e mortes (☠). "aggro N"
     marca quantos monstros acertaram aquele jogador por último nos últimos 8 s. O valor
@@ -62,7 +77,7 @@ cargo build --release -p overlay
 |---|---|
 | `crates/nucleo` | Protocolo (varint, LZ4, framing, parsers), captura (raw socket, pcapng, remontagem TCP), medição (placar, catálogo de skills) e formatação pt-BR |
 | `crates/nucleo/tests` | LZ4 contra o `lz4_flex`, framing, remontagem TCP, parsers com bytes reais, placar e troca de servidor (`cargo test`). O teste de rede do catálogo é opcional: `cargo test -p nucleo --test catalogo -- --ignored` |
-| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Aion2Meter.exe`. O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir]` para ver a janela sem o jogo |
+| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Aion2Meter.exe`. O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada) |
 | `crates/replay` | Replay de `.pcapng` com diagnóstico e modo `ao-vivo` no console |
 | `dados/skills.json` | Opcional, fora do repositório e das releases: nomes em inglês do RATmeter (GPL-3.0, ver PROTOCOLO.md §9), só reserva quando o questlog não tem a skill |
 | `capturar.ps1` | Grava `captura.pcapng` com o pktmon do Windows (admin). Capturas ficam fora do repositório: têm o seu tráfego |
@@ -107,6 +122,8 @@ overlay`, zip só com o `Aion2Meter.exe`) e publique com `gh release create` usa
 - **Tank**: escala 1:1 conferida num golpe só. "aggro" é inferido do último golpe de
   cada mob, porque o pacote de troca de alvo não foi achado.
 - Invocação de jogador sem legião: o vínculo depende só do nome do dono.
+- **Party** (só quem está no seu grupo): o pacote do grupo (`0x9702` em outros medidores)
+  não apareceu em nenhuma captura local; falta uma captura em grupo.
 
 ## Conferido
 

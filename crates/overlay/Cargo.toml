@@ -19,7 +19,7 @@ serde_json.workspace = true
 eframe = { version = "0.33", default-features = false, features = ["glow"] }
 png = "0.18"
 raw-window-handle = "0.6"
-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
 embed-manifest = "1.5"

@@ -2,16 +2,24 @@
 // Sem console no build de release; o de debug mantém o console para diagnóstico.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod config;
 mod janela;
 
 use eframe::egui;
 
 fn main() {
+    // Só no debug: --posicao x y abre a janela em outro lugar (para testar o recolher nas duas bordas).
+    let posicao = if cfg!(debug_assertions) {
+        let numeros: Vec<f32> = std::env::args().skip_while(|a| a != "--posicao").skip(1).take(2).filter_map(|n| n.parse().ok()).collect();
+        <[f32; 2]>::try_from(numeros).unwrap_or([40.0, 220.0])
+    } else {
+        [40.0, 220.0]
+    };
     let opcoes = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("AION2 DPS")
             .with_inner_size([janela::LARGURA, 120.0])
-            .with_position([40.0, 220.0])
+            .with_position(posicao)
             .with_decorations(false)
             .with_transparent(true)
             .with_always_on_top()

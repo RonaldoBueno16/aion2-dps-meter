@@ -184,6 +184,30 @@ fn login_desta_conexao_nao_e_trocado_por_nome_guardado() {
 }
 
 #[test]
+fn so_o_meu_dano_deixa_so_a_sua_linha_com_a_porcentagem_sobre_voce() {
+    let mut m = Medidor::default();
+    m.definir_jogador(11174, "Yoshi", 31, true);
+    m.registrar(golpe(11174, 14340000, 100), T0);
+    m.registrar(golpe(22222, 11010000, 300), T0 + segundos(1.0));
+
+    let dano = m.obter_placar().dano;
+    quase_igual(0.25, dano.jogadores.iter().find(|j| j.voce).unwrap().porcentagem);
+
+    let so_voce = dano.so_voce();
+    assert_eq!(so_voce.jogadores.len(), 1);
+    assert_eq!(so_voce.jogadores[0].nome, "Yoshi");
+    quase_igual(100.0 * FATOR_ESCALA, so_voce.total);
+    quase_igual(1.0, so_voce.jogadores[0].porcentagem);
+
+    // Sem você reconhecido (overlay aberto no meio da sessão, antes de um abate): tabela vazia.
+    let mut sem_voce = Medidor::default();
+    sem_voce.registrar(golpe(22222, 11010000, 300), T0);
+    let vazia = sem_voce.obter_placar().dano.so_voce();
+    assert!(vazia.jogadores.is_empty());
+    assert_eq!(vazia.total, 0.0);
+}
+
+#[test]
 fn luta_nova_depois_de_inatividade() {
     let mut m = Medidor::default();
     m.inatividade = segundos(15.0);

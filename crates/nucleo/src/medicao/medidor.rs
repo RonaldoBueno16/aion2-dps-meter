@@ -60,6 +60,19 @@ pub struct Tabela {
     pub jogadores: Vec<LinhaJogador>,
 }
 
+impl Tabela {
+    /// Só a sua linha, com total e % recalculados sobre quem ficou (opção "Só o meu dano" do
+    /// overlay). Vazia enquanto você não foi reconhecido.
+    pub fn so_voce(&self) -> Tabela {
+        let mut jogadores: Vec<LinhaJogador> = self.jogadores.iter().filter(|j| j.voce).cloned().collect();
+        let total = jogadores.iter().fold(0.0, |soma, j| soma + j.total);
+        for j in &mut jogadores {
+            j.porcentagem = if total > 0.0 { j.total / total } else { 0.0 };
+        }
+        Tabela { total, jogadores }
+    }
+}
+
 /// Último level e power vistos de um nome; 0 = desconhecido. Campos com o nome do jogadores.json.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PerfilJogador {
@@ -77,6 +90,8 @@ pub struct Placar {
     pub dano: Tabela,
     pub dano_recebido: Tabela,
     pub cura: Tabela,
+    /// Já se sabe qual id é você (login visto nesta conexão ou nome guardado casado num abate).
+    pub voce_reconhecido: bool,
 }
 
 /// Dano em mob: campo × fator = HP descontado do mob. Medido em 2026-10-01: mediana 18,82 em 150
@@ -399,6 +414,7 @@ impl Medidor {
             dano: self.montar_tabela(&self.dano, segundos, &segurando),
             dano_recebido: self.montar_tabela(&self.recebido, segundos, &segurando),
             cura: self.montar_tabela(&cura, segundos, &segurando),
+            voce_reconhecido: self.meu_id.is_some(),
         }
     }
 
