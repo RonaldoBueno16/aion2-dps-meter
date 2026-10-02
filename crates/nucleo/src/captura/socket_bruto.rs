@@ -91,21 +91,12 @@ fn abrir(endereco: Ipv4Addr) -> Result<SOCKET, String> {
         let s = socket(i32::from(AF_INET), SOCK_RAW, IPPROTO_IP);
         if s == INVALID_SOCKET {
             // Sem elevação o Windows recusa já na criação do raw socket.
-            let erro = WSAGetLastError();
-            return Err(if erro == WSAEACCES {
-                "Captura por raw socket precisa rodar como administrador.".to_string()
-            } else {
-                format!("socket falhou ({erro}).")
-            });
+            return Err(mensagem_de_erro(WSAGetLastError(), "socket"));
         }
         let falhou = |etapa: &str| {
             let erro = WSAGetLastError();
             closesocket(s);
-            if erro == WSAEACCES {
-                "Captura por raw socket precisa rodar como administrador.".to_string()
-            } else {
-                format!("{etapa} em {endereco} falhou ({erro}).")
-            }
+            mensagem_de_erro(erro, &format!("{etapa} em {endereco}"))
         };
 
         let local = SOCKADDR_IN {
@@ -142,6 +133,14 @@ fn abrir(endereco: Ipv4Addr) -> Result<SOCKET, String> {
             return Err(falhou("SIO_RCVALL"));
         }
         Ok(s)
+    }
+}
+
+fn mensagem_de_erro(erro: i32, etapa: &str) -> String {
+    if erro == WSAEACCES {
+        "Captura por raw socket precisa rodar como administrador.".to_string()
+    } else {
+        format!("{etapa} falhou ({erro}).")
     }
 }
 

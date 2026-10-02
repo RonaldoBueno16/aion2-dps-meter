@@ -739,24 +739,13 @@ fn amostra(tabela: &Tabela, eu: Option<String>, perfis: &IndexMap<String, Perfil
     let nome = eu.unwrap_or_else(|| "Você".into());
     let perfil = perfis.get(&nome).copied().unwrap_or_default();
     LinhaJogador {
-        id: 0,
         nome,
-        classe: "",
         nivel: perfil.nivel,
         nivel_lembrado: perfil.nivel > 0,
         poder: perfil.poder,
         poder_lembrado: perfil.poder > 0,
         voce: true,
-        total: 0.0,
-        por_segundo: 0.0,
-        porcentagem: 0.0,
-        golpes: 0,
-        criticos: 0,
-        aparos: 0,
-        mortes: 0,
-        segurando_aggro: 0,
-        maximo: 0.0,
-        skills: Vec::new(),
+        ..LinhaJogador::default()
     }
 }
 
@@ -1101,8 +1090,7 @@ fn manter_sem_ativar(janela: &impl raw_window_handle::HasWindowHandle) -> isize 
 /// Caixa de mensagem do Windows (o build de release não tem console).
 pub fn avisar(mensagem: &str) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
-    let utf16 = |texto: &str| texto.encode_utf16().chain([0]).collect::<Vec<u16>>();
-    let (texto, titulo) = (utf16(mensagem), utf16("Axon"));
+    let (texto, titulo) = (crate::bandeja::utf16(mensagem), crate::bandeja::utf16("Axon"));
     unsafe { MessageBoxW(std::ptr::null_mut(), texto.as_ptr(), titulo.as_ptr(), MB_OK | MB_ICONERROR) };
 }
 
@@ -1117,8 +1105,8 @@ fn decodificar_png(caminho: &Path) -> Option<egui::ColorImage> {
     let bytes = &buffer[..info.buffer_size()];
     let rgba: Vec<u8> = match info.color_type {
         png::ColorType::Rgba => bytes.to_vec(),
-        png::ColorType::Rgb => bytes.chunks_exact(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
-        png::ColorType::GrayscaleAlpha => bytes.chunks_exact(2).flat_map(|c| [c[0], c[0], c[0], c[1]]).collect(),
+        png::ColorType::Rgb => bytes.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 255]).collect(),
+        png::ColorType::GrayscaleAlpha => bytes.as_chunks::<2>().0.iter().flat_map(|&[g, a]| [g, g, g, a]).collect(),
         png::ColorType::Grayscale => bytes.iter().flat_map(|&g| [g, g, g, 255]).collect(),
         png::ColorType::Indexed => return None,
     };

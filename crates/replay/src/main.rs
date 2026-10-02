@@ -84,7 +84,7 @@ fn main() {
     println!("Quadros: {} | TCP/IPv4: {tcp} | streams: {}", quadros.len(), streams.len());
 
     let mut ordem: Vec<&FluxoTcp> = streams.values().collect();
-    ordem.sort_by(|a, b| b.montador.bytes_entregues.cmp(&a.montador.bytes_entregues));
+    ordem.sort_by_key(|s| std::cmp::Reverse(s.montador.bytes_entregues));
     for s in ordem {
         s.relatar(&config, amostras_hex);
     }
@@ -556,13 +556,13 @@ fn agrupar<T: Clone, K: PartialEq + Copy>(itens: &[T], chave: impl Fn(&T) -> K) 
 
 /// Grupos do maior para o menor; empate fica na ordem de aparição (sort estável).
 fn por_quantidade<K, T>(mut grupos: Vec<(K, Vec<T>)>) -> Vec<(K, Vec<T>)> {
-    grupos.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    grupos.sort_by_key(|g| std::cmp::Reverse(g.1.len()));
     grupos
 }
 
 fn mais_frequentes<K>(contagem: &IndexMap<K, i32>) -> Vec<(&K, i32)> {
     let mut itens: Vec<(&K, i32)> = contagem.iter().map(|(k, v)| (k, *v)).collect();
-    itens.sort_by(|a, b| b.1.cmp(&a.1));
+    itens.sort_by_key(|i| std::cmp::Reverse(i.1));
     itens
 }
 
