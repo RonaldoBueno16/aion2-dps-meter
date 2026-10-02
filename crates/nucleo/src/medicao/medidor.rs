@@ -21,9 +21,14 @@ pub struct LinhaSkill {
     pub nome: String,
     pub icone: Option<PathBuf>,
     pub total: f64,
+    /// Total da skill dividido pela duração da luta (a mesma do DPS do jogador).
+    pub por_segundo: f64,
+    /// Parte da skill no total do jogador.
     pub porcentagem: f64,
     pub golpes: i32,
     pub criticos: i32,
+    /// Golpes desta skill que o jogador aparou (só no dano recebido).
+    pub aparos: i32,
     pub maximo: f64,
 }
 
@@ -46,6 +51,8 @@ pub struct LinhaJogador {
     pub aparos: i32,
     pub mortes: i32,
     pub segurando_aggro: i32,
+    /// Maior golpe (ou cura) do jogador na luta.
+    pub maximo: f64,
     pub skills: Vec<LinhaSkill>,
 }
 
@@ -53,6 +60,19 @@ pub struct LinhaJogador {
 pub struct Tabela {
     pub total: f64,
     pub jogadores: Vec<LinhaJogador>,
+}
+
+impl Tabela {
+    /// Só a sua linha, com total e % recalculados sobre quem ficou (opção "Só o meu dano" do
+    /// overlay). Vazia enquanto você não foi reconhecido.
+    pub fn so_voce(&self) -> Tabela {
+        let mut jogadores: Vec<LinhaJogador> = self.jogadores.iter().filter(|j| j.voce).cloned().collect();
+        let total = jogadores.iter().fold(0.0, |soma, j| soma + j.total);
+        for j in &mut jogadores {
+            j.porcentagem = if total > 0.0 { j.total / total } else { 0.0 };
+        }
+        Tabela { total, jogadores }
+    }
 }
 
 /// Último level e power vistos de um nome; 0 = desconhecido. Campos com o nome do jogadores.json.
@@ -72,6 +92,8 @@ pub struct Placar {
     pub dano: Tabela,
     pub dano_recebido: Tabela,
     pub cura: Tabela,
+    /// Já se sabe qual id é você (login visto nesta conexão ou nome guardado casado num abate).
+    pub voce_reconhecido: bool,
 }
 
 /// Dano em mob: campo × fator = HP descontado do mob. Medido em 2026-10-01: mediana 18,82 em 150
@@ -91,6 +113,7 @@ struct SomaSkill {
     total: f64,
     golpes: i32,
     criticos: i32,
+    aparos: i32,
     maximo: f64,
 }
 
@@ -297,6 +320,9 @@ impl Medidor {
             let a = somar(&mut self.recebido, e.alvo_id, e.skill, e.dano as f64 * FATOR_ESCALA_JOGADOR, &e);
             if e.aparo {
                 a.aparos += 1;
+                if let Some(s) = a.skills.get_mut(&dados_jogo::skill_base(e.skill)) {
+                    s.aparos += 1;
+                }
             }
             self.ultimo_alvo_do_mob.insert(e.autor_id, (e.alvo_id, hora));
         }
@@ -394,6 +420,7 @@ impl Medidor {
             dano: self.montar_tabela(&self.dano, segundos, &segurando),
             dano_recebido: self.montar_tabela(&self.recebido, segundos, &segurando),
             cura: self.montar_tabela(&cura, segundos, &segurando),
+            voce_reconhecido: self.meu_id.is_some(),
         }
     }
 
@@ -416,9 +443,11 @@ impl Medidor {
                         nome: dados_jogo::nome_skill(skill),
                         icone: dados_jogo::icone_skill(skill),
                         total: s.total,
+                        por_segundo: s.total / segundos,
                         porcentagem: if a.total > 0.0 { s.total / a.total } else { 0.0 },
                         golpes: s.golpes,
                         criticos: s.criticos,
+                        aparos: s.aparos,
                         maximo: s.maximo,
                     })
                     .collect();
@@ -444,6 +473,7 @@ impl Medidor {
                     aparos: a.aparos,
                     mortes: a.mortes,
                     segurando_aggro: segurando.get(&id).copied().unwrap_or(0),
+                    maximo: a.skills.values().fold(0.0, |maior, s| maior.max(s.maximo)),
                     skills,
                 }
             })

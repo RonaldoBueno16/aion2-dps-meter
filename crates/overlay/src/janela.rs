@@ -1,5 +1,9 @@
 //! A janela: título com duração e total, abas DPS | Tank | Healer, uma linha de duas partes por
-//! jogador (nome e números em cima, "Classe · Nv · Power" embaixo), skills ao expandir e status.
+//! jogador (nome em cima, "Classe · Nv · GS" embaixo; na aba DPS, a tabela à direita), skills ao
+//! expandir e status. Mais: configurações, recolher para a borda e a alça que muda o tamanho.
+
+mod configuracoes;
+mod recolher;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -8,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::text::{LayoutJob, TextWrapping};
 use eframe::egui::{
-    self, Align, Color32, CursorIcon, FontData, FontFamily, FontId, Galley, Rect, RichText, Sense, Stroke, TextFormat,
-    TextureHandle, Ui, Vec2, ViewportCommand, pos2, vec2,
+    self, Align, Color32, CornerRadius, CursorIcon, FontData, FontFamily, FontId, Galley, Rect, RichText, Sense, Stroke,
+    StrokeKind, TextFormat, TextureHandle, Ui, Vec2, ViewportCommand, pos2, vec2,
 };
 use indexmap::IndexMap;
 use nucleo::TICKS_POR_SEGUNDO;
@@ -19,12 +23,19 @@ use nucleo::medicao::catalogo::{self, CatalogoSkills};
 use nucleo::medicao::dados_jogo;
 use nucleo::medicao::medidor::{LinhaJogador, LinhaSkill, Medidor, PerfilJogador, Placar, Tabela};
 use nucleo::medicao::sessao::Sessao;
+use recolher::{Dobra, Lado};
 use serde::{Deserialize, Serialize};
 
-pub const LARGURA: f32 = 390.0;
+use crate::bandeja::Bandeja;
+use crate::config::{self, Config};
+use crate::jogo;
+
+/// 470 e não os 390 do WPF: a tabela da aba DPS precisa de ~280 px ao lado do nome.
+pub const LARGURA: f32 = 470.0;
 const INTERVALO: Duration = Duration::from_millis(500);
 const SALVAR_A_CADA: Duration = Duration::from_secs(30);
 const SEMIBOLD: &str = "semibold";
+const TEXTO_DA_ABA: [&str; 2] = ["Overlay ›", "‹ Overlay"];
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Aba {
@@ -34,13 +45,29 @@ enum Aba {
 }
 
 impl Aba {
-    fn por_segundo(self) -> &'static str {
+    /// Cabeçalho e pior caso (para a largura) de cada coluna da tabela da aba.
+    fn colunas(self) -> &'static [(&'static str, &'static str); 5] {
         match self {
-            Aba::Dps => "DPS",
-            Aba::Tank => "DTPS",
-            Aba::Healer => "HPS",
+            Aba::Dps => &COLUNAS_DPS,
+            Aba::Tank => &COLUNAS_TANK,
+            Aba::Healer => &COLUNAS_HEALER,
         }
     }
+}
+
+const COLUNAS_DPS: [(&str, &str); 5] =
+    [("DPS", "999,9K"), ("Damage(%)", "99,99M (100%)"), ("CRIT", "100%"), ("AVG", "999,9K"), ("MAX", "999,9K")];
+/// PARRY no lugar do AVG: o golpe médio recebido depende de qual monstro bateu em quem e não diz
+/// nada do tank; a fração de golpes aparados é o único sinal de mitigação que o pacote traz.
+const COLUNAS_TANK: [(&str, &str); 5] =
+    [("DTPS", "999,9K"), ("Taken(%)", "99,99M (100%)"), ("PARRY", "100%"), ("CRIT", "100%"), ("MAX", "999,9K")];
+const COLUNAS_HEALER: [(&str, &str); 5] =
+    [("HPS", "999,9K"), ("Heal(%)", "99,99M (100%)"), ("CRIT", "100%"), ("AVG", "999,9K"), ("MAX", "999,9K")];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tela {
+    Medidor,
+    Configuracoes,
 }
 
 /// Último level e power de cada nome (inclusive o seu), para o overlay aberto no meio da sessão.
@@ -67,11 +94,28 @@ pub struct Overlay {
     lido_em: Instant,
     salvo_em: Instant,
     icones: HashMap<PathBuf, Option<TextureHandle>>,
+    /// Altura do conteúdo (em pontos) e escala (pixels por ponto) com que o tamanho da janela foi
+    /// pedido por último. A escala e não o zoom da config: ela muda também com o DPI do monitor.
     altura: f32,
-    /// Falso no --replay: captura antiga não atualiza a memória dos jogadores.
-    salvar: bool,
+    escala_aplicada: f32,
+    /// --replay (só debug): a captura antiga não grava memória nem config, e a luta nunca zera.
+    replay: bool,
     /// Só no debug (--expandir): abre todas as linhas, para conferir o desenho sem clicar.
     expandir_tudo: bool,
+    config: Config,
+    tela: Tela,
+    dobra: Dobra,
+    /// HWND da janela (0 enquanto o primeiro quadro não chegou).
+    janela: isize,
+    /// Arraste da janela pelo fundo: cursor e [x, y, largura, altura] da janela no começo, em
+    /// pixels físicos.
+    arraste: Option<([i32; 2], [i32; 4])>,
+    /// Sua linha (ou um esboço com o seu nome) para a amostra da tela de configurações.
+    amostra: Option<LinhaJogador>,
+    /// Ícone ao lado do relógio; None se o Windows não deixou criar.
+    bandeja: Option<Bandeja>,
+    /// Só no debug (--recolher / --recolher-e-voltar): recolhe aos 2 s e volta aos 4,5 s.
+    teste_dobra: Option<(Instant, bool, bool)>,
 }
 
 impl Overlay {
@@ -80,16 +124,28 @@ impl Overlay {
         dados_jogo::carregar_nomes_padrao();
         let catalogo = dados_jogo::definir_catalogo(CatalogoSkills::novo(None));
 
+        let opcoes_debug: Vec<String> = if cfg!(debug_assertions) { std::env::args().collect() } else { Vec::new() };
+        let tem = |opcao: &str| opcoes_debug.iter().any(|a| a == opcao);
+        let mut config = Config::carregar();
+        if let Some(zoom) = opcoes_debug.iter().skip_while(|a| *a != "--zoom").nth(1).and_then(|z| z.parse().ok()) {
+            config.zoom = config::arredondar_zoom(zoom);
+        }
+        cc.egui_ctx.set_zoom_factor(config.zoom);
+
         let sessao = Arc::new(Mutex::new(Sessao::default()));
         carregar_memoria(&mut travar(&sessao).medidor);
         let replay = arquivo_replay();
-        let opcoes_debug: Vec<String> = if cfg!(debug_assertions) { std::env::args().collect() } else { Vec::new() };
+        // Ao vivo, o overlay só aparece por cima do jogo; o replay de debug roda sem o jogo.
+        jogo::seguir(replay.is_none());
         let (captura, erro_captura) = match &replay {
             Some(arquivo) => {
                 reproduzir(sessao.clone(), arquivo.clone());
                 (None, None)
             }
-            None => iniciar_captura(&sessao),
+            None => {
+                travar(&sessao).medidor.inatividade = i64::from(config.inatividade) * TICKS_POR_SEGUNDO;
+                iniciar_captura(&sessao)
+            }
         };
 
         let mut overlay = Self {
@@ -97,7 +153,7 @@ impl Overlay {
             captura,
             erro_captura,
             catalogo,
-            aba: if opcoes_debug.iter().any(|a| a == "--tank") { Aba::Tank } else { Aba::Dps },
+            aba: if tem("--tank") { Aba::Tank } else { Aba::Dps },
             expandidos: HashSet::new(),
             placar: Placar::default(),
             fluxo: None,
@@ -105,9 +161,20 @@ impl Overlay {
             salvo_em: Instant::now(),
             icones: HashMap::new(),
             altura: 0.0,
-            salvar: replay.is_none(),
-            expandir_tudo: opcoes_debug.iter().any(|a| a == "--expandir"),
+            escala_aplicada: 0.0,
+            replay: replay.is_some(),
+            expandir_tudo: tem("--expandir"),
+            config,
+            tela: if tem("--config") { Tela::Configuracoes } else { Tela::Medidor },
+            dobra: Dobra::Aberto,
+            janela: manter_sem_ativar(cc),
+            arraste: None,
+            amostra: None,
+            bandeja: None,
+            teste_dobra: (tem("--recolher") || tem("--recolher-e-voltar"))
+                .then(|| (Instant::now(), tem("--recolher-e-voltar"), false)),
         };
+        overlay.bandeja = Bandeja::iniciar(overlay.janela);
         overlay.ler_placar();
         Ok(overlay)
     }
@@ -116,8 +183,12 @@ impl Overlay {
         let sessao = travar(&self.sessao);
         self.placar = sessao.medidor.obter_placar();
         self.fluxo = sessao.fluxo.clone();
+        let memoria = (self.tela == Tela::Configuracoes).then(|| sessao.medidor.exportar_memoria());
         drop(sessao);
         self.lido_em = Instant::now();
+        if let Some((eu, perfis)) = memoria {
+            self.amostra = Some(amostra(self.tabela_bruta(), eu, &perfis));
+        }
         if self.expandir_tudo {
             for (aba, tabela) in [(Aba::Dps, &self.placar.dano), (Aba::Tank, &self.placar.dano_recebido), (Aba::Healer, &self.placar.cura)] {
                 self.expandidos.extend(tabela.jogadores.iter().map(|j| (aba, j.id)));
@@ -127,7 +198,7 @@ impl Overlay {
 
     fn salvar_memoria(&mut self) {
         self.salvo_em = Instant::now();
-        if !self.salvar {
+        if self.replay {
             return;
         }
         let (eu, perfis) = travar(&self.sessao).medidor.exportar_memoria();
@@ -144,20 +215,50 @@ impl Overlay {
         }
     }
 
+    /// Config mudou: a inatividade vale na hora para o medidor; o zoom, no próximo quadro.
+    fn aplicar_config(&mut self) {
+        if self.replay {
+            return;
+        }
+        travar(&self.sessao).medidor.inatividade = i64::from(self.config.inatividade) * TICKS_POR_SEGUNDO;
+        self.config.salvar();
+    }
+
     fn zerar(&mut self) {
         travar(&self.sessao).medidor.reiniciar();
         self.expandidos.clear();
         self.ler_placar();
     }
 
-    fn conteudo(&mut self, ui: &mut Ui) {
-        let tabela = match self.aba {
+    fn tabela_bruta(&self) -> &Tabela {
+        match self.aba {
             Aba::Dps => &self.placar.dano,
             Aba::Tank => &self.placar.dano_recebido,
             Aba::Healer => &self.placar.cura,
         }
-        .clone();
+    }
 
+    /// A tabela da aba atual, só com você se "Só o meu dano" estiver ligado.
+    fn tabela(&self) -> Tabela {
+        let tabela = self.tabela_bruta();
+        if self.config.so_meu_dano { tabela.so_voce() } else { tabela.clone() }
+    }
+
+    /// As colunas ligadas na configuração para a aba atual.
+    fn colunas_ligadas(&mut self) -> &mut [bool; 5] {
+        match self.aba {
+            Aba::Dps => &mut self.config.colunas,
+            Aba::Tank => &mut self.config.colunas_tank,
+            Aba::Healer => &mut self.config.colunas_healer,
+        }
+    }
+
+    fn conteudo(&mut self, ui: &mut Ui) {
+        if self.tela == Tela::Configuracoes {
+            self.tela_configuracoes(ui);
+            return;
+        }
+        let tabela = self.tabela();
         self.cabecalho(ui, &tabela);
         ui.add_space(6.0);
         self.abas(ui);
@@ -169,15 +270,27 @@ impl Overlay {
 
     fn cabecalho(&mut self, ui: &mut Ui, tabela: &Tabela) {
         let titulo = if tabela.jogadores.is_empty() {
-            "AION2 Medidor".to_string()
+            "Axon".to_string()
         } else {
-            format!("AION2  ·  {}  ·  {}", minutos_e_segundos(self.placar.duracao), compacto(tabela.total))
+            format!("Axon  ·  {}  ·  {}", minutos_e_segundos(self.placar.duracao), compacto(tabela.total))
         };
         ui.horizontal(|ui| {
             ui.label(RichText::new(titulo).font(fonte(12.0, true)).color(texto()));
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 if botao(ui, "✕", false).on_hover_text("Fechar o medidor").clicked() {
                     ui.ctx().send_viewport_cmd(ViewportCommand::Close);
+                }
+                // A seta aponta para a borda para onde a janela vai.
+                let seta = match recolher::lado_mais_perto(self.janela) {
+                    Lado::Esquerda => "‹",
+                    Lado::Direita => "›",
+                };
+                if botao(ui, seta, false).on_hover_text("Recolher para a borda da tela").clicked() {
+                    self.dobra.recolher(self.janela);
+                }
+                if botao(ui, "⚙", false).on_hover_text("Configurações").clicked() {
+                    self.tela = Tela::Configuracoes;
+                    self.ler_placar();
                 }
                 if botao(ui, "Zerar", false).on_hover_text("Começa uma luta nova").clicked() {
                     self.zerar();
@@ -192,10 +305,15 @@ impl Overlay {
             (
                 Aba::Tank,
                 "Tank",
-                "Dano recebido de monstros. \"aggro N\": N monstros têm este jogador como último alvo (8 s). \
-                 O número de ameaça fica no servidor e não chega ao jogo.",
+                "Dano recebido de monstros. PARRY: fração dos golpes que o jogador aparou. \"aggro N\": N monstros \
+                 têm este jogador como último alvo (8 s); a ameaça em número fica no servidor e não chega ao jogo.",
             ),
-            (Aba::Healer, "Healer", "Cura feita em jogadores. Leitura ainda não conferida numa luta com curandeiro."),
+            (
+                Aba::Healer,
+                "Healer",
+                "Cura feita em jogadores. O pacote não separa a sobrecura, então o HPS pode incluir cura que \
+                 passou do HP cheio. Leitura ainda não conferida numa luta com curandeiro.",
+            ),
         ];
         ui.horizontal(|ui| {
             for (aba, nome, dica) in abas {
@@ -209,39 +327,40 @@ impl Overlay {
 
     fn linhas(&mut self, ui: &mut Ui, tabela: &Tabela) {
         if tabela.jogadores.is_empty() {
-            let vazio = match self.aba {
-                Aba::Tank => "Nenhum golpe de monstro em jogador ainda.",
-                Aba::Healer => "Nenhuma cura vista ainda.",
-                Aba::Dps => "Sem dano ainda.",
+            let vazio = if self.config.so_meu_dano && !self.placar.voce_reconhecido {
+                "Você ainda não foi reconhecido: abra o overlay antes de entrar no mundo ou faça um abate."
+            } else {
+                match self.aba {
+                    Aba::Tank => "Nenhum golpe de monstro em jogador ainda.",
+                    Aba::Healer => "Nenhuma cura vista ainda.",
+                    Aba::Dps => "Sem dano ainda.",
+                }
             };
-            ui.label(RichText::new(vazio).font(fonte(12.0, false)).color(texto().gamma_multiply(0.6)));
+            ui.add(egui::Label::new(RichText::new(vazio).font(fonte(12.0, false)).color(texto().gamma_multiply(0.6))).wrap());
             return;
+        }
+
+        // A tabela da aba (DPS, Tank ou Healer), com as colunas ligadas na configuração.
+        let ligadas = *self.colunas_ligadas();
+        let colunas = Colunas::medir(ui, self.aba.colunas(), ligadas);
+        if colunas.alguma() {
+            colunas.cabecalho(ui);
         }
 
         let maior = tabela.jogadores[0].total;
         for j in &tabela.jogadores {
-            self.linha_jogador(ui, j, maior);
-            if !self.expandidos.contains(&(self.aba, j.id)) {
-                continue;
-            }
-
-            let mut detalhe =
-                LayoutJob::single_section(self.detalhe(j), TextFormat::simple(fonte(10.0, false), texto().gamma_multiply(0.7)));
-            detalhe.wrap.max_width = ui.available_width() - 18.0;
-            let detalhe = montar(ui, detalhe);
-            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), detalhe.size().y + 2.0), Sense::hover());
-            ui.painter().galley(rect.min + vec2(18.0, 0.0), detalhe, texto());
-            for s in j.skills.iter().take(8) {
-                self.linha_skill(ui, s);
+            self.linha_jogador(ui, j, maior, &colunas);
+            if self.expandidos.contains(&(self.aba, j.id)) {
+                // Todas as skills que aconteceram, com as mesmas colunas do jogador.
+                for s in &j.skills {
+                    self.linha_skill(ui, s, &colunas);
+                }
             }
         }
     }
 
-    fn detalhe(&self, j: &LinhaJogador) -> String {
-        if self.aba != Aba::Tank {
-            let golpes = if self.aba == Aba::Healer { "curas" } else { "golpes" };
-            return format!("{} {golpes}  ·  crítico {}", j.golpes, p(razao(j.criticos, j.golpes), 0));
-        }
+    /// Dica da linha na aba Tank: as contagens que não cabem na tabela.
+    fn detalhe_tank(j: &LinhaJogador) -> String {
         let mut texto = format!(
             "{} golpes recebidos  ·  {} aparados ({})  ·  {} {}",
             j.golpes,
@@ -257,36 +376,51 @@ impl Overlay {
         texto
     }
 
-    fn linha_jogador(&mut self, ui: &mut Ui, j: &LinhaJogador, maior: f64) {
+    fn linha_jogador(&mut self, ui: &mut Ui, j: &LinhaJogador, maior: f64, colunas: &Colunas) {
         let largura = ui.available_width();
         let expandido = self.expandidos.contains(&(self.aba, j.id));
         let tank = self.aba == Aba::Tank;
 
-        let mut direita = LayoutJob::default();
-        trecho(&mut direita, &format!("{} {}", compacto(j.por_segundo), self.aba.por_segundo()), 12.0, true, texto());
-        trecho(&mut direita, &format!("  {}  {}", compacto(j.total), p(j.porcentagem, 0)), 12.0, false, texto());
-        let direita = montar(ui, direita);
-        let max_esquerda = (largura - direita.size().x - 6.0 - 6.0 - 8.0).max(40.0);
+        let celulas: Vec<Arc<Galley>> = celulas(self.aba, Numeros::from(j))
+            .into_iter()
+            .enumerate()
+            .map(|(i, t)| montar(ui, LayoutJob::single_section(t, TextFormat::simple(fonte(12.0, i == 0), texto()))))
+            .collect();
+        let altura_direita = celulas
+            .iter()
+            .zip(colunas.visiveis)
+            .filter(|(_, visivel)| *visivel)
+            .fold(0.0_f32, |maior, (g, _)| maior.max(g.size().y));
+        let max_esquerda = (largura - colunas.largura_total() - 6.0 - 8.0).max(40.0);
+
+        // Selos da aba Tank, medidos à parte: o corte com "…" encurta o nome e eles ficam inteiros.
+        // Aggro: quantos monstros têm este jogador como último alvo; a ameaça em número fica no servidor.
+        let mut selos = LayoutJob::default();
+        if tank && j.segurando_aggro > 0 {
+            trecho(&mut selos, &format!("  aggro {}", j.segurando_aggro), 10.0, true, Color32::from_rgb(0xFF, 0xB5, 0x47));
+        }
+        if tank && j.mortes > 0 {
+            trecho(&mut selos, &format!("  ☠{}", j.mortes), 10.0, j.voce, Color32::from_rgb(0xFF, 0x6B, 0x6B));
+        }
+        let selos = (!selos.sections.is_empty()).then(|| montar(ui, selos));
+        let largura_selos = selos.as_ref().map_or(0.0, |g| g.size().x);
 
         let mut nome = LayoutJob::default();
         let seta = if expandido { "▾" } else { "▸" };
         let voce = if j.voce { " (você)" } else { "" };
         trecho(&mut nome, &format!("{seta} {}{voce}", j.nome), 12.0, j.voce, texto());
-        // Aggro: quantos monstros têm este jogador como último alvo. A ameaça em número fica no servidor.
-        if tank && j.segurando_aggro > 0 {
-            trecho(&mut nome, &format!("  aggro {}", j.segurando_aggro), 10.0, true, Color32::from_rgb(0xFF, 0xB5, 0x47));
-        }
-        if tank && j.mortes > 0 {
-            trecho(&mut nome, &format!("  ☠{}", j.mortes), 10.0, j.voce, Color32::from_rgb(0xFF, 0x6B, 0x6B));
-        }
-        nome.wrap = uma_linha(max_esquerda);
+        nome.wrap = uma_linha((max_esquerda - largura_selos).max(40.0));
         let nome = montar(ui, nome);
 
-        let mut perfil = linha_perfil(j);
-        perfil.wrap = uma_linha(max_esquerda - 12.0);
-        let perfil = montar(ui, perfil);
+        // Sem nenhum dado ligado na configuração, a linha do jogador fica só com o nome.
+        let perfil = linha_perfil(j, self.config.perfil()).map(|mut job| {
+            job.wrap = uma_linha(max_esquerda - 12.0);
+            montar(ui, job)
+        });
+        let altura_perfil = perfil.as_ref().map_or(0.0, |g| g.size().y);
+        let altura_esquerda = nome.size().y + altura_perfil + 4.0;
 
-        let altura = (nome.size().y + perfil.size().y + 4.0).max(direita.size().y);
+        let altura = altura_esquerda.max(altura_direita);
         let (rect, resposta) = ui.allocate_exact_size(vec2(largura, altura + 2.0), Sense::click());
         let linha = rect.shrink2(vec2(0.0, 1.0));
         let pintor = ui.painter();
@@ -297,42 +431,58 @@ impl Overlay {
         pintor.rect_filled(barra, 3, Color32::from_rgba_unmultiplied(cor.r(), cor.g(), cor.b(), 0x66));
 
         let altura_nome = nome.size().y;
-        let topo = linha.min.y + (linha.height() - (altura_nome + perfil.size().y + 4.0)) / 2.0;
+        let topo = linha.min.y + (linha.height() - altura_esquerda) / 2.0;
+        let largura_nome = nome.size().x;
         pintor.galley(pos2(linha.min.x + 6.0, topo + 2.0), nome, texto());
-        pintor.galley(pos2(linha.min.x + 18.0, topo + 2.0 + altura_nome), perfil, texto());
-        let y_direita = linha.center().y - direita.size().y / 2.0;
-        pintor.galley(pos2(linha.max.x - 6.0 - direita.size().x, y_direita), direita, texto());
+        if let Some(selos) = selos {
+            let y = topo + 2.0 + (altura_nome - selos.size().y) / 2.0 + 1.0;
+            pintor.galley(pos2(linha.min.x + 6.0 + largura_nome, y), selos, texto());
+        }
+        if let Some(perfil) = perfil {
+            pintor.galley(pos2(linha.min.x + 18.0, topo + 2.0 + altura_nome), perfil, texto());
+        }
+        colunas.pintar(pintor, linha, celulas);
 
-        if resposta.on_hover_cursor(CursorIcon::PointingHand).clicked() && !self.expandidos.remove(&(self.aba, j.id)) {
+        let mut resposta = resposta.on_hover_cursor(CursorIcon::PointingHand);
+        if tank {
+            resposta = resposta.on_hover_text(Self::detalhe_tank(j));
+        }
+        if resposta.clicked() && !self.expandidos.remove(&(self.aba, j.id)) {
             self.expandidos.insert((self.aba, j.id));
         }
     }
 
-    fn linha_skill(&mut self, ui: &mut Ui, s: &LinhaSkill) {
+    /// Skill expandida: ícone e nome à esquerda, as mesmas colunas do jogador à direita.
+    fn linha_skill(&mut self, ui: &mut Ui, s: &LinhaSkill, colunas: &Colunas) {
         let largura = ui.available_width();
-        let numeros = format!("{}  {}  {}x", compacto(s.total), p(s.porcentagem, 0), s.golpes);
-        let numeros = montar(ui, LayoutJob::single_section(numeros, TextFormat::simple(fonte(11.0, false), texto().gamma_multiply(0.85))));
+        let textos = celulas(self.aba, Numeros::from(s));
+        let formato = TextFormat::simple(fonte(11.0, false), texto().gamma_multiply(0.85));
+        let celulas: Vec<Arc<Galley>> =
+            textos.into_iter().map(|t| montar(ui, LayoutJob::single_section(t, formato.clone()))).collect();
 
         // Moldura fixa: a linha não pula quando o ícone termina de baixar.
         let inicio_nome = 18.0 + 18.0 + 6.0;
         let mut nome = LayoutJob::single_section(s.nome.clone(), TextFormat::simple(fonte(11.0, false), texto().gamma_multiply(0.9)));
-        nome.wrap = uma_linha((largura - inicio_nome - 8.0 - numeros.size().x - 6.0).max(40.0));
+        nome.wrap = uma_linha((largura - inicio_nome - 8.0 - colunas.largura_total()).max(40.0));
         let nome = montar(ui, nome);
 
-        let altura = numeros.size().y.max(nome.size().y).max(18.0);
+        let altura = celulas.iter().fold(nome.size().y.max(18.0), |maior, g| maior.max(g.size().y));
         let (rect, _) = ui.allocate_exact_size(vec2(largura, altura + 2.0), Sense::hover());
         let linha = Rect::from_min_size(rect.min, vec2(largura, altura));
 
+        self.icone(ui, s, linha);
+        ui.painter().galley(pos2(linha.min.x + inicio_nome, linha.center().y - nome.size().y / 2.0), nome, texto());
+        colunas.pintar(ui.painter(), linha, celulas);
+    }
+
+    /// Moldura fixa de 18 px com o ícone da skill (a linha não pula quando o ícone termina de baixar).
+    fn icone(&mut self, ui: &Ui, s: &LinhaSkill, linha: Rect) {
         let moldura = Rect::from_min_size(pos2(linha.min.x + 18.0, linha.min.y), vec2(18.0, 18.0));
         ui.painter().rect_filled(moldura, 3, branco(0x22));
         if let Some(icone) = s.icone.as_deref().and_then(|c| self.textura(ui.ctx(), c)) {
             let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
             ui.painter().image(icone.id(), moldura, uv, Color32::WHITE);
         }
-        let centro = linha.center().y;
-        ui.painter().galley(pos2(linha.min.x + inicio_nome, centro - nome.size().y / 2.0), nome, texto());
-        let x_numeros = linha.max.x - 6.0 - numeros.size().x;
-        ui.painter().galley(pos2(x_numeros, centro - numeros.size().y / 2.0), numeros, texto());
     }
 
     fn status(&mut self, ui: &mut Ui) {
@@ -355,6 +505,30 @@ impl Overlay {
         ui.add(egui::Label::new(RichText::new(status).font(fonte(10.0, false)).color(branco(0x99))).wrap());
     }
 
+    /// Recolhido: só a aba "Overlay ›" colada na borda; clicar traz a janela de volta.
+    fn aba_recolhida(&mut self, ui: &mut Ui, lado: Lado) {
+        let rect = ui.max_rect();
+        let resposta = ui
+            .interact(rect, ui.id().with("aba recolhida"), Sense::click())
+            .on_hover_cursor(CursorIcon::PointingHand)
+            .on_hover_text("Abrir o medidor");
+        // Canto reto do lado da borda da tela, arredondado do lado de dentro.
+        let raio = match lado {
+            Lado::Esquerda => CornerRadius { nw: 0, sw: 0, ne: 6, se: 6 },
+            Lado::Direita => CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 },
+        };
+        let alfa = if resposta.hovered() { 0xF2 } else { 0xD9 };
+        ui.painter().rect_filled(rect, raio, Color32::from_rgba_unmultiplied(0x10, 0x14, 0x18, alfa));
+        ui.painter().rect_stroke(rect, raio, Stroke::new(1.0_f32, branco(0x33)), StrokeKind::Inside);
+        let rotulo = TEXTO_DA_ABA[usize::from(lado == Lado::Direita)];
+        let galley = ui.fonts_mut(|f| f.layout_no_wrap(rotulo.to_string(), fonte(12.0, true), texto()));
+        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, texto());
+        if resposta.clicked() {
+            let largura = (LARGURA * ui.ctx().pixels_per_point()).round() as i32;
+            self.dobra.abrir(self.janela, largura);
+        }
+    }
+
     fn textura(&mut self, ctx: &egui::Context, caminho: &Path) -> Option<TextureHandle> {
         if let Some(pronta) = self.icones.get(caminho) {
             return pronta.clone();
@@ -365,27 +539,61 @@ impl Overlay {
         self.icones.insert(caminho.to_path_buf(), textura.clone());
         textura
     }
+
+    /// Só no debug: recolhe sozinho aos 2 s e, com --recolher-e-voltar, abre de novo aos 4,5 s.
+    fn testar_dobra(&mut self, ctx: &egui::Context) {
+        let Some((inicio, voltar, recolheu)) = self.teste_dobra else { return };
+        let s = inicio.elapsed().as_secs_f32();
+        if !recolheu && s > 2.0 && self.dobra.aberto() && self.janela != 0 {
+            self.dobra.recolher(self.janela);
+            self.teste_dobra = Some((inicio, voltar, true));
+        }
+        if voltar && s > 4.5 && matches!(self.dobra, Dobra::Recolhido { .. }) {
+            self.dobra.abrir(self.janela, (LARGURA * ctx.pixels_per_point()).round() as i32);
+        }
+        ctx.request_repaint_after(Duration::from_millis(100));
+    }
 }
 
 impl eframe::App for Overlay {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        manter_sem_ativar(frame);
+        self.janela = manter_sem_ativar(frame);
+        if (ctx.zoom_factor() - self.config.zoom).abs() > 0.001 {
+            ctx.set_zoom_factor(self.config.zoom);
+        }
         if self.lido_em.elapsed() >= INTERVALO {
             self.ler_placar();
         }
         if self.salvo_em.elapsed() >= SALVAR_A_CADA {
             self.salvar_memoria();
         }
-        // Sem isso o egui só redesenha com input, e o placar congelaria.
-        ctx.request_repaint_after(INTERVALO);
+        self.testar_dobra(ctx);
+
+        let aba = tamanho_da_aba(ctx);
+        let animando = self.dobra.quadro(ctx, aba, vec2(LARGURA, self.altura));
+        if animando {
+            // O deslize precisa de um quadro atrás do outro (a janela não recebe input que os peça).
+            ctx.request_repaint();
+        } else {
+            // Sem isso o egui só redesenha com input, e o placar congelaria.
+            ctx.request_repaint_after(INTERVALO);
+        }
 
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
+            if let Dobra::Recolhido { lado, .. } = self.dobra {
+                self.aba_recolhida(ui, lado);
+                return;
+            }
+
             // Arrasta a janela pelo fundo; botões e linhas ficam por cima e pegam o clique. click_and_drag
-            // e não só drag: widget só de drag começa o arraste já no press, e o laço de mover janela
-            // do Windows engoliria o soltar do botão (nenhum clique chegaria às linhas nem ao ✕).
+            // e não só drag: assim um clique parado não mexe a janela.
             let fundo = ui.interact(ui.max_rect(), ui.id().with("arrastar"), Sense::click_and_drag());
-            if fundo.drag_started() {
-                ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+            if fundo.drag_started() && self.dobra.aberto() {
+                self.arraste = cursor_e_canto(self.janela);
+            }
+            match self.arraste {
+                Some((cursor, canto)) if fundo.dragged() => seguir_cursor(self.janela, cursor, canto),
+                _ => self.arraste = None,
             }
 
             let quadro = egui::Frame::new()
@@ -399,10 +607,14 @@ impl eframe::App for Overlay {
                     self.conteudo(ui);
                 });
 
-            // Altura pelo conteúdo (o SizeToContent do WPF): só manda o comando quando muda.
+            // Altura pelo conteúdo (o SizeToContent do WPF): só manda o comando quando a altura ou a
+            // escala mudam. Recolhendo ou voltando, quem manda no tamanho é a animação.
             let altura = quadro.response.rect.height().ceil();
-            if (altura - self.altura).abs() >= 1.0 {
+            let escala = ctx.pixels_per_point();
+            let escala_mudou = (self.escala_aplicada - escala).abs() > 0.001;
+            if self.dobra.aberto() && ((altura - self.altura).abs() >= 1.0 || escala_mudou) {
                 self.altura = altura;
+                self.escala_aplicada = escala;
                 ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(LARGURA, altura)));
             }
         });
@@ -413,8 +625,48 @@ impl eframe::App for Overlay {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.bandeja = None;
         self.captura = None;
         self.salvar_memoria();
+    }
+}
+
+/// Tamanho da aba recolhida, em pontos: o texto com folga.
+fn tamanho_da_aba(ctx: &egui::Context) -> Vec2 {
+    let largura = TEXTO_DA_ABA
+        .iter()
+        .map(|t| ctx.fonts_mut(|f| f.layout_no_wrap(t.to_string(), fonte(12.0, true), texto()).size()))
+        .fold(Vec2::ZERO, |maior, t| maior.max(t));
+    (largura + vec2(24.0, 12.0)).ceil()
+}
+
+/// Para a amostra das configurações: a sua linha na aba ativa ou, sem ela, um esboço com o seu nome
+/// e o level e GS guardados.
+fn amostra(tabela: &Tabela, eu: Option<String>, perfis: &IndexMap<String, PerfilJogador>) -> LinhaJogador {
+    if let Some(j) = tabela.jogadores.iter().find(|j| j.voce) {
+        return j.clone();
+    }
+    let nome = eu.unwrap_or_else(|| "Você".into());
+    let perfil = perfis.get(&nome).copied().unwrap_or_default();
+    LinhaJogador {
+        id: 0,
+        nome,
+        classe: "",
+        nivel: perfil.nivel,
+        nivel_lembrado: perfil.nivel > 0,
+        poder: perfil.poder,
+        poder_lembrado: perfil.poder > 0,
+        voce: true,
+        total: 0.0,
+        por_segundo: 0.0,
+        porcentagem: 0.0,
+        golpes: 0,
+        criticos: 0,
+        aparos: 0,
+        mortes: 0,
+        segurando_aggro: 0,
+        maximo: 0.0,
+        skills: Vec::new(),
     }
 }
 
@@ -465,25 +717,40 @@ fn carregar_memoria(medidor: &mut Medidor) {
     }
 }
 
-// Classe, level e power sempre: "?" = ainda não chegou; "~" = da memória (visto antes, pode estar velho).
-fn linha_perfil(j: &LinhaJogador) -> LayoutJob {
+/// Classe, "Nv x" e "GS y", cada um em pedaços (texto, cor): "?" = ainda não chegou; "~" = da
+/// memória (visto antes, pode estar velho). "GS" é o número que o jogo mostra como Power.
+fn segmentos_do_perfil(j: &LinhaJogador) -> [Vec<(String, Color32)>; 3] {
     let (normal, apagado) = (branco(0xCC), branco(0x77));
-    let mut job = LayoutJob::default();
-    if j.classe.is_empty() {
-        trecho(&mut job, "Classe ?", 10.0, false, apagado);
-    } else {
-        trecho(&mut job, j.classe, 10.0, false, normal);
-    }
-    let valor = |job: &mut LayoutJob, valor: i32, lembrado: bool| match (valor, lembrado) {
-        (..=0, _) => trecho(job, "?", 10.0, false, apagado),
-        (_, true) => trecho(job, &format!("~{valor}"), 10.0, false, apagado),
-        (_, false) => trecho(job, &valor.to_string(), 10.0, false, normal),
+    let valor = |valor: i32, lembrado: bool| match (valor, lembrado) {
+        (..=0, _) => ("?".to_string(), apagado),
+        (_, true) => (format!("~{valor}"), apagado),
+        (_, false) => (valor.to_string(), normal),
     };
-    trecho(&mut job, "  ·  Nv ", 10.0, false, normal);
-    valor(&mut job, j.nivel, j.nivel_lembrado);
-    trecho(&mut job, "  ·  Power ", 10.0, false, normal);
-    valor(&mut job, j.poder, j.poder_lembrado);
-    job
+    let classe = if j.classe.is_empty() { ("Classe ?".to_string(), apagado) } else { (j.classe.to_string(), normal) };
+    [
+        vec![classe],
+        vec![("Nv ".to_string(), normal), valor(j.nivel, j.nivel_lembrado)],
+        vec![("GS ".to_string(), normal), valor(j.poder, j.poder_lembrado)],
+    ]
+}
+
+/// Os dados ligados na configuração, separados por " · "; None com os três desligados.
+fn linha_perfil(j: &LinhaJogador, visiveis: [bool; 3]) -> Option<LayoutJob> {
+    let mut job = LayoutJob::default();
+    let mut vazio = true;
+    for (pedacos, visivel) in segmentos_do_perfil(j).into_iter().zip(visiveis) {
+        if !visivel {
+            continue;
+        }
+        if !vazio {
+            trecho(&mut job, "  ·  ", 10.0, false, branco(0xCC));
+        }
+        vazio = false;
+        for (texto_pedaco, cor) in pedacos {
+            trecho(&mut job, &texto_pedaco, 10.0, false, cor);
+        }
+    }
+    (!vazio).then_some(job)
 }
 
 /// Botão do WPF: texto claro, fundo transparente, realce ao passar o mouse; a aba ativa fica
@@ -505,6 +772,119 @@ fn botao(ui: &mut Ui, rotulo: &str, ativo: bool) -> egui::Response {
     resposta.on_hover_cursor(CursorIcon::PointingHand)
 }
 
+/// Colunas da tabela de uma aba. Largura fixa pelo pior caso de cada coluna, para a tabela não
+/// dançar quando os números crescem no meio da luta. Coluna desligada não ocupa espaço.
+struct Colunas {
+    titulos: [&'static str; 5],
+    larguras: [f32; 5],
+    visiveis: [bool; 5],
+}
+
+const ESPACO_ENTRE_COLUNAS: f32 = 10.0;
+const MARGEM_DIREITA: f32 = 6.0;
+
+impl Colunas {
+    fn medir(ui: &Ui, definicao: &[(&'static str, &'static str); 5], visiveis: [bool; 5]) -> Self {
+        let largura = |amostra: &str, tamanho: f32, negrito: bool| {
+            ui.fonts_mut(|f| f.layout_no_wrap(amostra.to_string(), fonte(tamanho, negrito), texto()).size().x)
+        };
+        let mut larguras = [0.0; 5];
+        for (i, (titulo, pior)) in definicao.iter().enumerate() {
+            larguras[i] = largura(titulo, 10.0, false).max(largura(pior, 12.0, i == 0)).ceil();
+        }
+        Self { titulos: definicao.map(|(titulo, _)| titulo), larguras, visiveis }
+    }
+
+    fn alguma(&self) -> bool {
+        self.visiveis.contains(&true)
+    }
+
+    fn largura_total(&self) -> f32 {
+        let (soma, quantas) = (0..5)
+            .filter(|&i| self.visiveis[i])
+            .fold((0.0, 0), |(soma, quantas), i| (soma + self.larguras[i], quantas + 1));
+        if quantas == 0 { 0.0 } else { soma + ESPACO_ENTRE_COLUNAS * (quantas - 1) as f32 + MARGEM_DIREITA }
+    }
+
+    /// Distância da borda direita da linha até a borda direita de cada coluna (as desligadas não
+    /// empurram as outras).
+    fn direitas(&self) -> [f32; 5] {
+        let mut direitas = [MARGEM_DIREITA; 5];
+        let mut acumulado = MARGEM_DIREITA;
+        for i in (0..5).rev() {
+            direitas[i] = acumulado;
+            if self.visiveis[i] {
+                acumulado += self.larguras[i] + ESPACO_ENTRE_COLUNAS;
+            }
+        }
+        direitas
+    }
+
+    /// Títulos das colunas, alinhados à direita como os números.
+    fn cabecalho(&self, ui: &mut Ui) {
+        let titulos: Vec<Arc<Galley>> = self
+            .titulos
+            .iter()
+            .map(|titulo| ui.fonts_mut(|f| f.layout_no_wrap(titulo.to_string(), fonte(10.0, false), branco(0x99))))
+            .collect();
+        let altura = titulos.iter().fold(0.0_f32, |maior, g| maior.max(g.size().y));
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), altura + 2.0), Sense::hover());
+        self.pintar(ui.painter(), Rect::from_min_size(rect.min, vec2(rect.width(), altura)), titulos);
+    }
+
+    /// Cada célula ligada alinhada à direita na sua coluna e centrada na altura da linha.
+    fn pintar(&self, pintor: &egui::Painter, linha: Rect, celulas: Vec<Arc<Galley>>) {
+        for ((celula, direita), visivel) in celulas.into_iter().zip(self.direitas()).zip(self.visiveis) {
+            if !visivel {
+                continue;
+            }
+            let posicao = pos2(linha.max.x - direita - celula.size().x, linha.center().y - celula.size().y / 2.0);
+            pintor.galley(posicao, celula, texto());
+        }
+    }
+}
+
+/// Os números de uma linha da tabela, de um jogador ou de uma skill dele.
+struct Numeros {
+    por_segundo: f64,
+    total: f64,
+    porcentagem: f64,
+    golpes: i32,
+    criticos: i32,
+    aparos: i32,
+    maximo: f64,
+}
+
+impl From<&LinhaJogador> for Numeros {
+    fn from(j: &LinhaJogador) -> Self {
+        let LinhaJogador { por_segundo, total, porcentagem, golpes, criticos, aparos, maximo, .. } = *j;
+        Self { por_segundo, total, porcentagem, golpes, criticos, aparos, maximo }
+    }
+}
+
+impl From<&LinhaSkill> for Numeros {
+    fn from(s: &LinhaSkill) -> Self {
+        let LinhaSkill { por_segundo, total, porcentagem, golpes, criticos, aparos, maximo, .. } = *s;
+        Self { por_segundo, total, porcentagem, golpes, criticos, aparos, maximo }
+    }
+}
+
+/// As células na ordem das colunas da aba (Aba::colunas). O % é a parte no total de quem está
+/// sendo medido (do jogador no grupo, ou da skill no jogador).
+fn celulas(aba: Aba, n: Numeros) -> [String; 5] {
+    let por_segundo = compacto(n.por_segundo);
+    let parte = format!("{} ({})", compacto(n.total), p(n.porcentagem, 0));
+    let critico = p(razao(n.criticos, n.golpes), 0);
+    let maximo = compacto(n.maximo);
+    match aba {
+        Aba::Tank => [por_segundo, parte, p(razao(n.aparos, n.golpes), 0), critico, maximo],
+        Aba::Dps | Aba::Healer => {
+            let media = if n.golpes > 0 { n.total / f64::from(n.golpes) } else { 0.0 };
+            [por_segundo, parte, critico, compacto(media), maximo]
+        }
+    }
+}
+
 fn configurar_estilo(ctx: &egui::Context) -> Result<(), String> {
     let pasta = PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into())).join("Fonts");
     let mut fontes = egui::FontDefinitions::empty();
@@ -517,7 +897,7 @@ fn configurar_estilo(ctx: &egui::Context) -> Result<(), String> {
     };
     let regular = carregar("segoe", "segoeui.ttf");
     let semibold = carregar("segoe-semibold", "seguisb.ttf");
-    // Segoe UI Symbol cobre ☠ ▸ ▾ ✕, que a Segoe UI não tem.
+    // Segoe UI Symbol cobre ☠ ▸ ▾ ✕ ⚙, que a Segoe UI não tem.
     let simbolos = carregar("simbolos", "seguisym.ttf");
     if !regular {
         return Err(format!("fonte Segoe UI não encontrada em {}", pasta.display()));
@@ -539,31 +919,69 @@ fn configurar_estilo(ctx: &egui::Context) -> Result<(), String> {
     ctx.set_theme(egui::Theme::Dark);
     // Texto não seleciona: senão o título e o status roubam o arraste da janela.
     ctx.all_styles_mut(|estilo| estilo.interaction.selectable_labels = false);
+    // O zoom é o da config (alça e tela de configurações); o Ctrl+= do egui brigaria com ele.
+    ctx.options_mut(|opcoes| opcoes.zoom_with_keyboard = false);
     Ok(())
 }
 
+/// Arraste próprio em vez do ViewportCommand::StartDrag: o winit só aceita um StartDrag novo depois
+/// de receber o WM_EXITSIZEMOVE do anterior (winit 0.30, `handle_os_dragging`), e um arraste que
+/// não chega a entrar no laço de mover do Windows deixaria todos os seguintes sem efeito. Aqui a
+/// janela segue o cursor a cada quadro, sem estado fora deste arraste.
+fn cursor_e_canto(janela: isize) -> Option<([i32; 2], [i32; 4])> {
+    use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
+
+    if janela == 0 {
+        return None;
+    }
+    let mut cursor = POINT { x: 0, y: 0 };
+    let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    let ok = unsafe { GetCursorPos(&mut cursor) != 0 && GetWindowRect(janela as _, &mut r) != 0 };
+    ok.then_some(([cursor.x, cursor.y], [r.left, r.top, r.right - r.left, r.bottom - r.top]))
+}
+
+fn seguir_cursor(janela: isize, inicio_cursor: [i32; 2], inicio_canto: [i32; 4]) {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetCursorPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+    };
+
+    let mut cursor = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut cursor) } == 0 {
+        return;
+    }
+    let (x, y) = (inicio_canto[0] + cursor.x - inicio_cursor[0], inicio_canto[1] + cursor.y - inicio_cursor[1]);
+    // Não sai de cima do jogo.
+    let (x, y) = jogo::dentro(x, y, inicio_canto[2], inicio_canto[3]);
+    unsafe { SetWindowPos(janela as _, std::ptr::null_mut(), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) };
+}
+
 /// Sem isto, clicar no overlay tira o foco do teclado do jogo. Conferido a cada quadro: o winit
-/// recalcula o estilo da janela quando ela aparece e apaga o bit aplicado na criação.
-fn manter_sem_ativar(janela: &impl raw_window_handle::HasWindowHandle) {
+/// recalcula o estilo da janela quando ela aparece e apaga o bit aplicado na criação. Devolve o
+/// HWND (0 sem janela), que o recolher usa para achar o monitor.
+fn manter_sem_ativar(janela: &impl raw_window_handle::HasWindowHandle) -> isize {
     use raw_window_handle::RawWindowHandle;
     use windows_sys::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW, WS_EX_NOACTIVATE};
 
-    let Ok(handle) = janela.window_handle() else { return };
-    let RawWindowHandle::Win32(win32) = handle.as_raw() else { return };
-    let janela = win32.hwnd.get() as windows_sys::Win32::Foundation::HWND;
+    let Ok(handle) = janela.window_handle() else { return 0 };
+    let RawWindowHandle::Win32(win32) = handle.as_raw() else { return 0 };
+    let hwnd = win32.hwnd.get();
+    let janela = hwnd as windows_sys::Win32::Foundation::HWND;
     unsafe {
         let estilo = GetWindowLongPtrW(janela, GWL_EXSTYLE);
         if estilo & WS_EX_NOACTIVATE as isize == 0 {
             SetWindowLongPtrW(janela, GWL_EXSTYLE, estilo | WS_EX_NOACTIVATE as isize);
         }
     }
+    hwnd
 }
 
 /// Caixa de mensagem do Windows (o build de release não tem console).
 pub fn avisar(mensagem: &str) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
     let utf16 = |texto: &str| texto.encode_utf16().chain([0]).collect::<Vec<u16>>();
-    let (texto, titulo) = (utf16(mensagem), utf16("Aion2Meter"));
+    let (texto, titulo) = (utf16(mensagem), utf16("Axon"));
     unsafe { MessageBoxW(std::ptr::null_mut(), texto.as_ptr(), titulo.as_ptr(), MB_OK | MB_ICONERROR) };
 }
 

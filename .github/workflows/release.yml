@@ -1,4 +1,4 @@
-# Tag v* (ex.: v0.3.0) → testes → Aion2Meter.exe → release com o zip.
+# Tag v* (ex.: v0.3.0) → testes → Axon.exe → release com o zip.
 name: Release
 
 on:
@@ -32,7 +32,7 @@ jobs:
         run: |
           $versao = '${{ github.ref_name }}'.TrimStart('v')
           cargo build --release -p overlay
-          Compress-Archive -Path target/release/Aion2Meter.exe -DestinationPath "Aion2Meter-$versao-win-x64.zip"
+          Compress-Archive -Path target/release/Axon.exe -DestinationPath "Aion2Meter-$versao-win-x64.zip"
 
       - name: Criar release
         shell: pwsh
@@ -41,4 +41,4 @@ jobs:
         run: |
           $versao = '${{ github.ref_name }}'.TrimStart('v')
           gh release create '${{ github.ref_name }}' "Aion2Meter-$versao-win-x64.zip" `
-            --title "Aion2Meter ${{ github.ref_name }}" --notes-file .github/notas-da-release.md --generate-notes
+            --title "Axon ${{ github.ref_name }}" --notes-file .github/notas-da-release.md --generate-notes

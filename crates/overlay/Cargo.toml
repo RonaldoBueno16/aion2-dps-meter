@@ -5,9 +5,9 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# O executável da release: Aion2Meter.exe.
+# O executável da release: Axon.exe.
 [[bin]]
-name = "Aion2Meter"
+name = "Axon"
 path = "src/main.rs"
 
 [dependencies]
@@ -19,7 +19,13 @@ serde_json.workspace = true
 eframe = { version = "0.33", default-features = false, features = ["glow"] }
 png = "0.18"
 raw-window-handle = "0.6"
-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [build-dependencies]
 embed-manifest = "1.5"

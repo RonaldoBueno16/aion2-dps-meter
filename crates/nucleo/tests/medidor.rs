@@ -39,6 +39,9 @@ fn separa_por_jogador_e_por_skill_e_soma_invocacao_no_dono() {
     assert_eq!(yoshi.criticos, 1);
     assert_eq!(yoshi.skills.len(), 3);
     assert_eq!(yoshi.skills[0].skill, 14170000);
+    // Tabela da aba DPS: maior golpe do jogador e DPS de cada skill na mesma duração da luta.
+    quase_igual(200.0 * FATOR_ESCALA, yoshi.maximo);
+    quase_igual(200.0 * FATOR_ESCALA / 4.0, yoshi.skills[0].por_segundo);
     let critica: Vec<_> = yoshi.skills.iter().filter(|s| s.golpes == 1 && s.criticos == 1).collect();
     assert_eq!(critica.len(), 1);
     assert_eq!(critica[0].skill, 14030000);
@@ -66,6 +69,7 @@ fn golpe_de_mob_em_jogador_vai_para_dano_recebido_e_marca_aggro() {
     quase_igual((166.0 + 191.0) * FATOR_ESCALA_JOGADOR, tank.total);
     assert_eq!(tank.golpes, 2);
     assert_eq!(tank.aparos, 1);
+    assert_eq!(tank.skills[0].aparos, 1); // coluna PARRY da skill expandida
     assert_eq!(tank.segurando_aggro, 1);
 }
 
@@ -178,6 +182,30 @@ fn login_desta_conexao_nao_e_trocado_por_nome_guardado() {
     let p = m.obter_placar();
     assert!(p.dano.jogadores.iter().find(|j| j.id == 500).unwrap().voce);
     assert!(!p.dano.jogadores.iter().find(|j| j.id == 600).unwrap().voce);
+}
+
+#[test]
+fn so_o_meu_dano_deixa_so_a_sua_linha_com_a_porcentagem_sobre_voce() {
+    let mut m = Medidor::default();
+    m.definir_jogador(11174, "Yoshi", 31, true);
+    m.registrar(golpe(11174, 14340000, 100), T0);
+    m.registrar(golpe(22222, 11010000, 300), T0 + segundos(1.0));
+
+    let dano = m.obter_placar().dano;
+    quase_igual(0.25, dano.jogadores.iter().find(|j| j.voce).unwrap().porcentagem);
+
+    let so_voce = dano.so_voce();
+    assert_eq!(so_voce.jogadores.len(), 1);
+    assert_eq!(so_voce.jogadores[0].nome, "Yoshi");
+    quase_igual(100.0 * FATOR_ESCALA, so_voce.total);
+    quase_igual(1.0, so_voce.jogadores[0].porcentagem);
+
+    // Sem você reconhecido (overlay aberto no meio da sessão, antes de um abate): tabela vazia.
+    let mut sem_voce = Medidor::default();
+    sem_voce.registrar(golpe(22222, 11010000, 300), T0);
+    let vazia = sem_voce.obter_placar().dano.so_voce();
+    assert!(vazia.jogadores.is_empty());
+    assert_eq!(vazia.total, 0.0);
 }
 
 #[test]

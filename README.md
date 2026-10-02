@@ -1,4 +1,4 @@
-# Medidor de DPS para AION 2 (Global)
+# Axon: medidor de DPS para AION 2 (Global)
 
 Overlay externo que mostra o dano de cada jogador e de cada skill, lendo o tráfego de
 rede do jogo passivamente. Não injeta código, não lê memória e não abre handle no
@@ -7,25 +7,62 @@ processo do jogo. Formato do protocolo e medições em [PROTOCOLO.md](PROTOCOLO.
 ## Usar
 
 Pela release: baixe o zip da última versão em Releases, extraia e abra o
-`Aion2Meter.exe` (executável único de ~2 MB, sem instalar nada; passo a passo nas notas
+`Axon.exe` (executável único de ~2 MB, sem instalar nada; passo a passo nas notas
 da release). Para compilar daqui (Rust estável, testado com 1.99 MSVC):
 
 ```powershell
 cargo build --release -p overlay
-.\target\release\Aion2Meter.exe
+.\target\release\Axon.exe
 ```
 
 - O Windows pede permissão de administrador ao abrir (a captura por raw socket exige).
 - O jogo precisa estar em "tela cheia em janela" (borderless), que é o padrão atual.
-- Cada jogador ocupa duas linhas: nome, DPS (DTPS no Tank, HPS no Healer), total e % em
-  cima; `Classe · Nv · Power` sempre embaixo (classe em inglês, por escolha). `?` = ainda
-  não chegou; `~31` = valor da memória, visto numa sessão anterior e talvez velho.
+- O Axon fica como ícone na área de notificação (a seta ao lado do relógio), fora da barra
+  de tarefas. O overlay só aparece com o jogo em primeiro plano: aberto com outro programa
+  na frente, ele espera invisível e surge quando você volta ao jogo. Clique esquerdo no
+  ícone liga ou desliga o overlay; o direito abre o menu (Mostrar/Esconder e "Fechar
+  Axon"). Escondido, o medidor continua contando. O jogo é achado pela janela (classe
+  `UnrealWindow`, título "AION2"), sem abrir handle no processo dele.
+- Cada jogador ocupa duas linhas: o nome em cima e `Classe · Nv · GS` embaixo (classe em
+  inglês, por escolha; GS é o número que o jogo mostra como Power). `?` = ainda não
+  chegou; `~31` = valor da memória, visto numa sessão anterior e talvez velho.
+- Cada aba tem uma tabela à direita de cada jogador. Expandido, cada skill que aconteceu
+  aparece com as mesmas colunas (aí o % é a parte da skill no total do jogador):
+  - **DPS**: `DPS | Damage(%) | CRIT | AVG | MAX`. Damage é o dano com a parte do jogador
+    no total medido; CRIT, a fração de golpes críticos; AVG, o dano médio por golpe; MAX,
+    o maior golpe.
+  - **Tank**: `DTPS | Taken(%) | PARRY | CRIT | MAX`. Taken é o dano recebido com a parte
+    do jogador; PARRY, a fração de golpes aparados (o único sinal de mitigação que o
+    pacote traz; bloqueio de escudo e esquiva não têm marca conhecida); CRIT, críticos
+    recebidos; MAX, o maior golpe levado. O AVG fica de fora: o golpe médio depende de
+    qual monstro bateu em quem. Golpes, aparos e mortes aparecem ao passar o mouse.
+  - **Healer**: `HPS | Heal(%) | CRIT | AVG | MAX`, as mesmas contas da DPS sobre a cura.
+    O pacote não separa a sobrecura, então o HPS pode incluir cura que passou do HP cheio.
+  - Proposta das colunas de Tank e Healer feita a partir do LOA Details (Tanked, T%, TPS),
+    do Details! e do Recount (Damage Taken, Parry, Healing Done, HPS), cruzada com o que
+    o pacote 0x3804 traz.
 - A memória (`%LOCALAPPDATA%\Aion2Meter\jogadores.json`) guarda o último level e Power de
   cada nome, inclusive o seu, a cada 30 s e ao fechar. Com o overlay aberto no meio da
   sessão, você é reconhecido pelo nome no primeiro abate ou invocação. Valor lido na
   conexão atual sempre vence.
-- Arraste a janela pelo fundo. Clique num jogador para ver as skills. "Zerar" começa
-  uma luta nova; ela também zera sozinha depois de 15 s sem dano.
+- Arraste a janela pelo fundo; ela não sai de cima do jogo (aberta em outro monitor, é
+  trazida para dentro). Clique num jogador para ver as skills. "Zerar" começa
+  uma luta nova; ela também zera sozinha depois de 15 s sem dano (ajustável).
+- ⚙ abre as configurações, que valem na hora e ficam em
+  `%LOCALAPPDATA%\Aion2Meter\config.json`:
+  - **Linha de cada jogador**: escolha a aba e clique numa coluna da tabela ou em Classe,
+    Nv ou GS na linha de amostra para esconder ou mostrar (o escondido fica riscado). Cada
+    aba guarda as suas colunas; Classe, Nv e GS valem para as três.
+  - **Só o meu dano**: só a sua linha, nas três abas; a % fica sempre em 100%. Enquanto
+    você não foi reconhecido (ver Pendências), a lista fica vazia com um aviso.
+  - **Alcance**: Proximidade (todos que aparecem perto). Party está desativado até uma
+    captura em grupo mostrar o pacote do grupo.
+  - **Luta**: segundos sem dano até a luta zerar, de 5 a 120.
+  - **Tamanho**: de 60% a 200%, escalando a janela inteira.
+- ‹ ou › (a seta aponta para a borda mais perto) desliza a janela até a borda do jogo e
+  deixa só a aba "Overlay"; clicar nela traz a janela de volta ao
+  mesmo lugar. Recolhido, o medidor continua contando. Com as animações do Windows
+  desligadas, a janela vai direto, sem deslizar.
 - O rodapé mostra a versão e só avisa enquanto procura o servidor do jogo, enquanto baixa
   os nomes das skills ou quando a captura para.
 - Dano exibido em unidades de HP do alvo (campo do pacote × 18,82, ver PROTOCOLO.md §6).
@@ -35,11 +72,13 @@ cargo build --release -p overlay
   `%LOCALAPPDATA%\Aion2Meter` (`skills-pt.json` e `icones/`); apague a pasta para rebaixar.
 - Clicar no overlay não tira o foco do teclado do jogo (`WS_EX_NOACTIVATE`, reaplicado a
   cada quadro porque o winit apaga o bit ao mostrar a janela; conferido no jogo em
-  2026-10-02, junto com arrastar e expandir jogador).
+  2026-10-02, junto com expandir jogador). O arraste é próprio desde a 0.3.0 (cursor +
+  `SetWindowPos`): o `StartDrag` do winit ignora arrastes enquanto não vê o fim do
+  anterior, e um arraste que não entra no laço de mover do Windows podia travar os seguintes.
 - Rede: a captura é passiva, mas o medidor faz requisições próprias ao questlog.gg (só o
   código da skill) e ao CDN da NCSoft (ícones), uma vez por skill, depois fica no cache.
-- Abas **DPS | Tank | Healer**: a luta é a mesma (duração, "Zerar" e os 15 s valem para
-  as três), cada aba com o seu total e o detalhe por skill:
+- Abas **DPS | Tank | Healer**: a luta é a mesma (duração, "Zerar" e o tempo sem dano
+  valem para as três), cada aba com o seu total e o detalhe por skill:
   - **DPS**: dano causado em monstros.
   - **Tank**: dano recebido de monstros (DTPS), golpes aparados e mortes (☠). "aggro N"
     marca quantos monstros acertaram aquele jogador por último nos últimos 8 s. O valor
@@ -56,12 +95,13 @@ cargo build --release -p overlay
 |---|---|
 | `crates/nucleo` | Protocolo (varint, LZ4, framing, parsers), captura (raw socket, pcapng, remontagem TCP), medição (placar, catálogo de skills) e formatação pt-BR |
 | `crates/nucleo/tests` | LZ4 contra o `lz4_flex`, framing, remontagem TCP, parsers com bytes reais, placar e troca de servidor (`cargo test`). O teste de rede do catálogo é opcional: `cargo test -p nucleo --test catalogo -- --ignored` |
-| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Aion2Meter.exe`. O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir]` para ver a janela sem o jogo |
+| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada) |
+| `crates/overlay/assets` | `logo-axon.jpg` (a logo original) e `axon.ico`, o hexágono recortado dela com fundo transparente, de 16 a 256 px |
 | `crates/replay` | Replay de `.pcapng` com diagnóstico e modo `ao-vivo` no console |
 | `dados/skills.json` | Opcional, fora do repositório e das releases: nomes em inglês do RATmeter (GPL-3.0, ver PROTOCOLO.md §9), só reserva quando o questlog não tem a skill |
 | `capturar.ps1` | Grava `captura.pcapng` com o pktmon do Windows (admin). Capturas ficam fora do repositório: têm o seu tráfego |
 | `ao-vivo.ps1` | Roda o modo `ao-vivo` do replay como admin e grava `ao-vivo-log.txt` (antes: `cargo build --release -p replay`) |
-| `.github/workflows/release.yml` | Tag `v*` → testes → `Aion2Meter.exe` → release com o zip |
+| `.github/workflows/release.yml` | Tag `v*` → testes → `Axon.exe` → release com o zip |
 
 ## Lançar uma versão
 
@@ -74,7 +114,7 @@ cargo build --release -p overlay
 
 Enquanto o Actions deste repositório falhar antes de criar os jobs (`startup_failure`,
 visto em 2026-10-02), gere o zip num clone limpo da tag (`cargo build --release -p
-overlay`, zip só com o `Aion2Meter.exe`) e publique com `gh release create` usando
+overlay`, zip só com o `Axon.exe`) e publique com `gh release create` usando
 `.github/notas-da-release.md`.
 
 ## Depois de um patch do jogo
@@ -101,6 +141,8 @@ overlay`, zip só com o `Aion2Meter.exe`) e publique com `gh release create` usa
 - **Tank**: escala 1:1 conferida num golpe só. "aggro" é inferido do último golpe de
   cada mob, porque o pacote de troca de alvo não foi achado.
 - Invocação de jogador sem legião: o vínculo depende só do nome do dono.
+- **Party** (só quem está no seu grupo): o pacote do grupo (`0x9702` em outros medidores)
+  não apareceu em nenhuma captura local; falta uma captura em grupo.
 
 ## Conferido
 
