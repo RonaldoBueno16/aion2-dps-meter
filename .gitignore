@@ -1,0 +1,15 @@
+# Compilação
+bin/
+obj/
+publicar/
+*.user
+.vs/
+
+# Capturas de rede: têm o seu tráfego, nomes de jogadores e IPs (ficam só na sua máquina)
+*.pcapng
+*.etl
+captura*-log.txt
+ao-vivo-log.txt
+
+# Nomes de skill em inglês do RATmeter (GPL-3.0): reserva opcional, fica fora do repositório e das releases
+dados/skills.json

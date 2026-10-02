@@ -1,0 +1,40 @@
+# Tag v* (ex.: v0.2.0) → testes → executável único com o .NET embutido → release com o zip.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Testes
+        run: dotnet test tests/Aion2Meter.Testes -c Release
+
+      - name: Publicar
+        shell: pwsh
+        run: |
+          $versao = '${{ github.ref_name }}'.TrimStart('v')
+          dotnet publish src/Aion2Meter.Overlay/Aion2Meter.Overlay.csproj -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true `
+            -p:DebugType=none -p:Version=$versao -o publicar
+          Compress-Archive -Path publicar/* -DestinationPath "Aion2Meter-$versao-win-x64.zip"
+
+      - name: Criar release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $versao = '${{ github.ref_name }}'.TrimStart('v')
+          gh release create '${{ github.ref_name }}' "Aion2Meter-$versao-win-x64.zip" `
+            --title "Aion2Meter ${{ github.ref_name }}" --notes-file .github/notas-da-release.md --generate-notes

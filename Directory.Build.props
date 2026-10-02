@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- SemVer. A release usa a versão da tag (v0.2.0 → 0.2.0); este valor vale para builds locais. -->
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+</Project>

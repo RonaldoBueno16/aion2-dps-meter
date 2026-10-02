@@ -1,0 +1,55 @@
+<Window x:Class="Aion2Meter.Overlay.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AION2 DPS" Width="390" SizeToContent="Height"
+        Left="40" Top="220"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        Topmost="True" ResizeMode="NoResize" ShowActivated="False"
+        FontFamily="Segoe UI" FontSize="12" Foreground="#E8E6E3"
+        MouseLeftButtonDown="AoArrastar">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Foreground" Value="#CCFFFFFF"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Fundo" Background="{TemplateBinding Background}" CornerRadius="3" Padding="7,1">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Fundo" Property="Background" Value="#33FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border Background="#D9101418" CornerRadius="6" BorderBrush="#33FFFFFF" BorderThickness="1" Padding="8">
+        <StackPanel>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="Titulo" Text="AION2 DPS" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <Button Grid.Column="1" Content="Zerar" Click="AoZerar" ToolTip="Começa uma luta nova"/>
+                <Button Grid.Column="2" Content="✕" Click="AoFechar" ToolTip="Fechar o medidor"/>
+            </Grid>
+            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                <Button x:Name="AbaDps" Content="DPS" Click="AoTrocarAba" ToolTip="Dano causado em monstros"/>
+                <Button x:Name="AbaTank" Content="Tank" Click="AoTrocarAba"
+                        ToolTip="Dano recebido de monstros. &quot;aggro N&quot;: N monstros têm este jogador como último alvo (8 s). O número de ameaça fica no servidor e não chega ao jogo."/>
+                <Button x:Name="AbaHealer" Content="Healer" Click="AoTrocarAba"
+                        ToolTip="Cura feita em jogadores. Leitura ainda não conferida numa luta com curandeiro."/>
+            </StackPanel>
+            <StackPanel x:Name="Linhas" Margin="0,6,0,0"/>
+            <TextBlock x:Name="Status" Margin="0,6,0,0" FontSize="10" Foreground="#99FFFFFF" TextWrapping="Wrap"/>
+        </StackPanel>
+    </Border>
+</Window>
