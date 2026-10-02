@@ -95,8 +95,8 @@ pub struct Overlay {
     dobra: Dobra,
     /// HWND da janela (0 enquanto o primeiro quadro não chegou).
     janela: isize,
-    /// Arraste da alça de tamanho: distância em pixels do ponteiro à borda direita no início.
-    alca: Option<f32>,
+    /// Arraste da janela pelo fundo: cursor e canto da janela no começo, em pixels físicos.
+    arraste: Option<([i32; 2], [i32; 2])>,
     /// Sua linha (ou um esboço com o seu nome) para a amostra da tela de configurações.
     amostra: Option<LinhaJogador>,
     /// Só no debug (--recolher / --recolher-e-voltar): recolhe aos 2 s e volta aos 4,5 s.
@@ -151,7 +151,7 @@ impl Overlay {
             tela: if tem("--config") { Tela::Configuracoes } else { Tela::Medidor },
             dobra: Dobra::Aberto,
             janela: 0,
-            alca: None,
+            arraste: None,
             amostra: None,
             teste_dobra: (tem("--recolher") || tem("--recolher-e-voltar"))
                 .then(|| (Instant::now(), tem("--recolher-e-voltar"), false)),
@@ -518,36 +518,6 @@ impl Overlay {
         ui.add(egui::Label::new(RichText::new(status).font(fonte(10.0, false)).color(branco(0x99))).wrap());
     }
 
-    /// Alça no canto de baixo à direita: arrastar muda o zoom da janela inteira. A conta é em pixels
-    /// físicos, porque os pontos do egui mudam de escala no meio do arraste.
-    fn alca_de_tamanho(&mut self, ui: &mut Ui, quadro: Rect) {
-        let area = Rect::from_min_max(quadro.max - vec2(14.0, 14.0), quadro.max);
-        let resposta = ui.interact(area, ui.id().with("alca"), Sense::drag()).on_hover_cursor(CursorIcon::ResizeNwSe);
-        let ppp = ui.ctx().pixels_per_point();
-        if let Some(ponteiro) = resposta.interact_pointer_pos() {
-            if resposta.drag_started() {
-                self.alca = Some((quadro.max.x - ponteiro.x) * ppp);
-            }
-            if let Some(resto) = self.alca
-                && resposta.dragged()
-            {
-                let nativo = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
-                self.config.zoom = config::arredondar_zoom((ponteiro.x * ppp + resto) / (LARGURA * nativo));
-            }
-        }
-        if resposta.drag_stopped() {
-            self.alca = None;
-            self.aplicar_config();
-        }
-
-        let cor = if resposta.hovered() || resposta.dragged() { branco(0x99) } else { branco(0x66) };
-        for k in 1..=3 {
-            let d = k as f32 * 3.5;
-            let pontas = [pos2(area.max.x - 3.0 - d, area.max.y - 3.0), pos2(area.max.x - 3.0, area.max.y - 3.0 - d)];
-            ui.painter().line_segment(pontas, Stroke::new(1.0_f32, cor));
-        }
-    }
-
     /// Recolhido: só a aba "Overlay ›" colada na borda; clicar traz a janela de volta.
     fn aba_recolhida(&mut self, ui: &mut Ui, lado: Lado) {
         let rect = ui.max_rect();
@@ -629,11 +599,14 @@ impl eframe::App for Overlay {
             }
 
             // Arrasta a janela pelo fundo; botões e linhas ficam por cima e pegam o clique. click_and_drag
-            // e não só drag: widget só de drag começa o arraste já no press, e o laço de mover janela
-            // do Windows engoliria o soltar do botão (nenhum clique chegaria às linhas nem ao ✕).
+            // e não só drag: assim um clique parado não mexe a janela.
             let fundo = ui.interact(ui.max_rect(), ui.id().with("arrastar"), Sense::click_and_drag());
             if fundo.drag_started() && self.dobra.aberto() {
-                ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+                self.arraste = cursor_e_canto(self.janela);
+            }
+            match self.arraste {
+                Some((cursor, canto)) if fundo.dragged() => seguir_cursor(self.janela, cursor, canto),
+                _ => self.arraste = None,
             }
 
             let quadro = egui::Frame::new()
@@ -646,8 +619,6 @@ impl eframe::App for Overlay {
                     ui.set_width(ui.available_width());
                     self.conteudo(ui);
                 });
-            // Depois do fundo e do conteúdo: a alça ganha o clique no canto.
-            self.alca_de_tamanho(ui, quadro.response.rect);
 
             // Altura pelo conteúdo (o SizeToContent do WPF): só manda o comando quando a altura ou a
             // escala mudam. Recolhendo ou voltando, quem manda no tamanho é a animação.
@@ -935,6 +906,37 @@ fn configurar_estilo(ctx: &egui::Context) -> Result<(), String> {
     // O zoom é o da config (alça e tela de configurações); o Ctrl+= do egui brigaria com ele.
     ctx.options_mut(|opcoes| opcoes.zoom_with_keyboard = false);
     Ok(())
+}
+
+/// Arraste próprio em vez do ViewportCommand::StartDrag: o winit só aceita um StartDrag novo depois
+/// de receber o WM_EXITSIZEMOVE do anterior (winit 0.30, `handle_os_dragging`), e um arraste que
+/// não chega a entrar no laço de mover do Windows deixaria todos os seguintes sem efeito. Aqui a
+/// janela segue o cursor a cada quadro, sem estado fora deste arraste.
+fn cursor_e_canto(janela: isize) -> Option<([i32; 2], [i32; 2])> {
+    use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
+
+    if janela == 0 {
+        return None;
+    }
+    let mut cursor = POINT { x: 0, y: 0 };
+    let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    let ok = unsafe { GetCursorPos(&mut cursor) != 0 && GetWindowRect(janela as _, &mut r) != 0 };
+    ok.then_some(([cursor.x, cursor.y], [r.left, r.top]))
+}
+
+fn seguir_cursor(janela: isize, inicio_cursor: [i32; 2], inicio_canto: [i32; 2]) {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetCursorPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+    };
+
+    let mut cursor = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut cursor) } == 0 {
+        return;
+    }
+    let (x, y) = (inicio_canto[0] + cursor.x - inicio_cursor[0], inicio_canto[1] + cursor.y - inicio_cursor[1]);
+    unsafe { SetWindowPos(janela as _, std::ptr::null_mut(), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) };
 }
 
 /// Sem isto, clicar no overlay tira o foco do teclado do jogo. Conferido a cada quadro: o winit

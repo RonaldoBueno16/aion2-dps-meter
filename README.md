@@ -41,8 +41,7 @@ cargo build --release -p overlay
   - **Alcance**: Proximidade (todos que aparecem perto). Party está desativado até uma
     captura em grupo mostrar o pacote do grupo.
   - **Luta**: segundos sem dano até a luta zerar, de 5 a 120.
-  - **Tamanho**: de 60% a 200%, escalando a janela inteira. A alça no canto de baixo à
-    direita faz o mesmo arrastando.
+  - **Tamanho**: de 60% a 200%, escalando a janela inteira.
 - ‹ ou › (a seta aponta para a borda mais perto) desliza a janela até a borda da área de
   trabalho do monitor e deixa só a aba "Overlay"; clicar nela traz a janela de volta ao
   mesmo lugar. Recolhido, o medidor continua contando. Com as animações do Windows

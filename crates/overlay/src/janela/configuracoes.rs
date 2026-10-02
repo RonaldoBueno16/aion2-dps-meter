@@ -84,8 +84,6 @@ impl Overlay {
                 }
             }
         });
-        ui.add_space(2.0);
-        dica(ui, "Também dá para arrastar o canto de baixo à direita.");
         ui.add_space(4.0);
 
         if self.config != antes {
