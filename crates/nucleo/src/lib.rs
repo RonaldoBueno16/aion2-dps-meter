@@ -2,6 +2,7 @@
 //! (pcapng, raw socket, remontagem TCP) e medição (placar). Formato em PROTOCOLO.md.
 
 pub mod captura;
+pub mod formato;
 pub mod medicao;
 pub mod protocolo;
 

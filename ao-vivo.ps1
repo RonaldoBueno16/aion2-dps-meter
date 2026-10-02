@@ -3,7 +3,8 @@
 param([int]$Segundos = 45)
 
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$exe = Join-Path $dir 'src\Aion2Meter.Cli\bin\Release\net10.0-windows\Aion2Meter.Cli.exe'
+# Compilar antes: cargo build --release -p replay
+$exe = Join-Path $dir 'target\release\replay.exe'
 $log = Join-Path $dir 'ao-vivo-log.txt'
 
 [Console]::OutputEncoding = [Text.Encoding]::UTF8

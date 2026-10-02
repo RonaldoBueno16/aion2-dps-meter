@@ -86,7 +86,13 @@ fn abrir(endereco: Ipv4Addr) -> Result<SOCKET, String> {
     unsafe {
         let s = socket(i32::from(AF_INET), SOCK_RAW, IPPROTO_IP);
         if s == INVALID_SOCKET {
-            return Err(format!("socket falhou ({}).", WSAGetLastError()));
+            // Sem elevação o Windows recusa já na criação do raw socket.
+            let erro = WSAGetLastError();
+            return Err(if erro == WSAEACCES {
+                "Captura por raw socket precisa rodar como administrador.".to_string()
+            } else {
+                format!("socket falhou ({erro}).")
+            });
         }
         let falhou = |etapa: &str| {
             let erro = WSAGetLastError();

@@ -4,18 +4,16 @@
 //!   ao-vivo [segundos]
 //!       captura por raw socket (precisa de administrador) e imprime o placar.
 
-mod formato;
-
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use formato::{f, hex, n, n_int, p};
 use indexmap::IndexMap;
 use nucleo::captura::montador::{Entrega, MontadorTcp};
 use nucleo::captura::pcapng;
 use nucleo::captura::segmento::SegmentoTcp;
+use nucleo::formato::{f, hex, n, n_int, p};
 use nucleo::medicao::catalogo::CatalogoSkills;
 use nucleo::medicao::dados_jogo;
 use nucleo::medicao::medidor::{Placar, Tabela};

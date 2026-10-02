@@ -1,21 +1,21 @@
 [workspace]
 resolver = "3"
-members = ["crates/nucleo", "crates/replay"]
+members = ["crates/nucleo", "crates/replay", "crates/overlay"]
 
 [workspace.package]
-# SemVer. A release usa a versão da tag (v0.2.0 → 0.2.0); manter igual à tag ao lançar.
+# SemVer. A release usa a versÃ£o da tag (v0.2.0 â†’ 0.2.0); manter igual Ã  tag ao lanÃ§ar.
 version = "0.2.0"
 edition = "2024"
 publish = false
 
 [workspace.dependencies]
 nucleo = { path = "crates/nucleo" }
-indexmap = "2"
+indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 windows-sys = "0.61"
 
-# Executável pequeno: o tamanho é o motivo da troca de C# para Rust.
+# ExecutÃ¡vel pequeno: o tamanho Ã© o motivo da troca de C# para Rust.
 [profile.release]
 opt-level = "z"
 lto = true
