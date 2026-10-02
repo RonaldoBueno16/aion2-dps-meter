@@ -1,11 +1,15 @@
 //! Captura passiva com raw socket do Windows (SIO_RCVALL), sem driver extra. Exige o processo
 //! elevado. Abre um socket por IPv4 local e entrega cada segmento TCP no callback, que roda nas
 //! threads de captura (uma por socket): quem recebe serializa (o pipeline não é thread-safe).
-//! Não abre handle nem lê nada do processo do jogo.
+//! Uma thread vigia acompanha a rede: IP novo (outra Wi-Fi, DHCP, VPN, volta da suspensão) ganha
+//! socket, o que sumiu é fechado, e o socket cuja thread parou é reaberto. Antes a captura morria
+//! calada quando o IP mudava. Não abre handle nem lê nada do processo do jogo.
 
 use std::net::Ipv4Addr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use windows_sys::Win32::NetworkManagement::IpHelper::{
     GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST, GetAdaptersAddresses,
@@ -23,6 +27,9 @@ use crate::Hora;
 
 const IF_TYPE_SOFTWARE_LOOPBACK: u32 = 24;
 const ERRO_BUFFER_PEQUENO: u32 = 111;
+/// O jogo reconecta logo depois de o IP mudar, e o pacote de login (com o seu nome) vem nessa
+/// conexão: o socket do endereço novo precisa abrir antes dele.
+const CONFERIR_REDE_A_CADA: Duration = Duration::from_secs(2);
 
 pub type AoSegmento = Arc<dyn Fn(SegmentoTcp, Hora) + Send + Sync>;
 
@@ -37,14 +44,30 @@ pub struct Contadores {
 }
 
 pub struct CapturaSocketBruto {
-    sockets: Vec<SOCKET>,
     parando: Arc<AtomicBool>,
-    pub enderecos: Vec<Ipv4Addr>,
     pub contadores: Arc<Contadores>,
+    enderecos: Arc<Mutex<Vec<Ipv4Addr>>>,
+    vigia: Option<JoinHandle<()>>,
+}
+
+/// Socket aberto num endereço e a thread que recebe dele. Só a vigia mexe nisto.
+struct Aberto {
+    endereco: Ipv4Addr,
+    socket: SOCKET,
+    fio: JoinHandle<()>,
+}
+
+/// O que as threads de recepção compartilham.
+struct Comum {
+    parando: Arc<AtomicBool>,
+    contadores: Arc<Contadores>,
+    ao_segmento: AoSegmento,
 }
 
 impl CapturaSocketBruto {
-    /// Abre os sockets e começa a capturar. Err com a mensagem para o usuário.
+    /// Abre os sockets e começa a capturar. Err com a mensagem para o usuário quando havia
+    /// interface e nenhuma abriu (sem administrador, todas falham). Sem interface nenhuma agora,
+    /// começa assim mesmo: a vigia abre quando a rede voltar.
     pub fn iniciar(ao_segmento: AoSegmento) -> Result<Self, String> {
         let mut dados = unsafe { std::mem::zeroed::<WSADATA>() };
         let erro = unsafe { WSAStartup(0x0202, &mut dados) };
@@ -52,37 +75,120 @@ impl CapturaSocketBruto {
             return Err(format!("WSAStartup falhou ({erro})."));
         }
 
+        let comum = Comum {
+            parando: Arc::new(AtomicBool::new(false)),
+            contadores: Arc::new(Contadores::default()),
+            ao_segmento,
+        };
         let enderecos = enderecos_locais()?;
-        if enderecos.is_empty() {
-            return Err("Nenhuma interface IPv4 ativa.".into());
+        let mut abertos = Vec::new();
+        let falha = abrir_varios(&mut abertos, &enderecos, &comum);
+        if abertos.is_empty()
+            && let Some(erro) = falha
+        {
+            return Err(erro);
         }
 
-        let mut captura = Self {
-            sockets: Vec::new(),
-            parando: Arc::new(AtomicBool::new(false)),
-            enderecos: enderecos.clone(),
-            contadores: Arc::new(Contadores::default()),
-        };
-        for endereco in enderecos {
-            let s = abrir(endereco)?;
-            captura.sockets.push(s);
-            let (parando, contadores, ao_segmento) =
-                (captura.parando.clone(), captura.contadores.clone(), ao_segmento.clone());
+        let publicados = Arc::new(Mutex::new(abertos.iter().map(|a| a.endereco).collect()));
+        let (parando, contadores) = (comum.parando.clone(), comum.contadores.clone());
+        let vigia = {
+            let publicados = publicados.clone();
             std::thread::Builder::new()
-                .name(format!("captura {endereco}"))
-                .spawn(move || receber(s, endereco, &parando, &contadores, &*ao_segmento))
-                .map_err(|e| e.to_string())?;
-        }
-        Ok(captura)
+                .name("captura vigia".into())
+                .spawn(move || vigiar(abertos, &comum, &publicados))
+                .map_err(|e| e.to_string())?
+        };
+        Ok(Self { parando, contadores, enderecos: publicados, vigia: Some(vigia) })
+    }
+
+    /// Endereços com socket aberto agora (mudam com a rede).
+    pub fn enderecos(&self) -> Vec<Ipv4Addr> {
+        self.enderecos.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 }
 
+/// Espera a vigia fechar todos os sockets e as threads de recepção terminarem. Quem derruba a
+/// captura não pode estar segurando o lock que o callback usa, senão a espera não acaba.
 impl Drop for CapturaSocketBruto {
     fn drop(&mut self) {
         self.parando.store(true, Ordering::SeqCst);
-        for s in self.sockets.drain(..) {
-            unsafe { closesocket(s) };
+        if let Some(vigia) = self.vigia.take() {
+            vigia.thread().unpark();
+            let _ = vigia.join();
         }
+    }
+}
+
+/// A cada CONFERIR_REDE_A_CADA compara os endereços da máquina com os sockets abertos. Sempre
+/// fecha, espera a thread e só então abre: o Windows pode reaproveitar o número do socket fechado
+/// no novo, e uma thread velha ainda viva leria dele.
+fn vigiar(mut abertos: Vec<Aberto>, comum: &Comum, publicados: &Mutex<Vec<Ipv4Addr>>) {
+    while !comum.parando.load(Ordering::SeqCst) {
+        std::thread::park_timeout(CONFERIR_REDE_A_CADA);
+        if comum.parando.load(Ordering::SeqCst) {
+            break;
+        }
+        // Falha passageira ao listar as interfaces: tenta de novo na próxima volta.
+        let Ok(atuais) = enderecos_locais() else { continue };
+        let situacao: Vec<(Ipv4Addr, bool)> = abertos.iter().map(|a| (a.endereco, !a.fio.is_finished())).collect();
+        let (fechar, abrir) = reconciliar(&situacao, &atuais);
+        if fechar.is_empty() && abrir.is_empty() {
+            continue;
+        }
+        let (manter, sair): (Vec<Aberto>, Vec<Aberto>) = abertos.into_iter().partition(|a| !fechar.contains(&a.endereco));
+        abertos = manter;
+        fechar_todos(sair);
+        // Adaptador que não abre (virtual de VPN ou Hyper-V) fica de fora e é tentado de novo depois.
+        let _ = abrir_varios(&mut abertos, &abrir, comum);
+        *publicados.lock().unwrap_or_else(PoisonError::into_inner) = abertos.iter().map(|a| a.endereco).collect();
+    }
+    fechar_todos(abertos);
+}
+
+/// O que fechar (endereço que sumiu ou cuja thread parou) e o que abrir (endereço sem socket vivo).
+fn reconciliar(abertos: &[(Ipv4Addr, bool)], atuais: &[Ipv4Addr]) -> (Vec<Ipv4Addr>, Vec<Ipv4Addr>) {
+    let fechar = abertos.iter().filter(|(e, vivo)| !vivo || !atuais.contains(e)).map(|(e, _)| *e).collect();
+    let mut abrir: Vec<Ipv4Addr> = Vec::new();
+    for e in atuais {
+        if !abertos.contains(&(*e, true)) && !abrir.contains(e) {
+            abrir.push(*e);
+        }
+    }
+    (fechar, abrir)
+}
+
+/// Abre um socket e uma thread por endereço; devolve o erro do primeiro que falhou.
+fn abrir_varios(abertos: &mut Vec<Aberto>, enderecos: &[Ipv4Addr], comum: &Comum) -> Option<String> {
+    let mut primeira_falha = None;
+    for &endereco in enderecos {
+        let socket = match abrir(endereco) {
+            Ok(s) => s,
+            Err(erro) => {
+                primeira_falha.get_or_insert(erro);
+                continue;
+            }
+        };
+        let (parando, contadores, ao_segmento) =
+            (comum.parando.clone(), comum.contadores.clone(), comum.ao_segmento.clone());
+        match std::thread::Builder::new()
+            .name(format!("captura {endereco}"))
+            .spawn(move || receber(socket, endereco, &parando, &contadores, &*ao_segmento))
+        {
+            Ok(fio) => abertos.push(Aberto { endereco, socket, fio }),
+            Err(erro) => {
+                unsafe { closesocket(socket) };
+                primeira_falha.get_or_insert(erro.to_string());
+            }
+        }
+    }
+    primeira_falha
+}
+
+/// Fechar o socket destrava o recv da thread dele, que então termina.
+fn fechar_todos(abertos: Vec<Aberto>) {
+    for a in abertos {
+        unsafe { closesocket(a.socket) };
+        let _ = a.fio.join();
     }
 }
 
@@ -209,4 +315,26 @@ fn enderecos_locais() -> Result<Vec<Ipv4Addr>, String> {
         }
     }
     Ok(enderecos)
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn vigia_fecha_o_que_sumiu_e_abre_o_que_apareceu() {
+        let (casa, vpn, outra) = (Ipv4Addr::new(192, 168, 0, 2), Ipv4Addr::new(26, 1, 2, 3), Ipv4Addr::new(10, 0, 0, 7));
+        // Nada mudou.
+        assert_eq!(reconciliar(&[(casa, true)], &[casa]), (vec![], vec![]));
+        // IP mudou (outra Wi-Fi, DHCP).
+        assert_eq!(reconciliar(&[(casa, true)], &[outra]), (vec![casa], vec![outra]));
+        // VPN ligou: só abre a nova, a de casa continua.
+        assert_eq!(reconciliar(&[(casa, true)], &[casa, vpn]), (vec![], vec![vpn]));
+        // Thread parou num endereço que continua: fecha e reabre.
+        assert_eq!(reconciliar(&[(casa, false)], &[casa]), (vec![casa], vec![casa]));
+        // Sem rede: fecha tudo e espera.
+        assert_eq!(reconciliar(&[(casa, true)], &[]), (vec![casa], vec![]));
+        // Endereço que não abriu antes (fora da lista de abertos) é tentado de novo.
+        assert_eq!(reconciliar(&[], &[vpn, vpn]), (vec![], vec![vpn]));
+    }
 }

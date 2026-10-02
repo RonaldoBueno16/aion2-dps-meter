@@ -16,6 +16,8 @@ cargo build --release -p overlay
 ```
 
 - O Windows pede permissão de administrador ao abrir (a captura por raw socket exige).
+- A captura acompanha a rede: se o IP mudar (outra Wi-Fi, VPN ligada ou desligada, volta da
+  suspensão), em até 2 s o endereço novo passa a ser lido e o que sumiu é fechado.
 - Ao abrir, o Axon cria no Firewall do Windows a regra de entrada "Axon (captura)", só
   para o próprio exe, e apaga as regras de entrada antigas dele (inclusive o bloqueio que
   um "Cancelar" no aviso do Windows deixa). Sem ela, o firewall pode descartar o que chega
