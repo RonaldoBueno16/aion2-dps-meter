@@ -1,4 +1,4 @@
-# Medidor de DPS para AION 2 (Global)
+# Axon: medidor de DPS para AION 2 (Global)
 
 Overlay externo que mostra o dano de cada jogador e de cada skill, lendo o tráfego de
 rede do jogo passivamente. Não injeta código, não lê memória e não abre handle no
@@ -7,16 +7,22 @@ processo do jogo. Formato do protocolo e medições em [PROTOCOLO.md](PROTOCOLO.
 ## Usar
 
 Pela release: baixe o zip da última versão em Releases, extraia e abra o
-`Aion2Meter.exe` (executável único de ~2 MB, sem instalar nada; passo a passo nas notas
+`Axon.exe` (executável único de ~2 MB, sem instalar nada; passo a passo nas notas
 da release). Para compilar daqui (Rust estável, testado com 1.99 MSVC):
 
 ```powershell
 cargo build --release -p overlay
-.\target\release\Aion2Meter.exe
+.\target\release\Axon.exe
 ```
 
 - O Windows pede permissão de administrador ao abrir (a captura por raw socket exige).
 - O jogo precisa estar em "tela cheia em janela" (borderless), que é o padrão atual.
+- O Axon fica como ícone na área de notificação (a seta ao lado do relógio), fora da barra
+  de tarefas. O overlay só aparece com o jogo em primeiro plano: aberto com outro programa
+  na frente, ele espera invisível e surge quando você volta ao jogo. Clique esquerdo no
+  ícone liga ou desliga o overlay; o direito abre o menu (Mostrar/Esconder e "Fechar
+  Axon"). Escondido, o medidor continua contando. O jogo é achado pela janela (classe
+  `UnrealWindow`, título "AION2"), sem abrir handle no processo dele.
 - Cada jogador ocupa duas linhas: o nome em cima e `Classe · Nv · GS` embaixo (classe em
   inglês, por escolha; GS é o número que o jogo mostra como Power). `?` = ainda não
   chegou; `~31` = valor da memória, visto numa sessão anterior e talvez velho.
@@ -30,7 +36,8 @@ cargo build --release -p overlay
   cada nome, inclusive o seu, a cada 30 s e ao fechar. Com o overlay aberto no meio da
   sessão, você é reconhecido pelo nome no primeiro abate ou invocação. Valor lido na
   conexão atual sempre vence.
-- Arraste a janela pelo fundo. Clique num jogador para ver as skills. "Zerar" começa
+- Arraste a janela pelo fundo; ela não sai de cima do jogo (aberta em outro monitor, é
+  trazida para dentro). Clique num jogador para ver as skills. "Zerar" começa
   uma luta nova; ela também zera sozinha depois de 15 s sem dano (ajustável).
 - ⚙ abre as configurações, que valem na hora e ficam em
   `%LOCALAPPDATA%\Aion2Meter\config.json`:
@@ -42,8 +49,8 @@ cargo build --release -p overlay
     captura em grupo mostrar o pacote do grupo.
   - **Luta**: segundos sem dano até a luta zerar, de 5 a 120.
   - **Tamanho**: de 60% a 200%, escalando a janela inteira.
-- ‹ ou › (a seta aponta para a borda mais perto) desliza a janela até a borda da área de
-  trabalho do monitor e deixa só a aba "Overlay"; clicar nela traz a janela de volta ao
+- ‹ ou › (a seta aponta para a borda mais perto) desliza a janela até a borda do jogo e
+  deixa só a aba "Overlay"; clicar nela traz a janela de volta ao
   mesmo lugar. Recolhido, o medidor continua contando. Com as animações do Windows
   desligadas, a janela vai direto, sem deslizar.
 - O rodapé mostra a versão e só avisa enquanto procura o servidor do jogo, enquanto baixa
@@ -55,7 +62,9 @@ cargo build --release -p overlay
   `%LOCALAPPDATA%\Aion2Meter` (`skills-pt.json` e `icones/`); apague a pasta para rebaixar.
 - Clicar no overlay não tira o foco do teclado do jogo (`WS_EX_NOACTIVATE`, reaplicado a
   cada quadro porque o winit apaga o bit ao mostrar a janela; conferido no jogo em
-  2026-10-02, junto com arrastar e expandir jogador).
+  2026-10-02, junto com expandir jogador). O arraste é próprio desde a 0.3.0 (cursor +
+  `SetWindowPos`): o `StartDrag` do winit ignorava arrastes depois de um que não entrou no
+  laço de mover do Windows.
 - Rede: a captura é passiva, mas o medidor faz requisições próprias ao questlog.gg (só o
   código da skill) e ao CDN da NCSoft (ícones), uma vez por skill, depois fica no cache.
 - Abas **DPS | Tank | Healer**: a luta é a mesma (duração, "Zerar" e o tempo sem dano
@@ -76,12 +85,13 @@ cargo build --release -p overlay
 |---|---|
 | `crates/nucleo` | Protocolo (varint, LZ4, framing, parsers), captura (raw socket, pcapng, remontagem TCP), medição (placar, catálogo de skills) e formatação pt-BR |
 | `crates/nucleo/tests` | LZ4 contra o `lz4_flex`, framing, remontagem TCP, parsers com bytes reais, placar e troca de servidor (`cargo test`). O teste de rede do catálogo é opcional: `cargo test -p nucleo --test catalogo -- --ignored` |
-| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Aion2Meter.exe`. O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada) |
+| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada) |
+| `crates/overlay/assets` | `logo-axon.jpg` (a logo original) e `axon.ico`, o hexágono recortado dela com fundo transparente, de 16 a 256 px |
 | `crates/replay` | Replay de `.pcapng` com diagnóstico e modo `ao-vivo` no console |
 | `dados/skills.json` | Opcional, fora do repositório e das releases: nomes em inglês do RATmeter (GPL-3.0, ver PROTOCOLO.md §9), só reserva quando o questlog não tem a skill |
 | `capturar.ps1` | Grava `captura.pcapng` com o pktmon do Windows (admin). Capturas ficam fora do repositório: têm o seu tráfego |
 | `ao-vivo.ps1` | Roda o modo `ao-vivo` do replay como admin e grava `ao-vivo-log.txt` (antes: `cargo build --release -p replay`) |
-| `.github/workflows/release.yml` | Tag `v*` → testes → `Aion2Meter.exe` → release com o zip |
+| `.github/workflows/release.yml` | Tag `v*` → testes → `Axon.exe` → release com o zip |
 
 ## Lançar uma versão
 
@@ -94,7 +104,7 @@ cargo build --release -p overlay
 
 Enquanto o Actions deste repositório falhar antes de criar os jobs (`startup_failure`,
 visto em 2026-10-02), gere o zip num clone limpo da tag (`cargo build --release -p
-overlay`, zip só com o `Aion2Meter.exe`) e publique com `gh release create` usando
+overlay`, zip só com o `Axon.exe`) e publique com `gh release create` usando
 `.github/notas-da-release.md`.
 
 ## Depois de um patch do jogo

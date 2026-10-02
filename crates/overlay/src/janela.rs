@@ -26,7 +26,9 @@ use nucleo::medicao::sessao::Sessao;
 use recolher::{Dobra, Lado};
 use serde::{Deserialize, Serialize};
 
+use crate::bandeja::Bandeja;
 use crate::config::{self, Config};
+use crate::jogo;
 
 /// 470 e não os 390 do WPF: a tabela da aba DPS precisa de ~280 px ao lado do nome.
 pub const LARGURA: f32 = 470.0;
@@ -95,10 +97,13 @@ pub struct Overlay {
     dobra: Dobra,
     /// HWND da janela (0 enquanto o primeiro quadro não chegou).
     janela: isize,
-    /// Arraste da janela pelo fundo: cursor e canto da janela no começo, em pixels físicos.
-    arraste: Option<([i32; 2], [i32; 2])>,
+    /// Arraste da janela pelo fundo: cursor e [x, y, largura, altura] da janela no começo, em
+    /// pixels físicos.
+    arraste: Option<([i32; 2], [i32; 4])>,
     /// Sua linha (ou um esboço com o seu nome) para a amostra da tela de configurações.
     amostra: Option<LinhaJogador>,
+    /// Ícone ao lado do relógio; None se o Windows não deixou criar.
+    bandeja: Option<Bandeja>,
     /// Só no debug (--recolher / --recolher-e-voltar): recolhe aos 2 s e volta aos 4,5 s.
     teste_dobra: Option<(Instant, bool, bool)>,
 }
@@ -120,6 +125,8 @@ impl Overlay {
         let sessao = Arc::new(Mutex::new(Sessao::default()));
         carregar_memoria(&mut travar(&sessao).medidor);
         let replay = arquivo_replay();
+        // Ao vivo, o overlay só aparece por cima do jogo; o replay de debug roda sem o jogo.
+        jogo::seguir(replay.is_none());
         let (captura, erro_captura) = match &replay {
             Some(arquivo) => {
                 reproduzir(sessao.clone(), arquivo.clone());
@@ -150,12 +157,14 @@ impl Overlay {
             config,
             tela: if tem("--config") { Tela::Configuracoes } else { Tela::Medidor },
             dobra: Dobra::Aberto,
-            janela: 0,
+            janela: manter_sem_ativar(cc),
             arraste: None,
             amostra: None,
+            bandeja: None,
             teste_dobra: (tem("--recolher") || tem("--recolher-e-voltar"))
                 .then(|| (Instant::now(), tem("--recolher-e-voltar"), false)),
         };
+        overlay.bandeja = Bandeja::iniciar(overlay.janela);
         overlay.ler_placar();
         Ok(overlay)
     }
@@ -238,9 +247,9 @@ impl Overlay {
 
     fn cabecalho(&mut self, ui: &mut Ui, tabela: &Tabela) {
         let titulo = if tabela.jogadores.is_empty() {
-            "AION2 Medidor".to_string()
+            "Axon".to_string()
         } else {
-            format!("AION2  ·  {}  ·  {}", minutos_e_segundos(self.placar.duracao), compacto(tabela.total))
+            format!("Axon  ·  {}  ·  {}", minutos_e_segundos(self.placar.duracao), compacto(tabela.total))
         };
         ui.horizontal(|ui| {
             ui.label(RichText::new(titulo).font(fonte(12.0, true)).color(texto()));
@@ -638,6 +647,7 @@ impl eframe::App for Overlay {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.bandeja = None;
         self.captura = None;
         self.salvar_memoria();
     }
@@ -912,7 +922,7 @@ fn configurar_estilo(ctx: &egui::Context) -> Result<(), String> {
 /// de receber o WM_EXITSIZEMOVE do anterior (winit 0.30, `handle_os_dragging`), e um arraste que
 /// não chega a entrar no laço de mover do Windows deixaria todos os seguintes sem efeito. Aqui a
 /// janela segue o cursor a cada quadro, sem estado fora deste arraste.
-fn cursor_e_canto(janela: isize) -> Option<([i32; 2], [i32; 2])> {
+fn cursor_e_canto(janela: isize) -> Option<([i32; 2], [i32; 4])> {
     use windows_sys::Win32::Foundation::{POINT, RECT};
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
 
@@ -922,10 +932,10 @@ fn cursor_e_canto(janela: isize) -> Option<([i32; 2], [i32; 2])> {
     let mut cursor = POINT { x: 0, y: 0 };
     let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
     let ok = unsafe { GetCursorPos(&mut cursor) != 0 && GetWindowRect(janela as _, &mut r) != 0 };
-    ok.then_some(([cursor.x, cursor.y], [r.left, r.top]))
+    ok.then_some(([cursor.x, cursor.y], [r.left, r.top, r.right - r.left, r.bottom - r.top]))
 }
 
-fn seguir_cursor(janela: isize, inicio_cursor: [i32; 2], inicio_canto: [i32; 2]) {
+fn seguir_cursor(janela: isize, inicio_cursor: [i32; 2], inicio_canto: [i32; 4]) {
     use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetCursorPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
@@ -936,6 +946,8 @@ fn seguir_cursor(janela: isize, inicio_cursor: [i32; 2], inicio_canto: [i32; 2])
         return;
     }
     let (x, y) = (inicio_canto[0] + cursor.x - inicio_cursor[0], inicio_canto[1] + cursor.y - inicio_cursor[1]);
+    // Não sai de cima do jogo.
+    let (x, y) = jogo::dentro(x, y, inicio_canto[2], inicio_canto[3]);
     unsafe { SetWindowPos(janela as _, std::ptr::null_mut(), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) };
 }
 
@@ -963,7 +975,7 @@ fn manter_sem_ativar(janela: &impl raw_window_handle::HasWindowHandle) -> isize 
 pub fn avisar(mensagem: &str) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
     let utf16 = |texto: &str| texto.encode_utf16().chain([0]).collect::<Vec<u16>>();
-    let (texto, titulo) = (utf16(mensagem), utf16("Aion2Meter"));
+    let (texto, titulo) = (utf16(mensagem), utf16("Axon"));
     unsafe { MessageBoxW(std::ptr::null_mut(), texto.as_ptr(), titulo.as_ptr(), MB_OK | MB_ICONERROR) };
 }
 

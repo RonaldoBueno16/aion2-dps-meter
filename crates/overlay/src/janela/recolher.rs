@@ -1,5 +1,5 @@
-//! Recolher para a borda: a janela desliza até a borda mais próxima da área de trabalho do monitor
-//! (sem a barra de tarefas) e vira uma aba "Overlay ›" colada nela; clicar na aba traz a janela de
+//! Recolher para a borda: a janela desliza até a borda mais próxima da área do jogo (ou da área de
+//! trabalho do monitor, sem a barra de tarefas, no replay) e vira uma aba "Overlay ›" colada nela; clicar na aba traz a janela de
 //! volta ao lugar de antes. Posições em pixels físicos, como o Windows devolve.
 
 use std::time::{Duration, Instant};
@@ -8,6 +8,8 @@ use eframe::egui::{self, Pos2, Vec2, ViewportCommand, pos2};
 use windows_sys::Win32::Foundation::{HWND, RECT};
 use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW};
+
+use crate::jogo;
 
 const DURACAO: Duration = Duration::from_millis(220);
 
@@ -142,10 +144,16 @@ fn retangulo(janela: isize) -> Option<Retangulo> {
     (ok != 0).then_some(Retangulo { esquerda: r.left, topo: r.top, direita: r.right, base: r.bottom })
 }
 
-/// Área de trabalho (sem a barra de tarefas) do monitor onde a janela está.
+/// Área do jogo, quando o overlay segue o jogo; senão, a área de trabalho (sem a barra de
+/// tarefas) do monitor onde a janela está.
 fn area_de_trabalho(janela: isize) -> Option<Retangulo> {
     if janela == 0 {
         return None;
+    }
+    if jogo::seguindo()
+        && let Some([esquerda, topo, direita, base]) = jogo::area()
+    {
+        return Some(Retangulo { esquerda, topo, direita, base });
     }
     unsafe {
         let monitor = MonitorFromWindow(janela as HWND, MONITOR_DEFAULTTONEAREST);
