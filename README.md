@@ -26,12 +26,21 @@ cargo build --release -p overlay
 - Cada jogador ocupa duas linhas: o nome em cima e `Classe · Nv · GS` embaixo (classe em
   inglês, por escolha; GS é o número que o jogo mostra como Power). `?` = ainda não
   chegou; `~31` = valor da memória, visto numa sessão anterior e talvez velho.
-- Aba DPS: à direita de cada jogador, a tabela `DPS | Damage(%) | CRIT | AVG | MAX`.
-  Damage é o dano com a parte do jogador no total do grupo medido; CRIT é a fração de
-  golpes críticos; AVG, o dano médio por golpe; MAX, o maior golpe. Expandido, cada skill
-  que aconteceu aparece com as mesmas colunas (aí o % é a parte da skill no total do
-  jogador). Tank e Healer mostram DTPS/HPS, total e % e, expandidos, o detalhe e as 8
-  maiores skills.
+- Cada aba tem uma tabela à direita de cada jogador. Expandido, cada skill que aconteceu
+  aparece com as mesmas colunas (aí o % é a parte da skill no total do jogador):
+  - **DPS**: `DPS | Damage(%) | CRIT | AVG | MAX`. Damage é o dano com a parte do jogador
+    no total medido; CRIT, a fração de golpes críticos; AVG, o dano médio por golpe; MAX,
+    o maior golpe.
+  - **Tank**: `DTPS | Taken(%) | PARRY | CRIT | MAX`. Taken é o dano recebido com a parte
+    do jogador; PARRY, a fração de golpes aparados (o único sinal de mitigação que o
+    pacote traz; bloqueio de escudo e esquiva não têm marca conhecida); CRIT, críticos
+    recebidos; MAX, o maior golpe levado. O AVG fica de fora: o golpe médio depende de
+    qual monstro bateu em quem. Golpes, aparos e mortes aparecem ao passar o mouse.
+  - **Healer**: `HPS | Heal(%) | CRIT | AVG | MAX`, as mesmas contas da DPS sobre a cura.
+    O pacote não separa a sobrecura, então o HPS pode incluir cura que passou do HP cheio.
+  - Proposta das colunas de Tank e Healer feita a partir do LOA Details (Tanked, T%, TPS),
+    do Details! e do Recount (Damage Taken, Parry, Healing Done, HPS), cruzada com o que
+    o pacote 0x3804 traz.
 - A memória (`%LOCALAPPDATA%\Aion2Meter\jogadores.json`) guarda o último level e Power de
   cada nome, inclusive o seu, a cada 30 s e ao fechar. Com o overlay aberto no meio da
   sessão, você é reconhecido pelo nome no primeiro abate ou invocação. Valor lido na
@@ -41,8 +50,9 @@ cargo build --release -p overlay
   uma luta nova; ela também zera sozinha depois de 15 s sem dano (ajustável).
 - ⚙ abre as configurações, que valem na hora e ficam em
   `%LOCALAPPDATA%\Aion2Meter\config.json`:
-  - **Linha de cada jogador**: clique numa coluna da tabela da aba DPS ou em Classe, Nv
-    ou GS na linha de amostra para esconder ou mostrar (o escondido fica riscado).
+  - **Linha de cada jogador**: escolha a aba e clique numa coluna da tabela ou em Classe,
+    Nv ou GS na linha de amostra para esconder ou mostrar (o escondido fica riscado). Cada
+    aba guarda as suas colunas; Classe, Nv e GS valem para as três.
   - **Só o meu dano**: só a sua linha, nas três abas; a % fica sempre em 100%. Enquanto
     você não foi reconhecido (ver Pendências), a lista fica vazia com um aviso.
   - **Alcance**: Proximidade (todos que aparecem perto). Party está desativado até uma

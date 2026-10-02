@@ -45,14 +45,24 @@ enum Aba {
 }
 
 impl Aba {
-    fn por_segundo(self) -> &'static str {
+    /// Cabeçalho e pior caso (para a largura) de cada coluna da tabela da aba.
+    fn colunas(self) -> &'static [(&'static str, &'static str); 5] {
         match self {
-            Aba::Dps => "DPS",
-            Aba::Tank => "DTPS",
-            Aba::Healer => "HPS",
+            Aba::Dps => &COLUNAS_DPS,
+            Aba::Tank => &COLUNAS_TANK,
+            Aba::Healer => &COLUNAS_HEALER,
         }
     }
 }
+
+const COLUNAS_DPS: [(&str, &str); 5] =
+    [("DPS", "999,9K"), ("Damage(%)", "99,99M (100%)"), ("CRIT", "100%"), ("AVG", "999,9K"), ("MAX", "999,9K")];
+/// PARRY no lugar do AVG: o golpe médio recebido depende de qual monstro bateu em quem e não diz
+/// nada do tank; a fração de golpes aparados é o único sinal de mitigação que o pacote traz.
+const COLUNAS_TANK: [(&str, &str); 5] =
+    [("DTPS", "999,9K"), ("Taken(%)", "99,99M (100%)"), ("PARRY", "100%"), ("CRIT", "100%"), ("MAX", "999,9K")];
+const COLUNAS_HEALER: [(&str, &str); 5] =
+    [("HPS", "999,9K"), ("Heal(%)", "99,99M (100%)"), ("CRIT", "100%"), ("AVG", "999,9K"), ("MAX", "999,9K")];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tela {
@@ -177,7 +187,7 @@ impl Overlay {
         drop(sessao);
         self.lido_em = Instant::now();
         if let Some((eu, perfis)) = memoria {
-            self.amostra = Some(amostra(&self.placar, eu, &perfis));
+            self.amostra = Some(amostra(self.tabela_bruta(), eu, &perfis));
         }
         if self.expandir_tudo {
             for (aba, tabela) in [(Aba::Dps, &self.placar.dano), (Aba::Tank, &self.placar.dano_recebido), (Aba::Healer, &self.placar.cura)] {
@@ -220,14 +230,27 @@ impl Overlay {
         self.ler_placar();
     }
 
-    /// A tabela da aba atual, só com você se "Só o meu dano" estiver ligado.
-    fn tabela(&self) -> Tabela {
-        let tabela = match self.aba {
+    fn tabela_bruta(&self) -> &Tabela {
+        match self.aba {
             Aba::Dps => &self.placar.dano,
             Aba::Tank => &self.placar.dano_recebido,
             Aba::Healer => &self.placar.cura,
-        };
+        }
+    }
+
+    /// A tabela da aba atual, só com você se "Só o meu dano" estiver ligado.
+    fn tabela(&self) -> Tabela {
+        let tabela = self.tabela_bruta();
         if self.config.so_meu_dano { tabela.so_voce() } else { tabela.clone() }
+    }
+
+    /// As colunas ligadas na configuração para a aba atual.
+    fn colunas_ligadas(&mut self) -> &mut [bool; 5] {
+        match self.aba {
+            Aba::Dps => &mut self.config.colunas,
+            Aba::Tank => &mut self.config.colunas_tank,
+            Aba::Healer => &mut self.config.colunas_healer,
+        }
     }
 
     fn conteudo(&mut self, ui: &mut Ui) {
@@ -282,10 +305,15 @@ impl Overlay {
             (
                 Aba::Tank,
                 "Tank",
-                "Dano recebido de monstros. \"aggro N\": N monstros têm este jogador como último alvo (8 s). \
-                 O número de ameaça fica no servidor e não chega ao jogo.",
+                "Dano recebido de monstros. PARRY: fração dos golpes que o jogador aparou. \"aggro N\": N monstros \
+                 têm este jogador como último alvo (8 s); a ameaça em número fica no servidor e não chega ao jogo.",
             ),
-            (Aba::Healer, "Healer", "Cura feita em jogadores. Leitura ainda não conferida numa luta com curandeiro."),
+            (
+                Aba::Healer,
+                "Healer",
+                "Cura feita em jogadores. O pacote não separa a sobrecura, então o HPS pode incluir cura que \
+                 passou do HP cheio. Leitura ainda não conferida numa luta com curandeiro.",
+            ),
         ];
         ui.horizontal(|ui| {
             for (aba, nome, dica) in abas {
@@ -312,45 +340,27 @@ impl Overlay {
             return;
         }
 
-        // Aba DPS: tabela DPS | Damage(%) | CRIT | AVG | MAX (as colunas ligadas na configuração).
-        let colunas = (self.aba == Aba::Dps).then(|| Colunas::medir(ui, self.config.colunas));
-        if let Some(colunas) = &colunas
-            && colunas.alguma()
-        {
+        // A tabela da aba (DPS, Tank ou Healer), com as colunas ligadas na configuração.
+        let ligadas = *self.colunas_ligadas();
+        let colunas = Colunas::medir(ui, self.aba.colunas(), ligadas);
+        if colunas.alguma() {
             colunas.cabecalho(ui);
         }
 
         let maior = tabela.jogadores[0].total;
         for j in &tabela.jogadores {
-            self.linha_jogador(ui, j, maior, colunas.as_ref());
-            if !self.expandidos.contains(&(self.aba, j.id)) {
-                continue;
-            }
-            if let Some(colunas) = &colunas {
+            self.linha_jogador(ui, j, maior, &colunas);
+            if self.expandidos.contains(&(self.aba, j.id)) {
                 // Todas as skills que aconteceram, com as mesmas colunas do jogador.
                 for s in &j.skills {
-                    self.linha_skill_tabela(ui, s, colunas);
+                    self.linha_skill(ui, s, &colunas);
                 }
-                continue;
-            }
-
-            let mut detalhe =
-                LayoutJob::single_section(self.detalhe(j), TextFormat::simple(fonte(10.0, false), texto().gamma_multiply(0.7)));
-            detalhe.wrap.max_width = ui.available_width() - 18.0;
-            let detalhe = montar(ui, detalhe);
-            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), detalhe.size().y + 2.0), Sense::hover());
-            ui.painter().galley(rect.min + vec2(18.0, 0.0), detalhe, texto());
-            for s in j.skills.iter().take(8) {
-                self.linha_skill(ui, s);
             }
         }
     }
 
-    fn detalhe(&self, j: &LinhaJogador) -> String {
-        if self.aba != Aba::Tank {
-            let golpes = if self.aba == Aba::Healer { "curas" } else { "golpes" };
-            return format!("{} {golpes}  ·  crítico {}", j.golpes, p(razao(j.criticos, j.golpes), 0));
-        }
+    /// Dica da linha na aba Tank: as contagens que não cabem na tabela.
+    fn detalhe_tank(j: &LinhaJogador) -> String {
         let mut texto = format!(
             "{} golpes recebidos  ·  {} aparados ({})  ·  {} {}",
             j.golpes,
@@ -366,53 +376,40 @@ impl Overlay {
         texto
     }
 
-    fn linha_jogador(&mut self, ui: &mut Ui, j: &LinhaJogador, maior: f64, colunas: Option<&Colunas>) {
+    fn linha_jogador(&mut self, ui: &mut Ui, j: &LinhaJogador, maior: f64, colunas: &Colunas) {
         let largura = ui.available_width();
         let expandido = self.expandidos.contains(&(self.aba, j.id));
         let tank = self.aba == Aba::Tank;
 
-        // Lado direito: as células da tabela (aba DPS) ou "X DTPS  total  %" (Tank e Healer).
-        let (celulas, direita, largura_direita) = match colunas {
-            Some(colunas) => {
-                let textos = celulas(j.por_segundo, j.total, j.porcentagem, j.criticos, j.golpes, j.maximo);
-                let celulas: Vec<Arc<Galley>> = textos
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, t)| montar(ui, LayoutJob::single_section(t, TextFormat::simple(fonte(12.0, i == 0), texto()))))
-                    .collect();
-                (celulas, None, colunas.largura_total())
-            }
-            None => {
-                let mut direita = LayoutJob::default();
-                trecho(&mut direita, &format!("{} {}", compacto(j.por_segundo), self.aba.por_segundo()), 12.0, true, texto());
-                trecho(&mut direita, &format!("  {}  {}", compacto(j.total), p(j.porcentagem, 0)), 12.0, false, texto());
-                let direita = montar(ui, direita);
-                let largura_direita = direita.size().x + 6.0;
-                (Vec::new(), Some(direita), largura_direita)
-            }
-        };
-        let visiveis = colunas.map_or([true; 5], |c| c.visiveis);
+        let celulas: Vec<Arc<Galley>> = celulas(self.aba, Numeros::from(j))
+            .into_iter()
+            .enumerate()
+            .map(|(i, t)| montar(ui, LayoutJob::single_section(t, TextFormat::simple(fonte(12.0, i == 0), texto()))))
+            .collect();
         let altura_direita = celulas
             .iter()
-            .zip(visiveis)
+            .zip(colunas.visiveis)
             .filter(|(_, visivel)| *visivel)
-            .map(|(g, _)| g)
-            .chain(direita.iter())
-            .fold(0.0_f32, |maior, g| maior.max(g.size().y));
-        let max_esquerda = (largura - largura_direita - 6.0 - 8.0).max(40.0);
+            .fold(0.0_f32, |maior, (g, _)| maior.max(g.size().y));
+        let max_esquerda = (largura - colunas.largura_total() - 6.0 - 8.0).max(40.0);
+
+        // Selos da aba Tank, medidos à parte: o corte com "…" encurta o nome e eles ficam inteiros.
+        // Aggro: quantos monstros têm este jogador como último alvo; a ameaça em número fica no servidor.
+        let mut selos = LayoutJob::default();
+        if tank && j.segurando_aggro > 0 {
+            trecho(&mut selos, &format!("  aggro {}", j.segurando_aggro), 10.0, true, Color32::from_rgb(0xFF, 0xB5, 0x47));
+        }
+        if tank && j.mortes > 0 {
+            trecho(&mut selos, &format!("  ☠{}", j.mortes), 10.0, j.voce, Color32::from_rgb(0xFF, 0x6B, 0x6B));
+        }
+        let selos = (!selos.sections.is_empty()).then(|| montar(ui, selos));
+        let largura_selos = selos.as_ref().map_or(0.0, |g| g.size().x);
 
         let mut nome = LayoutJob::default();
         let seta = if expandido { "▾" } else { "▸" };
         let voce = if j.voce { " (você)" } else { "" };
         trecho(&mut nome, &format!("{seta} {}{voce}", j.nome), 12.0, j.voce, texto());
-        // Aggro: quantos monstros têm este jogador como último alvo. A ameaça em número fica no servidor.
-        if tank && j.segurando_aggro > 0 {
-            trecho(&mut nome, &format!("  aggro {}", j.segurando_aggro), 10.0, true, Color32::from_rgb(0xFF, 0xB5, 0x47));
-        }
-        if tank && j.mortes > 0 {
-            trecho(&mut nome, &format!("  ☠{}", j.mortes), 10.0, j.voce, Color32::from_rgb(0xFF, 0x6B, 0x6B));
-        }
-        nome.wrap = uma_linha(max_esquerda);
+        nome.wrap = uma_linha((max_esquerda - largura_selos).max(40.0));
         let nome = montar(ui, nome);
 
         // Sem nenhum dado ligado na configuração, a linha do jogador fica só com o nome.
@@ -435,49 +432,30 @@ impl Overlay {
 
         let altura_nome = nome.size().y;
         let topo = linha.min.y + (linha.height() - altura_esquerda) / 2.0;
+        let largura_nome = nome.size().x;
         pintor.galley(pos2(linha.min.x + 6.0, topo + 2.0), nome, texto());
+        if let Some(selos) = selos {
+            let y = topo + 2.0 + (altura_nome - selos.size().y) / 2.0 + 1.0;
+            pintor.galley(pos2(linha.min.x + 6.0 + largura_nome, y), selos, texto());
+        }
         if let Some(perfil) = perfil {
             pintor.galley(pos2(linha.min.x + 18.0, topo + 2.0 + altura_nome), perfil, texto());
         }
-        if let Some(direita) = direita {
-            let y_direita = linha.center().y - direita.size().y / 2.0;
-            pintor.galley(pos2(linha.max.x - 6.0 - direita.size().x, y_direita), direita, texto());
-        }
-        if let Some(colunas) = colunas {
-            colunas.pintar(pintor, linha, celulas);
-        }
+        colunas.pintar(pintor, linha, celulas);
 
-        if resposta.on_hover_cursor(CursorIcon::PointingHand).clicked() && !self.expandidos.remove(&(self.aba, j.id)) {
+        let mut resposta = resposta.on_hover_cursor(CursorIcon::PointingHand);
+        if tank {
+            resposta = resposta.on_hover_text(Self::detalhe_tank(j));
+        }
+        if resposta.clicked() && !self.expandidos.remove(&(self.aba, j.id)) {
             self.expandidos.insert((self.aba, j.id));
         }
     }
 
-    fn linha_skill(&mut self, ui: &mut Ui, s: &LinhaSkill) {
+    /// Skill expandida: ícone e nome à esquerda, as mesmas colunas do jogador à direita.
+    fn linha_skill(&mut self, ui: &mut Ui, s: &LinhaSkill, colunas: &Colunas) {
         let largura = ui.available_width();
-        let numeros = format!("{}  {}  {}x", compacto(s.total), p(s.porcentagem, 0), s.golpes);
-        let numeros = montar(ui, LayoutJob::single_section(numeros, TextFormat::simple(fonte(11.0, false), texto().gamma_multiply(0.85))));
-
-        // Moldura fixa: a linha não pula quando o ícone termina de baixar.
-        let inicio_nome = 18.0 + 18.0 + 6.0;
-        let mut nome = LayoutJob::single_section(s.nome.clone(), TextFormat::simple(fonte(11.0, false), texto().gamma_multiply(0.9)));
-        nome.wrap = uma_linha((largura - inicio_nome - 8.0 - numeros.size().x - 6.0).max(40.0));
-        let nome = montar(ui, nome);
-
-        let altura = numeros.size().y.max(nome.size().y).max(18.0);
-        let (rect, _) = ui.allocate_exact_size(vec2(largura, altura + 2.0), Sense::hover());
-        let linha = Rect::from_min_size(rect.min, vec2(largura, altura));
-
-        self.icone(ui, s, linha);
-        let centro = linha.center().y;
-        ui.painter().galley(pos2(linha.min.x + inicio_nome, centro - nome.size().y / 2.0), nome, texto());
-        let x_numeros = linha.max.x - 6.0 - numeros.size().x;
-        ui.painter().galley(pos2(x_numeros, centro - numeros.size().y / 2.0), numeros, texto());
-    }
-
-    /// Skill expandida na aba DPS: ícone e nome à esquerda, as mesmas colunas do jogador à direita.
-    fn linha_skill_tabela(&mut self, ui: &mut Ui, s: &LinhaSkill, colunas: &Colunas) {
-        let largura = ui.available_width();
-        let textos = celulas(s.por_segundo, s.total, s.porcentagem, s.criticos, s.golpes, s.maximo);
+        let textos = celulas(self.aba, Numeros::from(s));
         let formato = TextFormat::simple(fonte(11.0, false), texto().gamma_multiply(0.85));
         let celulas: Vec<Arc<Galley>> =
             textos.into_iter().map(|t| montar(ui, LayoutJob::single_section(t, formato.clone()))).collect();
@@ -662,10 +640,10 @@ fn tamanho_da_aba(ctx: &egui::Context) -> Vec2 {
     (largura + vec2(24.0, 12.0)).ceil()
 }
 
-/// Para a amostra das configurações: a sua linha da aba DPS ou, sem ela, um esboço com o seu nome e
-/// o level e GS guardados.
-fn amostra(placar: &Placar, eu: Option<String>, perfis: &IndexMap<String, PerfilJogador>) -> LinhaJogador {
-    if let Some(j) = placar.dano.jogadores.iter().find(|j| j.voce) {
+/// Para a amostra das configurações: a sua linha na aba ativa ou, sem ela, um esboço com o seu nome
+/// e o level e GS guardados.
+fn amostra(tabela: &Tabela, eu: Option<String>, perfis: &IndexMap<String, PerfilJogador>) -> LinhaJogador {
+    if let Some(j) = tabela.jogadores.iter().find(|j| j.voce) {
         return j.clone();
     }
     let nome = eu.unwrap_or_else(|| "Você".into());
@@ -794,28 +772,27 @@ fn botao(ui: &mut Ui, rotulo: &str, ativo: bool) -> egui::Response {
     resposta.on_hover_cursor(CursorIcon::PointingHand)
 }
 
-/// Colunas da tabela da aba DPS. Largura fixa pelo pior caso de cada coluna, para a tabela não
+/// Colunas da tabela de uma aba. Largura fixa pelo pior caso de cada coluna, para a tabela não
 /// dançar quando os números crescem no meio da luta. Coluna desligada não ocupa espaço.
 struct Colunas {
+    titulos: [&'static str; 5],
     larguras: [f32; 5],
     visiveis: [bool; 5],
 }
 
-const COLUNAS: [(&str, &str); 5] =
-    [("DPS", "999,9K"), ("Damage(%)", "99,99M (100%)"), ("CRIT", "100%"), ("AVG", "999,9K"), ("MAX", "999,9K")];
 const ESPACO_ENTRE_COLUNAS: f32 = 10.0;
 const MARGEM_DIREITA: f32 = 6.0;
 
 impl Colunas {
-    fn medir(ui: &Ui, visiveis: [bool; 5]) -> Self {
+    fn medir(ui: &Ui, definicao: &[(&'static str, &'static str); 5], visiveis: [bool; 5]) -> Self {
         let largura = |amostra: &str, tamanho: f32, negrito: bool| {
             ui.fonts_mut(|f| f.layout_no_wrap(amostra.to_string(), fonte(tamanho, negrito), texto()).size().x)
         };
         let mut larguras = [0.0; 5];
-        for (i, (titulo, pior)) in COLUNAS.iter().enumerate() {
+        for (i, (titulo, pior)) in definicao.iter().enumerate() {
             larguras[i] = largura(titulo, 10.0, false).max(largura(pior, 12.0, i == 0)).ceil();
         }
-        Self { larguras, visiveis }
+        Self { titulos: definicao.map(|(titulo, _)| titulo), larguras, visiveis }
     }
 
     fn alguma(&self) -> bool {
@@ -845,9 +822,10 @@ impl Colunas {
 
     /// Títulos das colunas, alinhados à direita como os números.
     fn cabecalho(&self, ui: &mut Ui) {
-        let titulos: Vec<Arc<Galley>> = COLUNAS
+        let titulos: Vec<Arc<Galley>> = self
+            .titulos
             .iter()
-            .map(|(titulo, _)| ui.fonts_mut(|f| f.layout_no_wrap(titulo.to_string(), fonte(10.0, false), branco(0x99))))
+            .map(|titulo| ui.fonts_mut(|f| f.layout_no_wrap(titulo.to_string(), fonte(10.0, false), branco(0x99))))
             .collect();
         let altura = titulos.iter().fold(0.0_f32, |maior, g| maior.max(g.size().y));
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), altura + 2.0), Sense::hover());
@@ -866,17 +844,45 @@ impl Colunas {
     }
 }
 
-/// DPS | Damage(%) | CRIT | AVG | MAX. O % é a parte no total de quem está sendo medido
-/// (do jogador no grupo, ou da skill no jogador).
-fn celulas(por_segundo: f64, total: f64, porcentagem: f64, criticos: i32, golpes: i32, maximo: f64) -> [String; 5] {
-    let media = if golpes > 0 { total / f64::from(golpes) } else { 0.0 };
-    [
-        compacto(por_segundo),
-        format!("{} ({})", compacto(total), p(porcentagem, 0)),
-        p(razao(criticos, golpes), 0),
-        compacto(media),
-        compacto(maximo),
-    ]
+/// Os números de uma linha da tabela, de um jogador ou de uma skill dele.
+struct Numeros {
+    por_segundo: f64,
+    total: f64,
+    porcentagem: f64,
+    golpes: i32,
+    criticos: i32,
+    aparos: i32,
+    maximo: f64,
+}
+
+impl From<&LinhaJogador> for Numeros {
+    fn from(j: &LinhaJogador) -> Self {
+        let LinhaJogador { por_segundo, total, porcentagem, golpes, criticos, aparos, maximo, .. } = *j;
+        Self { por_segundo, total, porcentagem, golpes, criticos, aparos, maximo }
+    }
+}
+
+impl From<&LinhaSkill> for Numeros {
+    fn from(s: &LinhaSkill) -> Self {
+        let LinhaSkill { por_segundo, total, porcentagem, golpes, criticos, aparos, maximo, .. } = *s;
+        Self { por_segundo, total, porcentagem, golpes, criticos, aparos, maximo }
+    }
+}
+
+/// As células na ordem das colunas da aba (Aba::colunas). O % é a parte no total de quem está
+/// sendo medido (do jogador no grupo, ou da skill no jogador).
+fn celulas(aba: Aba, n: Numeros) -> [String; 5] {
+    let por_segundo = compacto(n.por_segundo);
+    let parte = format!("{} ({})", compacto(n.total), p(n.porcentagem, 0));
+    let critico = p(razao(n.criticos, n.golpes), 0);
+    let maximo = compacto(n.maximo);
+    match aba {
+        Aba::Tank => [por_segundo, parte, p(razao(n.aparos, n.golpes), 0), critico, maximo],
+        Aba::Dps | Aba::Healer => {
+            let media = if n.golpes > 0 { n.total / f64::from(n.golpes) } else { 0.0 };
+            [por_segundo, parte, critico, compacto(media), maximo]
+        }
+    }
 }
 
 fn configurar_estilo(ctx: &egui::Context) -> Result<(), String> {

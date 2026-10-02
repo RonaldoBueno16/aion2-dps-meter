@@ -10,7 +10,7 @@ use eframe::egui::{
 };
 
 use super::{
-    COLUNAS, Colunas, Overlay, Tela, botao, branco, celulas, cor_da_classe, fonte, montar, segmentos_do_perfil, texto,
+    Colunas, Numeros, Overlay, Tela, botao, branco, celulas, cor_da_classe, fonte, montar, segmentos_do_perfil, texto,
 };
 use crate::config::{self, INATIVIDADE_MAX, INATIVIDADE_MIN, ZOOM_MAX, ZOOM_MIN};
 
@@ -31,7 +31,9 @@ impl Overlay {
 
         ui.add_space(10.0);
         secao(ui, "Linha de cada jogador");
-        dica(ui, "Clique numa coluna ou num dado para mostrar ou esconder.");
+        dica(ui, "Clique numa coluna ou num dado para mostrar ou esconder. Cada aba tem as suas colunas.");
+        ui.add_space(6.0);
+        self.abas(ui);
         ui.add_space(6.0);
         self.linha_de_amostra(ui);
 
@@ -149,7 +151,8 @@ impl Overlay {
     fn linha_de_amostra(&mut self, ui: &mut Ui) {
         let Some(j) = self.amostra.clone() else { return };
         let largura = ui.available_width();
-        let todas = Colunas::medir(ui, [true; 5]);
+        let todas = Colunas::medir(ui, self.aba.colunas(), [true; 5]);
+        let ligadas = *self.colunas_ligadas();
         let escondido = |tamanho: f32, negrito: bool| TextFormat {
             font_id: fonte(tamanho, negrito),
             color: branco(0x44),
@@ -157,11 +160,12 @@ impl Overlay {
             ..Default::default()
         };
 
-        let titulos: Vec<Arc<Galley>> = COLUNAS
+        let titulos: Vec<Arc<Galley>> = todas
+            .titulos
             .iter()
             .enumerate()
-            .map(|(i, (titulo, _))| {
-                let formato = if self.config.colunas[i] {
+            .map(|(i, titulo)| {
+                let formato = if ligadas[i] {
                     TextFormat::simple(fonte(10.0, false), branco(0x99))
                 } else {
                     escondido(10.0, false)
@@ -169,11 +173,11 @@ impl Overlay {
                 montar(ui, LayoutJob::single_section(titulo.to_string(), formato))
             })
             .collect();
-        let numeros: Vec<Arc<Galley>> = celulas(j.por_segundo, j.total, j.porcentagem, j.criticos, j.golpes, j.maximo)
+        let numeros: Vec<Arc<Galley>> = celulas(self.aba, Numeros::from(&j))
             .into_iter()
             .enumerate()
             .map(|(i, t)| {
-                let formato = if self.config.colunas[i] {
+                let formato = if ligadas[i] {
                     TextFormat::simple(fonte(12.0, i == 0), texto())
                 } else {
                     escondido(12.0, i == 0)
@@ -214,16 +218,16 @@ impl Overlay {
         for i in 0..5 {
             let direita = bloco.max.x - direitas[i];
             let area = Rect::from_min_max(pos2(direita - todas.larguras[i] - 4.0, bloco.min.y), pos2(direita + 4.0, bloco.max.y));
-            let acao = if self.config.colunas[i] { "Esconder" } else { "Mostrar" };
+            let acao = if ligadas[i] { "Esconder" } else { "Mostrar" };
             let resposta = ui
                 .interact(area, ui.id().with(("coluna", i)), Sense::click())
                 .on_hover_cursor(CursorIcon::PointingHand)
-                .on_hover_text(format!("{acao} {}", COLUNAS[i].0));
+                .on_hover_text(format!("{acao} {}", todas.titulos[i]));
             if resposta.hovered() {
                 realces.push(area);
             }
             if resposta.clicked() {
-                self.config.colunas[i] = !self.config.colunas[i];
+                self.colunas_ligadas()[i] = !ligadas[i];
             }
         }
 

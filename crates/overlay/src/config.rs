@@ -22,8 +22,13 @@ pub enum Alcance {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// DPS, Damage(%), CRIT, AVG e MAX, na ordem da tabela da aba DPS.
+    /// DPS, Damage(%), CRIT, AVG e MAX, na ordem da tabela da aba DPS. O nome ficou o da 0.3.0
+    /// de antes das outras abas terem tabela, para o config.json continuar valendo.
     pub colunas: [bool; 5],
+    /// DTPS, Taken(%), PARRY, CRIT e MAX.
+    pub colunas_tank: [bool; 5],
+    /// HPS, Heal(%), CRIT, AVG e MAX.
+    pub colunas_healer: [bool; 5],
     pub classe: bool,
     pub nivel: bool,
     pub gs: bool,
@@ -40,6 +45,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             colunas: [true; 5],
+            colunas_tank: [true; 5],
+            colunas_healer: [true; 5],
             classe: true,
             nivel: true,
             gs: true,
@@ -103,6 +110,7 @@ mod testes {
         let c = parcial.dentro_das_faixas();
         assert!(c.so_meu_dano);
         assert_eq!(c.colunas, [true; 5]);
+        assert_eq!((c.colunas_tank, c.colunas_healer), ([true; 5], [true; 5]));
         assert!(c.classe && c.nivel && c.gs);
         assert_eq!(c.inatividade, INATIVIDADE_MIN);
         assert_eq!(c.zoom, ZOOM_MAX);

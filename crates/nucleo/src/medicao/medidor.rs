@@ -27,6 +27,8 @@ pub struct LinhaSkill {
     pub porcentagem: f64,
     pub golpes: i32,
     pub criticos: i32,
+    /// Golpes desta skill que o jogador aparou (só no dano recebido).
+    pub aparos: i32,
     pub maximo: f64,
 }
 
@@ -111,6 +113,7 @@ struct SomaSkill {
     total: f64,
     golpes: i32,
     criticos: i32,
+    aparos: i32,
     maximo: f64,
 }
 
@@ -317,6 +320,9 @@ impl Medidor {
             let a = somar(&mut self.recebido, e.alvo_id, e.skill, e.dano as f64 * FATOR_ESCALA_JOGADOR, &e);
             if e.aparo {
                 a.aparos += 1;
+                if let Some(s) = a.skills.get_mut(&dados_jogo::skill_base(e.skill)) {
+                    s.aparos += 1;
+                }
             }
             self.ultimo_alvo_do_mob.insert(e.autor_id, (e.alvo_id, hora));
         }
@@ -441,6 +447,7 @@ impl Medidor {
                         porcentagem: if a.total > 0.0 { s.total / a.total } else { 0.0 },
                         golpes: s.golpes,
                         criticos: s.criticos,
+                        aparos: s.aparos,
                         maximo: s.maximo,
                     })
                     .collect();

@@ -69,6 +69,7 @@ fn golpe_de_mob_em_jogador_vai_para_dano_recebido_e_marca_aggro() {
     quase_igual((166.0 + 191.0) * FATOR_ESCALA_JOGADOR, tank.total);
     assert_eq!(tank.golpes, 2);
     assert_eq!(tank.aparos, 1);
+    assert_eq!(tank.skills[0].aparos, 1); // coluna PARRY da skill expandida
     assert_eq!(tank.segurando_aggro, 1);
 }
 
