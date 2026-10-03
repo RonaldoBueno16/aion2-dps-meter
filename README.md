@@ -95,8 +95,8 @@ cargo build --release -p overlay
   2026-10-02, junto com expandir jogador). O arraste é próprio desde a 0.3.0 (cursor +
   `SetWindowPos`): o `StartDrag` do winit ignora arrastes enquanto não vê o fim do
   anterior, e um arraste que não entra no laço de mover do Windows podia travar os seguintes.
-- Rede: a captura é passiva, mas o medidor faz requisições próprias ao questlog.gg (só o
-  código da skill) e ao CDN da NCSoft (ícones), uma vez por skill, depois fica no cache.
+- Rede: a captura é passiva; as requisições próprias do medidor estão em
+  [Privacidade](#privacidade).
 - Abas **DPS | Tank | Healer**: a luta é a mesma (duração, "Zerar" e o tempo sem dano
   valem para as três), cada aba com o seu total e o detalhe por skill:
   - **DPS**: dano causado em monstros.
@@ -108,6 +108,45 @@ cargo build --release -p overlay
   - **Healer**: cura feita em jogadores, inclusive em si mesmo. Cura é a skill da lista
     fixa ou com o marcador `SkillUIHPHeal` na descrição do questlog.
 - Jogador → jogador sem ser cura (PvP, buffs) fica de fora: o medidor não mede PvP.
+
+## Avisos do Windows e do navegador
+
+O `Axon.exe` ainda não tem assinatura digital. Sem ela, o navegador e o Windows desconfiam
+de exe novo até muita gente baixar aquele mesmo arquivo, e cada versão recomeça do zero.
+
+- **Ao baixar** (Chrome, Edge): o aviso de arquivo pouco baixado ou perigoso tem a opção de
+  manter o arquivo, às vezes dentro do menu `⋯` do download. Escolha manter.
+- **Ao abrir**, "O Windows protegeu o computador": clique em **Mais informações** e depois
+  em **Executar assim mesmo**.
+- **"O Controle Inteligente de Aplicativos bloqueou"** (Windows 11): esse recurso não deixa
+  liberar um programa só. O Axon só passa nele quando o exe tiver assinatura.
+- Para conferir que o arquivo é o da release: `Get-FileHash .\Axon.exe` no PowerShell e
+  compare com o SHA-256 que a página da release mostra ao lado do `Axon.exe`.
+- O botão Atualizar grava o exe novo sem a marca de "baixado da internet", que é o que faz
+  o Windows mostrar o "O Windows protegeu o computador": o aviso fica na primeira instalação.
+
+## Privacidade
+
+A captura só lê: nada do tráfego do jogo sai do seu PC. Nome de personagem, dano, level e o
+resto do que o overlay mostra não são enviados a lugar nenhum. O Axon faz só estas
+requisições próprias, todas HTTPS, com o user-agent `Aion2Meter/<versão> (medidor de DPS
+pessoal)`:
+
+| Para onde | Quando | O que vai no pedido |
+|---|---|---|
+| `questlog.gg` | Com o cache vazio, uma listagem por classe; depois, uma vez por skill que ainda não está no cache | Nome da classe ou código da skill |
+| `assets.playnccdn.com` (CDN da NCSoft) | Uma vez por ícone que ainda não foi baixado | Nome do arquivo do ícone |
+| `api.github.com` | A cada abertura | Pedido da última release deste repositório |
+| `github.com` e o servidor de arquivos do GitHub | Só ao clicar em Atualizar | Pedido do `Axon.exe` da release |
+
+O que é baixado fica em `%LOCALAPPDATA%\Aion2Meter`.
+
+## Licença
+
+MIT, ver [LICENSE](LICENSE). Do RATmeter (GPL-3.0) vieram só fatos sobre o protocolo, como
+números de opcode e códigos de skill de cura; o código deste repositório foi escrito a
+partir do formato descrito em [PROTOCOLO.md](PROTOCOLO.md). O `dados/skills.json`, que é do
+RATmeter, continua fora do repositório e das releases.
 
 ## Estrutura
 
@@ -133,8 +172,9 @@ cargo build --release -p overlay
    com `Aion2Meter-0.3.0-win-x64.zip` e o `Axon.exe` solto, que é o que a atualização pelo
    rodapé baixa (acompanhe com `gh run watch`).
 
-Enquanto o Actions deste repositório falhar antes de criar os jobs (`startup_failure`,
-visto em 2026-10-02), gere o zip num clone limpo da tag (`cargo build --release -p
+Enquanto o Actions deste repositório falhar antes de criar os jobs (desde 2026-10-02; o
+motivo, visto em 2026-10-03, é a conta travada por cobrança: "account is locked due to a
+billing issue", que se resolve em github.com/settings/billing), gere o zip num clone limpo da tag (`cargo build --release -p
 overlay`, zip só com o `Axon.exe`) e publique com `gh release create`, com o zip e o
 `target/release/Axon.exe` como assets, usando `.github/notas-da-release.md`.
 
