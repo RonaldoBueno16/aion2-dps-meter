@@ -145,6 +145,8 @@ pub struct Medidor {
     // Invocações, pets e armadilhas agem com id próprio; o efeito vai para a linha do dono.
     dono_de: HashMap<u32, u32>,
     nome_dono_de: HashMap<u32, String>,
+    // Dono lido do marcador do spawn, à espera de o dono ser jogador conhecido (`confirmar_dono`).
+    dono_marcado: HashMap<u32, u32>,
 
     // Memória por nome, que sobrevive à troca de conexão e (pelo overlay) entre execuções: level e
     // power só chegam no login (você) ou quando o jogador entra na visão (outros). Com o overlay
@@ -172,6 +174,7 @@ impl Default for Medidor {
             jogadores_conhecidos: HashSet::new(),
             dono_de: HashMap::new(),
             nome_dono_de: HashMap::new(),
+            dono_marcado: HashMap::new(),
             memoria: IndexMap::new(),
             meu_nome: None,
         }
@@ -181,6 +184,7 @@ impl Default for Medidor {
 impl Medidor {
     /// Nível 0 = desconhecido (não apaga um nível já visto).
     pub fn definir_jogador(&mut self, id: u32, nome: &str, nivel: i32, voce: bool) {
+        self.dono_marcado.remove(&id); // id reaproveitado por jogador
         if !nome.is_empty() {
             self.nomear(id, nome);
         }
@@ -246,8 +250,38 @@ impl Medidor {
             if !nome_dono.is_empty() && !self.nomes.contains_key(&dono) {
                 self.nomear(dono, nome_dono);
             }
+            self.passar_para_o_dono(invocacao);
         } else if !nome_dono.is_empty() {
             self.nome_dono_de.insert(invocacao, nome_dono.to_string());
+        }
+    }
+
+    /// Na chegada ao world boss de 2026-10-03, o spawn veio depois dos primeiros golpes em 88 de 92
+    /// invocações (mediana 0,6 s): o que a invocação somou como linha própria vai para a do dono. Golpe
+    /// levado por ela sai do Tank, como os que chegam depois do vínculo.
+    fn passar_para_o_dono(&mut self, invocacao: u32) {
+        let dono = self.resolver_autor(invocacao);
+        if dono == invocacao {
+            return;
+        }
+        for tabela in [&mut self.dano, &mut self.cura_candidata] {
+            if let Some(a) = tabela.shift_remove(&invocacao) {
+                juntar(tabela.entry(dono).or_default(), a);
+            }
+        }
+        self.recebido.shift_remove(&invocacao);
+        // Abate da invocação ainda sem vínculo traz o nome do dono, e com o seu nome guardado ela virava "você".
+        if let Some(nome) = self.nomes.shift_remove(&invocacao) {
+            self.nomes.entry(dono).or_insert(nome);
+        }
+        if self.meu_id == Some(invocacao) {
+            self.meu_id = Some(dono);
+        }
+        if let Some(prefixos) = self.prefixos_de.remove(&invocacao) {
+            let destino = self.prefixos_de.entry(dono).or_default();
+            for (prefixo, vezes) in prefixos {
+                *destino.entry(prefixo).or_insert(0) += vezes;
+            }
         }
     }
 
@@ -255,7 +289,26 @@ impl Medidor {
     pub fn esquecer_invocacao(&mut self, entidade: u32) {
         self.dono_de.remove(&entidade);
         self.nome_dono_de.remove(&entidade);
+        self.dono_marcado.remove(&entidade);
         self.jogadores_conhecidos.remove(&entidade);
+    }
+
+    /// Dono do marcador do spawn (espírito do Elementalist, armadilha). Só vira vínculo quando o dono
+    /// for jogador conhecido: em outros tipos de spawn o marcador traz lixo, e um mob tratado como
+    /// invocação tiraria do DPS os golpes que leva.
+    pub fn marcar_dono(&mut self, invocacao: u32, dono: u32) {
+        if !self.dono_de.contains_key(&invocacao) {
+            self.dono_marcado.insert(invocacao, dono);
+            self.confirmar_dono(invocacao);
+        }
+    }
+
+    fn confirmar_dono(&mut self, entidade: u32) {
+        let Some(&dono) = self.dono_marcado.get(&entidade) else { return };
+        if self.jogadores_conhecidos.contains(&dono) && !self.eh_invocacao(dono) {
+            self.dono_marcado.remove(&entidade);
+            self.definir_invocacao(entidade, dono, "");
+        }
     }
 
     fn resolver_autor(&self, mut autor: u32) -> u32 {
@@ -286,11 +339,19 @@ impl Medidor {
             return;
         }
 
-        if skill_de_classe(e.skill) {
+        self.confirmar_dono(e.autor_id);
+        self.confirmar_dono(e.alvo_id);
+
+        // A skill só diz quem é o autor no golpe direto. No DoT ela pode ser de um efeito de jogador
+        // com autor mob: o Círculo de Proteção do Chanter (18730002) chega como DoT do boss no jogador,
+        // e com o boss tratado como jogador 90% do dano nele saiu do DPS (world boss de 2026-10-03).
+        let skill_diz_o_autor = !e.periodico;
+        if skill_diz_o_autor && skill_de_classe(e.skill) {
             self.jogadores_conhecidos.insert(e.autor_id);
         }
 
-        let autor_jogador = self.jogadores_conhecidos.contains(&e.autor_id) || dados_jogo::eh_skill_de_jogador(e.skill);
+        let autor_jogador =
+            self.jogadores_conhecidos.contains(&e.autor_id) || (skill_diz_o_autor && dados_jogo::eh_skill_de_jogador(e.skill));
         let alvo_jogador = self.jogadores_conhecidos.contains(&e.alvo_id);
 
         if autor_jogador && (alvo_jogador || dados_jogo::eh_cura(e.skill)) {
@@ -322,10 +383,13 @@ impl Medidor {
         // Mob → mob e golpe em invocação ficam de fora.
     }
 
-    /// 0x8D04: quem morreu e quem matou. Se a skill que matou é de classe, o matador é jogador e o
-    /// nome dele vale (mob que mata também pode trazer nome; invocação traz o do dono).
-    pub fn registrar_morte(&mut self, entidade: u32, matador: u32, skill: u32, nome_matador: &str, hora: Hora) {
-        let matador_jogador = skill_de_classe(skill) || self.jogadores_conhecidos.contains(&matador);
+    /// 0x8D04: quem morreu e quem matou. Se a skill que matou é de classe e o abate traz servidor, o
+    /// matador é jogador e o nome dele vale (mob que mata também pode trazer nome; invocação traz o do
+    /// dono). O servidor barra mob que mate com efeito de jogador, como no DoT: nas capturas, jogador
+    /// matou com servidor 2401 em 73 de 73 abates, e o world boss com 0.
+    pub fn registrar_morte(&mut self, entidade: u32, matador: u32, skill: u32, servidor: u16, nome_matador: &str, hora: Hora) {
+        let matador_jogador =
+            (skill_de_classe(skill) && (1000..=9999).contains(&servidor)) || self.jogadores_conhecidos.contains(&matador);
         if matador != 0 && matador_jogador && !self.eh_invocacao(matador) && !nome_matador.is_empty() {
             self.nomear(matador, nome_matador);
             self.jogadores_conhecidos.insert(matador);
@@ -375,6 +439,7 @@ impl Medidor {
         self.jogadores_conhecidos.clear();
         self.dono_de.clear();
         self.nome_dono_de.clear();
+        self.dono_marcado.clear();
         self.meu_id = None; // a memória e o seu nome continuam: valem para a conexão nova
     }
 
@@ -487,6 +552,22 @@ impl Medidor {
 
 fn decrescente(a: f64, b: f64) -> Ordering {
     b.partial_cmp(&a).unwrap_or(Ordering::Equal)
+}
+
+fn juntar(destino: &mut Acumulado, a: Acumulado) {
+    destino.total += a.total;
+    destino.golpes += a.golpes;
+    destino.criticos += a.criticos;
+    destino.aparos += a.aparos;
+    destino.mortes += a.mortes;
+    for (skill, s) in a.skills {
+        let d = destino.skills.entry(skill).or_default();
+        d.total += s.total;
+        d.golpes += s.golpes;
+        d.criticos += s.criticos;
+        d.aparos += s.aparos;
+        d.maximo = d.maximo.max(s.maximo);
+    }
 }
 
 fn somar<'a>(tabela: &'a mut IndexMap<u32, Acumulado>, quem: u32, skill: u32, valor: f64, e: &EventoDano) -> &'a mut Acumulado {

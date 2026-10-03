@@ -95,7 +95,8 @@ cargo build --release -p overlay
   jogo, enquanto baixa os nomes das skills ou quando a captura para.
 - O dano é o número que o jogo mostra ao bater (o campo do pacote, sem conversão). Até a
   0.5.1 ele era multiplicado por 18,82 (HP do mob, ver PROTOCOLO.md §6) e não batia com a tela.
-- Invocações, pets e armadilhas somam na linha do dono.
+- Invocações, pets e armadilhas somam na linha do dono, inclusive o espírito do Elementalist e
+  os golpes que chegam antes do pacote de criação da invocação.
 - Skills aparecem em português e com ícone. Nomes: questlog.gg (base comunitária montada
   do cliente Global, API não documentada); ícones: CDN oficial da NCSoft. Tudo fica em
   `%LOCALAPPDATA%\Aion2Meter` (`skills-pt.json` e `icones/`); apague a pasta para rebaixar.
@@ -215,14 +216,16 @@ testes → release) fica para quando o Actions voltar; aí a tag sozinha publica
   sozinha (PROTOCOLO.md §8) e começa uma luta nova. O dos outros chega quando eles entram no seu
   campo de visão (`0x3645`). Depois de um level up o número fica velho até o próximo
   login (ou até o jogador sair e voltar à sua visão): o pacote de level up não é conhecido.
-- **DoT** (`0x3805`): layout não conferido (Ranger não gerou nenhum).
+- **DoT** (`0x3805`): alvo e autor conferidos no world boss; o valor não foi conferido com a
+  tela. A skill do DoT não identifica o autor (PROTOCOLO.md §4).
 - **Healer não conferido**: nenhuma captura teve curandeiro, e a escala 1:1 da cura é
   suposição. Golpe de jogador em mob com skill que o questlog marca como cura (dreno, por
   exemplo) sai do DPS e entra no Healer. Só mexer nessa regra quando uma captura mostrar
   uma skill assim.
 - **Tank**: escala 1:1 conferida num golpe só. "aggro" é inferido do último golpe de
   cada mob, porque o pacote de troca de alvo não foi achado.
-- Invocação de jogador sem legião: o vínculo depende só do nome do dono.
+- Invocação criada antes de o Axon abrir continua como linha própria "#id": o dono só vem no
+  pacote de criação.
 - **Firewall**: a regra não foi conferida num PC com o Firewall do Windows
   ativo (o PC de desenvolvimento usa o firewall do Kaspersky).
 - **Party** (só quem está no seu grupo): o pacote do grupo (`0x9702` em outros medidores)

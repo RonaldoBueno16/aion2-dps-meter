@@ -185,10 +185,13 @@ fn ao_pacote(medidor: &mut Medidor, pacote: &[u8], hora: Hora) {
             } else if spawn.entidade_id != 0 {
                 medidor.esquecer_invocacao(spawn.entidade_id);
             }
+            if spawn.dono_marcado != 0 {
+                medidor.marcar_dono(spawn.entidade_id, spawn.dono_marcado);
+            }
         }
         opcodes::MORTE_ENTIDADE => {
             if let Some(m) = combate::morte(pacote) {
-                medidor.registrar_morte(m.morto, m.matador, m.skill, &m.nome_matador, hora);
+                medidor.registrar_morte(m.morto, m.matador, m.skill, m.servidor, &m.nome_matador, hora);
             }
         }
         opcodes::PODER_JOGADOR => {
