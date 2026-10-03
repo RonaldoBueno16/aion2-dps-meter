@@ -99,9 +99,9 @@ fn cura_em_aliado_e_em_si_mesmo_vai_para_healer_e_nao_para_dano() {
 fn morte_de_jogador_conta_no_tank_e_nome_do_matador_jogador_e_aproveitado() {
     let mut m = Medidor::default();
     m.registrar(golpe_em(55242, 11174, 14340000, 100), T0);
-    m.registrar_morte(55242, 11174, 14020000, "Yoshi", T0 + segundos(1.0)); // Yoshi mata o mob
+    m.registrar_morte(55242, 11174, 14020000, 2401, "Yoshi", T0 + segundos(1.0)); // Yoshi mata o mob
     m.registrar(golpe_em(11174, 60000, 1223340, 500), T0 + segundos(2.0));
-    m.registrar_morte(11174, 60000, 1223340, "Lobo", T0 + segundos(3.0)); // mob mata o Yoshi: "Lobo" não vira jogador
+    m.registrar_morte(11174, 60000, 1223340, 0, "Lobo", T0 + segundos(3.0)); // mob mata o Yoshi: "Lobo" não vira jogador
 
     let p = m.obter_placar();
     assert_eq!(p.dano.jogadores.len(), 1);
@@ -110,6 +110,67 @@ fn morte_de_jogador_conta_no_tank_e_nome_do_matador_jogador_e_aproveitado() {
     let tank = &p.dano_recebido.jogadores[0];
     assert_eq!(tank.mortes, 1);
     assert_eq!(tank.segurando_aggro, 0); // morto não segura aggro
+}
+
+#[test]
+fn dot_de_mob_com_skill_de_jogador_nao_tira_do_dps_o_dano_no_mob() {
+    // World boss de 2026-10-03: o Círculo de Proteção do Chanter chega como DoT do boss no jogador.
+    const BOSS: u32 = 21799;
+    let mut m = Medidor::default();
+    m.registrar(golpe_em(BOSS, 11174, 14340000, 100), T0);
+    m.registrar(EventoDano { periodico: true, ..golpe_em(11174, BOSS, 18730002, 700) }, T0 + segundos(1.0));
+    m.registrar(golpe_em(BOSS, 11174, 14340000, 200), T0 + segundos(2.0));
+
+    let p = m.obter_placar();
+    assert_eq!(p.dano.jogadores.len(), 1);
+    quase_igual(300.0, p.dano.jogadores[0].total);
+    assert_eq!(p.dano_recebido.jogadores.len(), 1);
+    assert_eq!(p.dano_recebido.jogadores[0].id, 11174);
+    quase_igual(700.0, p.dano_recebido.jogadores[0].total);
+}
+
+#[test]
+fn abate_sem_servidor_nao_faz_mob_virar_jogador_nem_com_skill_de_classe() {
+    const BOSS: u32 = 21799;
+    let mut m = Medidor::default();
+    m.registrar(golpe_em(BOSS, 11174, 14340000, 100), T0);
+    m.registrar_morte(11174, BOSS, 18730002, 0, "Arma de Guerra", T0 + segundos(1.0));
+    m.registrar(golpe_em(BOSS, 22222, 11010000, 200), T0 + segundos(2.0));
+
+    let p = m.obter_placar();
+    assert!(p.dano.jogadores.iter().all(|j| j.nome != "Arma de Guerra"));
+    quase_igual(300.0, p.dano.total);
+}
+
+#[test]
+fn dono_do_marcador_so_vale_quando_e_jogador_conhecido() {
+    let mut m = Medidor::default();
+    m.marcar_dono(39394, 512); // espírito da Ivy
+    m.marcar_dono(38784, 1_918_044); // lixo no marcador de um mob
+    m.registrar(golpe(512, 16010000, 100), T0); // Ivy vira jogador conhecido
+    m.registrar(golpe(39394, 16020000, 50), T0 + segundos(1.0));
+    m.registrar(golpe_em(512, 38784, 1223340, 30), T0 + segundos(2.0)); // o mob bate na Ivy
+
+    let p = m.obter_placar();
+    assert_eq!(p.dano.jogadores.len(), 1);
+    assert_eq!(p.dano.jogadores[0].id, 512);
+    quase_igual(150.0, p.dano.jogadores[0].total);
+    quase_igual(30.0, p.dano_recebido.total);
+}
+
+#[test]
+fn golpe_da_invocacao_antes_do_spawn_vai_para_o_dono_quando_o_vinculo_chega() {
+    let mut m = Medidor::default();
+    m.registrar(golpe(512, 16010000, 100), T0); // Ivy
+    m.registrar(golpe(39394, 16020000, 50), T0 + segundos(1.0)); // espírito antes do spawn: linha própria
+    m.registrar(golpe_em(39394, 60000, 1223340, 20), T0 + segundos(1.5)); // mob bate no espírito
+    m.marcar_dono(39394, 512); // o spawn chega
+
+    let p = m.obter_placar();
+    assert_eq!(p.dano.jogadores.len(), 1);
+    quase_igual(150.0, p.dano.jogadores[0].total);
+    assert_eq!(p.dano.jogadores[0].golpes, 2);
+    assert!(p.dano_recebido.jogadores.is_empty());
 }
 
 #[test]
@@ -140,7 +201,7 @@ fn overlay_aberto_no_meio_da_sessao_reconhece_voce_pelo_nome_guardado() {
     m.nova_conexao(); // a memória sobrevive à troca de conexão
 
     m.registrar(golpe(11174, 14340000, 100), T0);
-    m.registrar_morte(MOB, 11174, 14020000, "Yoshi", T0 + segundos(1.0)); // nome chega pelo abate
+    m.registrar_morte(MOB, 11174, 14020000, 2401, "Yoshi", T0 + segundos(1.0)); // nome chega pelo abate
 
     let p = m.obter_placar();
     assert_eq!(p.dano.jogadores.len(), 1);
@@ -177,7 +238,7 @@ fn login_desta_conexao_nao_e_trocado_por_nome_guardado() {
     m.definir_jogador(500, "Yoshi", 31, true); // 0x3633
     m.registrar(golpe(500, 14340000, 100), T0);
     m.registrar(golpe(600, 14340000, 100), T0);
-    m.registrar_morte(MOB, 600, 14020000, "Yoshi", T0 + segundos(1.0)); // outro id com o mesmo nome
+    m.registrar_morte(MOB, 600, 14020000, 2401, "Yoshi", T0 + segundos(1.0)); // outro id com o mesmo nome
 
     let p = m.obter_placar();
     assert!(p.dano.jogadores.iter().find(|j| j.id == 500).unwrap().voce);

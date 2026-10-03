@@ -3,6 +3,13 @@
 # Uso: powershell -ExecutionPolicy Bypass -File capturar.ps1 [-Segundos 60]
 param([int]$Segundos = 60)
 
+# Sem administrador o pktmon recusa tudo ("Acesso negado") e a contagem rodaria sem gravar nada.
+$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host 'Rode num terminal como administrador (Win+X, "Terminal (Administrador)"): o pktmon exige.'
+    exit 1
+}
+
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $log = Join-Path $dir 'captura-log.txt'
 Set-Content -Path $log -Value "Captura iniciada $(Get-Date -Format s)" -Encoding utf8

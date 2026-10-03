@@ -203,6 +203,8 @@ pub struct Morte {
     pub morto: u32,
     pub matador: u32,
     pub skill: u32,
+    /// Servidor do matador: 1000..9999 em jogador, 0 em mob (o world boss de 2026-10-03).
+    pub servidor: u16,
     pub nome_matador: String,
 }
 
@@ -216,7 +218,7 @@ pub fn morte(pacote: &[u8]) -> Option<Morte> {
         m.skill = r.ler_u32()?;
         m.matador = r.ler_varint()? as u32;
         if m.matador != 0 && r.restante() >= 3 {
-            r.pular(2)?; // servidor
+            m.servidor = r.ler_u16()?;
             let tamanho = usize::from(r.ler_u8()?);
             if (1..=72).contains(&tamanho) && r.restante() >= tamanho {
                 m.nome_matador = sem_controle(r.ler_bytes(tamanho)?);
@@ -237,6 +239,9 @@ pub struct Spawn {
     pub invocacao: bool,
     pub dono_id: u32,
     pub nome_dono: String,
+    /// Dono do marcador `FF×8 … 07 02 01|06 [u32]`, em qualquer tipo de spawn. Ainda não conferido:
+    /// o Medidor só aceita se for jogador conhecido.
+    pub dono_marcado: u32,
 }
 
 /// Spawn de invocação, pet ou armadilha (0x3641 com tipo 0x5F no byte baixo da máscara).
@@ -251,6 +256,7 @@ pub fn spawn_invocacao(pacote: &[u8]) -> Spawn {
         let mut r = abrir_corpo(pacote)?;
         s.entidade_id = r.ler_varint()? as u32;
         let mascara = r.ler_u16()?;
+        s.dono_marcado = procurar_marcador_dono(pacote, r.posicao, s.entidade_id);
         if mascara & 0xFF != TIPO_INVOCACAO {
             return Ok(());
         }
@@ -292,6 +298,21 @@ fn procurar_bloco_dono(p: &[u8], desde: usize, propria_entidade: u32) -> u32 {
         i += 1;
     }
     0
+}
+
+/// Primeiro `07 02` depois de `FF×8`, com o 3º byte 01 ou 06, seguido do u32 do dono. Armadilha do
+/// Ranger (tipo 0x5F) traz 06; espírito do Elementalist (0x1F), 01. Na captura do world boss de
+/// 2026-10-03, a classe da invocação bateu com a do dono em 444 de 445; outros tipos trazem lixo no
+/// lugar do dono (ex.: 1.918.044.167), por isso quem confere é o Medidor.
+fn procurar_marcador_dono(p: &[u8], desde: usize, propria_entidade: u32) -> u32 {
+    let achar = |de: usize, alvo: &[u8]| p.get(de..)?.windows(alvo.len()).position(|w| w == alvo).map(|i| de + i);
+    let Some(ffs) = achar(desde, &[0xFF; 8]) else { return 0 };
+    let Some(i) = achar(ffs + 8, &[0x07, 0x02]) else { return 0 };
+    if i + 7 > p.len() || !matches!(p[i + 2], 0x01 | 0x06) {
+        return 0;
+    }
+    let dono = u32_em(p, i + 3);
+    if dono == 0 || dono >= 1 << 24 || dono == propria_entidade { 0 } else { dono }
 }
 
 /// UTF-8 sem os caracteres de controle (bytes inválidos viram U+FFFD).

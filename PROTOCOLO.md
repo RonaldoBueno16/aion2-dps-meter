@@ -50,11 +50,11 @@ eles são preenchimento). Na captura, o bloco descomprimiu com o tamanho exato d
 | Opcode | Conteúdo | Situação |
 |---|---|---|
 | `0x3804` | Dano direto | confirmado (seção 4) |
-| `0x3805` | Dano periódico (DoT) | hipótese: não apareceu nas capturas (Ranger sem DoT) |
+| `0x3805` | Dano periódico (DoT) | alvo e autor conferidos no world boss de 2026-10-03 (seção 4); valor não conferido na tela |
 | `0x3801`, `0x3802`, `0x3803`, `0x3806` | Ciclo de uso de skill (autor, skill, posições em float). Sem dano | confirmado |
 | `0x8D00` | HP atual de entidade | confirmado para mobs e para o jogador (seção 5) |
 | `0x8D04` | Morte de entidade: morto, skill que matou, matador e nome dele | confirmado (seção 5) |
-| `0x3641` | Spawn de entidade; tipo `0x5F` = invocação, pet ou armadilha | confirmado (seção 7) |
+| `0x3641` | Spawn de entidade; tipo `0x5F` = invocação, pet ou armadilha; dono também no marcador `07 02` | confirmado (seção 7) |
 | `0x3633` | Seu personagem (id, nome, level, power), só no login | confirmado (seção 7b) |
 | `0x561C` | Power mudou: `[varint entidade][u32 power]...` (o `0x561D` traz o mesmo valor duas vezes, sem entidade) | confirmado uma vez com o seu personagem (seção 7b) |
 | `0x3645` | Outro jogador entrando no campo de visão (id, nome, level, power, equipamento; 1.300 a 1.500 bytes) | confirmado (seção 7b) |
@@ -88,8 +88,11 @@ jogador → mob = dano causado (aba DPS); mob → jogador = dano recebido (aba T
 jogador → jogador, inclusive em si mesmo, = cura (aba Healer) quando a skill é de cura.
 Jogador → jogador sem ser cura (PvP, buff com valor) e mob → mob ficam de fora.
 
-DoT `0x3805` (hipótese): `varint alvo, u8 efeito (bit 0x02 = dano), varint autor,
-varint desconhecido, u32 skill*100, varint dano`.
+DoT `0x3805`: `varint alvo, u8 efeito (bit 0x02 = dano), varint autor,
+varint desconhecido, u32 skill*100, varint dano`. A skill do DoT não diz quem é o autor:
+no world boss de 2026-10-03, o Círculo de Proteção do Chanter (18730002) chegou 265 vezes
+com autor = boss (#21799) e alvo em jogadores de várias classes (34 alvos, 20 Chanters).
+Por isso o medidor só reconhece jogador pela skill no golpe direto (`0x3804`).
 
 ## 5. HP `0x8D00` e morte `0x8D04`
 
@@ -123,8 +126,9 @@ u8      tamanho + UTF-8   legião
 ```
 
 Sem matador (armadilha que expirou) vem tudo zerado. Mob que mata também pode trazer nome,
-então o medidor só aproveita o nome quando a skill é de classe ou o matador já é jogador
-conhecido. A tabela de ameaça (aggro) fica no servidor e não aparece em nenhum pacote; o
+então o medidor só aproveita o nome quando a skill é de classe e o abate traz servidor, ou
+quando o matador já é jogador conhecido. O servidor veio 1000..9999 nos 73 abates de jogador
+das capturas (2401) e 0 no abate do world boss. A tabela de ameaça (aggro) fica no servidor e não aparece em nenhum pacote; o
 pacote de troca de alvo do mob também não foi achado.
 
 ## 6. Escala do dano (medido)
@@ -167,6 +171,15 @@ O bloco do dono é achado por varredura com todas as validações juntas (format
 pelo A2Tools em `docs/summon-attribution.md`). Na captura: Explosion Trap `#57692`,
 dono `A6 2B 00 00` = `#11174` (Yoshi), legião "Tubazai". Sem legião o bloco vem zerado e
 sobra o nome do dono. Ids são reemitidos ao trocar de zona.
+
+Marcador do dono, em qualquer tipo de spawn: depois de `FF×8`, o primeiro `07 02 xx` com
+`xx` = `06` (armadilha, tipo `0x5F`) ou `01` (espírito do Elementalist, tipo `0x1F`) é
+seguido do u32 do dono. No world boss de 2026-10-03, 428 de 553 invocações com dano tinham
+o dono assim num jogador com nome, e a classe da invocação bateu com a do dono em 444 de
+445. Outros tipos trazem lixo no lugar (ex.: `07 02 01` com dono 1.918.044.167), então o
+medidor só aceita o vínculo quando o dono já é jogador conhecido. O spawn chegou depois
+dos primeiros golpes em 88 de 92 invocações (mediana 0,6 s): o que a invocação somou antes
+passa para a linha do dono.
 
 ## 7b. Jogadores: `0x3645` (outros) e `0x3633` (você)
 

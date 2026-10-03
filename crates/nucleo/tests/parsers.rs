@@ -52,6 +52,25 @@ fn spawn_de_armadilha_traz_dono_e_nome_do_dono() {
     assert_eq!(s.entidade_id, 57692);
     assert_eq!(s.dono_id, 11174);
     assert_eq!(s.nome_dono, "Yoshi");
+    assert_eq!(s.dono_marcado, 11174);
+}
+
+#[test]
+fn spawn_de_espirito_traz_dono_so_no_marcador() {
+    // Espírito da Ivy (#512, Elementalist), máscara 0x101F, captura de login de 2026-10-02.
+    let pacote = hex(concat!(
+        "A8014136E2B3021F1000AE8E2C000002AD709847A342ECC700041046818EEE40",
+        "4D0501EA2DEA2D710600007106000000000000000000000000000018D7010064",
+        "000000F04902000100000000000000A08601000000000090D003000201110144",
+        "AA9809FFFFFFFFFFFFFFFF8075D52ABB03000080040A02EDFB9B478896C3C700",
+        "A84E460702010002000003CD009C040000D0003D010000D6003CF6FFFF1E0000",
+        "00DD1D030000",
+    ));
+
+    let s = combate::spawn_invocacao(&pacote);
+    assert_eq!(s.entidade_id, 39394);
+    assert!(!s.invocacao); // não é 0x5F: o vínculo depende do Medidor conferir o dono
+    assert_eq!(s.dono_marcado, 512);
 }
 
 #[test]
@@ -60,6 +79,7 @@ fn morte_de_mob_traz_skill_matador_e_nome() {
     assert_eq!(m.morto, 46027);
     assert_eq!(m.matador, 11174);
     assert_eq!(m.skill, 14020000);
+    assert_eq!(m.servidor, 2401);
     assert_eq!(m.nome_matador, "Yoshi");
 }
 
@@ -160,4 +180,5 @@ fn spawn_de_mob_nao_e_invocacao() {
     assert!(!s.invocacao);
     assert_ne!(s.entidade_id, 0);
     assert_eq!(s.dono_id, 0);
+    assert_eq!(s.dono_marcado, 0);
 }
