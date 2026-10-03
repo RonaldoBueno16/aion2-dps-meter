@@ -86,6 +86,8 @@ pub struct Overlay {
     sessao: Arc<Mutex<Sessao>>,
     captura: Option<CapturaSocketBruto>,
     erro_captura: Option<String>,
+    /// Sem a regra do firewall deste exe: a captura espera o clique no aviso (Liberar ou Agora não).
+    pedir_firewall: bool,
     catalogo: &'static CatalogoSkills,
     aba: Aba,
     expandidos: HashSet<(Aba, u32)>,
@@ -149,6 +151,8 @@ impl Overlay {
         let replay = arquivo_replay();
         // Ao vivo, o overlay só aparece por cima do jogo; o replay de debug roda sem o jogo.
         jogo::seguir(replay.is_none());
+        // Mudar o firewall só com o clique do usuário. --pedir-firewall (debug) mostra o aviso no replay.
+        let pedir_firewall = tem("--pedir-firewall") || (replay.is_none() && !crate::firewall::liberada());
         let (captura, erro_captura) = match &replay {
             Some(arquivo) => {
                 reproduzir(sessao.clone(), arquivo.clone());
@@ -156,7 +160,7 @@ impl Overlay {
             }
             None => {
                 travar(&sessao).medidor.inatividade = i64::from(config.inatividade) * TICKS_POR_SEGUNDO;
-                iniciar_captura(&sessao)
+                if pedir_firewall { (None, None) } else { iniciar_captura(&sessao) }
             }
         };
 
@@ -164,6 +168,7 @@ impl Overlay {
             sessao,
             captura,
             erro_captura,
+            pedir_firewall,
             catalogo,
             aba: if tem("--tank") { Aba::Tank } else { Aba::Dps },
             expandidos: HashSet::new(),
@@ -286,6 +291,12 @@ impl Overlay {
         let tabela = self.tabela();
         self.cabecalho(ui, &tabela);
         ui.add_space(6.0);
+        if self.pedir_firewall {
+            self.aviso_firewall(ui);
+            ui.add_space(6.0);
+            self.status(ui);
+            return;
+        }
         self.abas(ui);
         ui.add_space(6.0);
         self.linhas(ui, &tabela);
@@ -528,6 +539,8 @@ impl Overlay {
         let mut partes: Vec<String> = Vec::new();
         match &self.erro_captura {
             Some(erro) => partes.push(erro.clone()),
+            // A captura ainda espera o clique no aviso do firewall: não há o que procurar.
+            None if self.pedir_firewall => {}
             None => {
                 if self.fluxo.is_none() {
                     partes.push(self.procurando().into());
@@ -571,6 +584,46 @@ impl Overlay {
                 });
             });
         });
+    }
+
+    /// Primeira abertura (ou exe em outra pasta): explica a regra do firewall, que só é criada com o
+    /// clique. "Agora não" abre a captura sem a regra; se o firewall barrar, o rodapé avisa, e o aviso
+    /// volta na próxima abertura.
+    fn aviso_firewall(&mut self, ui: &mut Ui) {
+        ui.label(RichText::new("Liberar o Axon no Firewall do Windows").font(fonte(12.0, true)).color(texto()));
+        ui.add_space(4.0);
+        let explicacao = "Para medir, o Axon precisa receber os pacotes que o servidor do jogo manda para o seu PC. \
+            Liberar cria a regra de entrada \"Axon (captura)\", só para este programa, no lugar das regras antigas \
+            dele (inclusive um bloqueio deixado pelo aviso do Windows). Para desfazer: Firewall do Windows > \
+            Configurações avançadas > Regras de Entrada.";
+        ui.add(egui::Label::new(RichText::new(explicacao).font(fonte(11.0, false)).color(branco(0xBB))).wrap());
+        ui.add_space(8.0);
+        let (liberar, agora_nao) = ui
+            .horizontal(|ui| {
+                let liberar = botao(ui, "Liberar", true).on_hover_text("Cria a regra e começa a medir");
+                ui.add_space(6.0);
+                let dica = "Começa a medir sem a regra; se o firewall barrar, o rodapé avisa. O aviso volta na próxima abertura.";
+                let agora_nao = botao(ui, "Agora não", false).on_hover_text(dica);
+                (liberar.clicked(), agora_nao.clicked())
+            })
+            .inner;
+        if liberar || agora_nao {
+            self.comecar_captura(liberar);
+        }
+    }
+
+    /// Depois do clique no aviso do firewall. No replay (--pedir-firewall) só some o aviso.
+    fn comecar_captura(&mut self, liberar: bool) {
+        self.pedir_firewall = false;
+        if self.replay {
+            return;
+        }
+        if liberar {
+            crate::firewall::liberar();
+        }
+        (self.captura, self.erro_captura) = iniciar_captura(&self.sessao);
+        // O rodapé espera 15 s de captura aberta antes de acusar o firewall.
+        self.captura_desde = Instant::now();
     }
 
     /// Sem o servidor do jogo ainda, diz o que os contadores da captura apontam.
@@ -791,7 +844,6 @@ fn procurando(entrada: u64, saida: u64, aberta: Duration, com_jogo: Option<Durat
 }
 
 fn iniciar_captura(sessao: &Arc<Mutex<Sessao>>) -> (Option<CapturaSocketBruto>, Option<String>) {
-    crate::firewall::liberar();
     let alimentar = sessao.clone();
     match CapturaSocketBruto::iniciar(Arc::new(move |seg, hora| travar(&alimentar).ao_segmento(&seg, hora))) {
         Ok(captura) => (Some(captura), None),
