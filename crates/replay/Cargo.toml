@@ -3,6 +3,7 @@ name = "replay"
 description = "Replay de .pcapng com diagnóstico e modo ao-vivo no console"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]

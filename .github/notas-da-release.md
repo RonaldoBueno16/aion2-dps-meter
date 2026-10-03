@@ -1,9 +1,11 @@
 ## Como instalar
 
-1. Baixe o `Aion2Meter-<versão>-win-x64.zip` abaixo e extraia numa pasta.
+1. Baixe o `Aion2Meter-<versão>-win-x64.zip` abaixo e extraia numa pasta. Se o navegador avisar que o arquivo é pouco baixado ou perigoso, escolha manter (às vezes a opção fica no menu `⋯` do download): o aviso vem da falta de assinatura digital.
 2. Abra o `Axon.exe` **antes de entrar no mundo** (assim ele lê o seu level e Power no login). Ele fica como ícone ao lado do relógio (na seta ^) e o overlay aparece quando o jogo está na frente.
 3. Aceite o pedido de administrador: a leitura do tráfego do jogo exige. Com ele, o Axon também se libera no Firewall do Windows (regra "Axon (captura)", só para o próprio exe).
 4. Se o Windows mostrar "O Windows protegeu o computador", clique em "Mais informações" e "Executar assim mesmo" (o executável não tem assinatura digital).
+
+Se aparecer "O Controle Inteligente de Aplicativos bloqueou" (Windows 11), não há como liberar só o Axon: ele passa nesse recurso quando o exe tiver assinatura. Para conferir que o arquivo é o desta release, rode `Get-FileHash .\Axon.exe` no PowerShell e compare com o SHA-256 mostrado ao lado do `Axon.exe` abaixo.
 
 Se o rodapé do overlay disser que o firewall está barrando, libere o `Axon.exe` no firewall do seu antivírus (Kaspersky, Avast, Norton...). Se disser que o servidor não foi encontrado, feche VPN, ExitLag ou programa parecido e abra o Axon de novo.
 
