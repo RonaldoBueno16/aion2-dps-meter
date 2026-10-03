@@ -165,23 +165,36 @@ RATmeter, continua fora do repositório e das releases.
 | `dados/skills.json` | Opcional, fora do repositório e das releases: nomes em inglês do RATmeter (GPL-3.0, ver PROTOCOLO.md §9), só reserva quando o questlog não tem a skill |
 | `capturar.ps1` | Grava `captura.pcapng` com o pktmon do Windows (admin). Capturas ficam fora do repositório: têm o seu tráfego |
 | `ao-vivo.ps1` | Roda o modo `ao-vivo` do replay como admin e grava `ao-vivo-log.txt` (antes: `cargo build --release -p replay`) |
-| `.github/workflows/release.yml` | Tag `v*` → testes → `Axon.exe` → release com o zip |
+| `lancar.ps1` | Ensaio e publicação de uma release a partir deste PC (ver "Lançar uma versão") |
+| `.github/workflows/release.yml` | Tag `v*` → testes → `Axon.exe` → release com o zip (parado enquanto o Actions estiver travado) |
 
 ## Lançar uma versão
 
 1. Ajuste `version` em `[workspace.package]` do `Cargo.toml` (SemVer: funcionalidade nova
    sobe a casa do meio e zera a última, 0.2.0 → 0.3.0; correção sobe a última, 0.3.0 →
    0.3.1). A versão aparece no rodapé do overlay.
-2. Com a mudança já no `main`: `git tag v0.3.0` e `git push origin v0.3.0`.
-3. O workflow confere se a tag bate com o `Cargo.toml`, roda os testes e publica a release
-   com `Aion2Meter-0.3.0-win-x64.zip` e o `Axon.exe` solto, que é o que a atualização pelo
-   rodapé baixa (acompanhe com `gh run watch`).
+2. Mescle no `main`.
+3. Ensaio: `powershell -ExecutionPolicy Bypass -File lancar.ps1 -Versao 0.3.0`. Se passar,
+   o mesmo comando com `-Publicar`.
 
-Enquanto o Actions deste repositório falhar antes de criar os jobs (desde 2026-10-02; o
-motivo, visto em 2026-10-03, é a conta travada por cobrança: "account is locked due to a
-billing issue", que se resolve em github.com/settings/billing), gere o zip num clone limpo da tag (`cargo build --release -p
-overlay`, zip só com o `Axon.exe`) e publique com `gh release create`, com o zip e o
-`target/release/Axon.exe` como assets, usando `.github/notas-da-release.md`.
+Todo exe de release sai do `lancar.ps1`, sempre de um clone limpo do GitHub numa pasta nova em
+`%TEMP%\axon-lancamento`. Ele para no primeiro problema e:
+
+- confere que a release ainda não existe, que a versão é maior que a última e bate com o
+  `Cargo.toml`, e que nenhuma captura (`.pcapng`, `.etl`) nem o `dados/skills.json` está no git;
+- roda `cargo test --workspace --locked` e `cargo build --release -p overlay --locked`;
+- confere o `Axon.exe` sem abri-lo: versão e produto nos dados do exe, tamanho abaixo do limite
+  do botão Atualizar, manifesto pedindo administrador;
+- monta `Aion2Meter-0.3.0-win-x64.zip` só com o `Axon.exe` e confere que é o mesmo arquivo;
+- com `-Publicar`, cria a tag no commit testado, publica a release com o zip, o `Axon.exe`
+  solto (o que a atualização pelo rodapé baixa) e `.github/notas-da-release.md`, baixa tudo de
+  volta e confere o SHA-256 com o `digest` da API do GitHub e que ela virou a Latest.
+
+O lançamento é local porque o Actions deste repositório está parado desde 2026-10-02 (conta
+travada por cobrança: "account is locked due to a billing issue"), e o dono decidiu em
+2026-10-03 não liberar a cobrança por enquanto. O `.github/workflows/release.yml` (tag `v*` →
+testes → release) fica para quando o Actions voltar; aí a tag sozinha publica, e o
+`lancar.ps1` só serve para ensaio.
 
 ## Depois de um patch do jogo
 
