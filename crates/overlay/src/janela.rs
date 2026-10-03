@@ -550,11 +550,15 @@ impl Overlay {
                 }
             }
         }
-        // Versão do build, para os amigos dizerem qual usam; com versão nova no GitHub, o botão.
+        // Versão do build, para os amigos dizerem qual usam; com versão nova no GitHub, o botão
+        // Atualizar, e sem ela o Verificar atualização.
         let versao = concat!("v", env!("CARGO_PKG_VERSION"));
         let estado = self.atualizacao.estado();
         partes.push(match &estado {
             Estado::Nada => versao.to_string(),
+            Estado::Consultando => format!("{versao}: verificando..."),
+            Estado::EmDia => format!("{versao}: é a versão mais nova"),
+            Estado::SemResposta => format!("{versao}: o GitHub não respondeu"),
             Estado::Disponivel(n) => format!("{versao} → v{}", n.versao),
             Estado::Baixando(n) => format!("{versao} → v{}: baixando...", n.versao),
             Estado::Falhou(n, erro) => format!("{versao} → v{}: {erro}", n.versao),
@@ -564,20 +568,28 @@ impl Overlay {
             },
         });
         let status = RichText::new(partes.join("  ·  ")).font(fonte(10.0, false)).color(branco(0x99));
-        let rotulo = match estado {
-            Estado::Disponivel(_) => "Atualizar",
-            Estado::Falhou(..) => "Tentar de novo",
-            _ => {
+        let baixar = "Baixa a versão nova do GitHub, confere o arquivo e reabre o Axon";
+        let (rotulo, dica, instalar) = match estado {
+            Estado::Disponivel(_) => ("Atualizar", baixar, true),
+            Estado::Falhou(..) => ("Tentar de novo", baixar, true),
+            Estado::Nada | Estado::EmDia | Estado::SemResposta => {
+                ("Verificar atualização", "Consulta no GitHub se saiu versão nova, sem reabrir o Axon", false)
+            }
+            Estado::Consultando | Estado::Baixando(_) | Estado::Pronta(_) => {
                 ui.add(egui::Label::new(status).wrap());
                 return;
             }
         };
-        // Botão à direita; o texto ocupa o resto, alinhado à esquerda como sem o botão.
+        // Botão à direita; o texto ocupa o resto, alinhado à esquerda como sem o botão. O de
+        // instalar fica em destaque; o de verificar, discreto.
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                let dica = "Baixa a versão nova do GitHub, confere o arquivo e reabre o Axon";
-                if botao(ui, rotulo, true).on_hover_text(dica).clicked() {
-                    self.atualizacao.atualizar();
+                if botao(ui, rotulo, instalar).on_hover_text(dica).clicked() {
+                    if instalar {
+                        self.atualizacao.atualizar();
+                    } else {
+                        self.atualizacao.verificar();
+                    }
                 }
                 ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
                     ui.add(egui::Label::new(status).wrap());

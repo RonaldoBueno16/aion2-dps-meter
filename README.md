@@ -48,6 +48,10 @@ cargo build --release -p overlay
   release, confere tamanho e SHA-256 (o `digest` que a API do GitHub publica), troca o exe
   (o atual vira `Axon.exe.old`, apagado na abertura seguinte) e reabre o Axon. Funciona a
   partir da 0.5.0; quem está numa versão anterior baixa a nova pela página de Releases.
+  Desde a 0.7.0, sem versão nova, o rodapé mostra o botão "Verificar atualização", que faz a
+  mesma consulta sem reabrir o Axon e diz o resultado: `é a versão mais nova`, `o GitHub não
+  respondeu` (sem internet ou acima do limite de 60 consultas por hora da API) ou a versão
+  nova com o Atualizar. A consulta da abertura continua calada quando não há novidade.
 - Cada aba tem uma tabela à direita de cada jogador. Expandido, cada skill que aconteceu
   aparece com as mesmas colunas (aí o % é a parte da skill no total do jogador):
   - **DPS**: `DPS | Damage(%) | CRIT | AVG | MAX`. Damage é o dano com a parte do jogador
@@ -87,8 +91,8 @@ cargo build --release -p overlay
   deixa só a aba "Overlay"; clicar nela traz a janela de volta ao
   mesmo lugar. Recolhido, o medidor continua contando. Com as animações do Windows
   desligadas, a janela vai direto, sem deslizar.
-- O rodapé mostra a versão e só avisa enquanto procura o servidor do jogo, enquanto baixa
-  os nomes das skills ou quando a captura para.
+- O rodapé mostra a versão e o botão de atualização, e só avisa enquanto procura o servidor do
+  jogo, enquanto baixa os nomes das skills ou quando a captura para.
 - O dano é o número que o jogo mostra ao bater (o campo do pacote, sem conversão). Até a
   0.5.1 ele era multiplicado por 18,82 (HP do mob, ver PROTOCOLO.md §6) e não batia com a tela.
 - Invocações, pets e armadilhas somam na linha do dono.
