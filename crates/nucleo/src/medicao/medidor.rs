@@ -184,6 +184,7 @@ impl Default for Medidor {
 impl Medidor {
     /// Nível 0 = desconhecido (não apaga um nível já visto).
     pub fn definir_jogador(&mut self, id: u32, nome: &str, nivel: i32, voce: bool) {
+        self.dono_marcado.remove(&id); // id reaproveitado por jogador
         if !nome.is_empty() {
             self.nomear(id, nome);
         }
@@ -269,6 +270,13 @@ impl Medidor {
             }
         }
         self.recebido.shift_remove(&invocacao);
+        // Abate da invocação ainda sem vínculo traz o nome do dono, e com o seu nome guardado ela virava "você".
+        if let Some(nome) = self.nomes.shift_remove(&invocacao) {
+            self.nomes.entry(dono).or_insert(nome);
+        }
+        if self.meu_id == Some(invocacao) {
+            self.meu_id = Some(dono);
+        }
         if let Some(prefixos) = self.prefixos_de.remove(&invocacao) {
             let destino = self.prefixos_de.entry(dono).or_default();
             for (prefixo, vezes) in prefixos {

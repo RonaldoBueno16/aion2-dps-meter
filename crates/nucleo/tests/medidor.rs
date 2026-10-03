@@ -174,6 +174,24 @@ fn golpe_da_invocacao_antes_do_spawn_vai_para_o_dono_quando_o_vinculo_chega() {
 }
 
 #[test]
+fn armadilha_reconhecida_como_voce_antes_do_vinculo_devolve_o_voce_ao_dono() {
+    let mut m = Medidor::default();
+    m.carregar_memoria(Some("Yoshi".into()), []);
+    m.registrar(golpe(11174, 14340000, 100), T0); // você, ainda sem nome nesta conexão
+    m.registrar_morte(MOB, 57692, 14170001, 2401, "Yoshi", T0 + segundos(1.0)); // armadilha mata: traz o seu nome
+    m.registrar(golpe(57692, 14170001, 40), T0 + segundos(2.0));
+    m.marcar_dono(57692, 11174); // o spawn chega
+
+    let p = m.obter_placar();
+    assert_eq!(p.dano.jogadores.len(), 1);
+    let eu = &p.dano.jogadores[0];
+    assert_eq!(eu.id, 11174);
+    assert_eq!(eu.nome, "Yoshi");
+    assert!(eu.voce);
+    quase_igual(140.0, eu.total);
+}
+
+#[test]
 fn level_e_power_aparecem_na_linha_e_zero_nao_apaga() {
     let mut m = Medidor::default();
     m.definir_jogador(11174, "Yoshi", 30, true);
