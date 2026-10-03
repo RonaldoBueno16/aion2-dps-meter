@@ -18,10 +18,15 @@ cargo build --release -p overlay
 - O Windows pede permissão de administrador ao abrir (a captura por raw socket exige).
 - A captura acompanha a rede: se o IP mudar (outra Wi-Fi, VPN ligada ou desligada, volta da
   suspensão), em até 2 s o endereço novo passa a ser lido e o que sumiu é fechado.
-- Ao abrir, o Axon cria no Firewall do Windows a regra de entrada "Axon (captura)", só
+- Na primeira abertura (e depois de mover o exe de pasta), o overlay pede para liberar o
+  Axon no Firewall do Windows. **Liberar** cria a regra de entrada "Axon (captura)", só
   para o próprio exe, e apaga as regras de entrada antigas dele (inclusive o bloqueio que
-  um "Cancelar" no aviso do Windows deixa). Sem ela, o firewall pode descartar o que chega
-  do servidor e o medidor fica em "Procurando o servidor do jogo...". Antivírus com
+  um "Cancelar" no aviso do Windows deixa); **Agora não** começa a medir sem mexer no
+  firewall, e o pedido volta na próxima abertura. A captura só começa depois do clique,
+  porque a regra só vale para socket aberto depois dela. Sem a regra, o firewall pode
+  descartar o que chega do servidor e o medidor fica em "Procurando o servidor do
+  jogo...". Para desfazer: Firewall do Windows > Configurações avançadas > Regras de
+  Entrada. Antes da 0.6.0 a regra era criada sem perguntar. Antivírus com
   firewall próprio (Kaspersky, Avast, Norton...) não usam essa regra: aí é preciso liberar
   o `Axon.exe` nele. O rodapé avisa quando só sai tráfego e nada chega, e também quando o
   jogo está aberto há 2 minutos sem o servidor aparecer (VPN, ExitLag e similares).
@@ -154,7 +159,7 @@ RATmeter, continua fora do repositório e das releases.
 |---|---|
 | `crates/nucleo` | Protocolo (varint, LZ4, framing, parsers), captura (raw socket, pcapng, remontagem TCP), medição (placar, catálogo de skills) e formatação pt-BR |
 | `crates/nucleo/tests` | LZ4 contra o `lz4_flex`, framing, remontagem TCP, parsers com bytes reais, placar e troca de servidor (`cargo test`). O teste de rede do catálogo é opcional: `cargo test -p nucleo --test catalogo -- --ignored` |
-| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y] [--limite N] [--nova-versao]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada) |
+| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y] [--limite N] [--nova-versao] [--pedir-firewall]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada) |
 | `crates/overlay/assets` | `logo-axon.jpg` (a logo original) e `axon.ico`, o hexágono recortado dela com fundo transparente, de 16 a 256 px |
 | `crates/replay` | Replay de `.pcapng` com diagnóstico e modo `ao-vivo` no console |
 | `dados/skills.json` | Opcional, fora do repositório e das releases: nomes em inglês do RATmeter (GPL-3.0, ver PROTOCOLO.md §9), só reserva quando o questlog não tem a skill |
@@ -201,7 +206,7 @@ overlay`, zip só com o `Axon.exe`) e publique com `gh release create`, com o zi
 - **Tank**: escala 1:1 conferida num golpe só. "aggro" é inferido do último golpe de
   cada mob, porque o pacote de troca de alvo não foi achado.
 - Invocação de jogador sem legião: o vínculo depende só do nome do dono.
-- **Firewall**: a regra automática não foi conferida num PC com o Firewall do Windows
+- **Firewall**: a regra não foi conferida num PC com o Firewall do Windows
   ativo (o PC de desenvolvimento usa o firewall do Kaspersky).
 - **Party** (só quem está no seu grupo): o pacote do grupo (`0x9702` em outros medidores)
   não apareceu em nenhuma captura local; falta uma captura em grupo.
