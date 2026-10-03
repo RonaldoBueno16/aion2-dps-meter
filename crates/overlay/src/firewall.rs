@@ -11,6 +11,8 @@ use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
+use windows_sys::Win32::Globalization::{CP_OEMCP, MultiByteToWideChar};
+
 const NOME: &str = "Axon (captura)";
 /// CREATE_NO_WINDOW: sem ele cada netsh pisca um console na abertura.
 const SEM_JANELA: u32 = 0x0800_0000;
@@ -20,12 +22,31 @@ const SEM_JANELA: u32 = 0x0800_0000;
 pub fn liberada() -> bool {
     let Ok(exe) = std::env::current_exe() else { return false };
     netsh(&format!("show rule name=\"{NOME}\" verbose")).is_some_and(|saida| {
-        saida.status.success() && regra_cobre(&String::from_utf8_lossy(&saida.stdout), &exe.display().to_string())
+        saida.status.success() && regra_cobre(&texto_do_netsh(&saida.stdout, CP_OEMCP), &exe.display().to_string())
     })
 }
 
-/// O caminho sai como foi gravado, em qualquer idioma do Windows. Com acento no caminho a página de
-/// código do console pode não bater: aí a resposta é não, e o Liberar só refaz a regra.
+/// Saída do netsh em texto. No Windows 11 ela vem em UTF-8 quando vai para um pipe (conferido em
+/// 2026-10-03 com o console em 850 e em 65001). Se não for UTF-8 válido, lê na página OEM (850 no
+/// Windows em pt-BR): com o acento lido errado, um caminho como "Área de Trabalho" nunca bateria e
+/// o aviso voltaria em toda abertura.
+fn texto_do_netsh(bytes: &[u8], pagina_oem: u32) -> String {
+    if let Ok(texto) = std::str::from_utf8(bytes) {
+        return texto.to_string();
+    }
+    let Ok(tamanho) = i32::try_from(bytes.len()) else { return String::from_utf8_lossy(bytes).into_owned() };
+    // A primeira chamada só mede; a segunda escreve em `largo`, do tamanho medido.
+    let largura = unsafe { MultiByteToWideChar(pagina_oem, 0, bytes.as_ptr(), tamanho, std::ptr::null_mut(), 0) };
+    if largura <= 0 {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+    let mut largo = vec![0u16; largura as usize];
+    let escritos = unsafe { MultiByteToWideChar(pagina_oem, 0, bytes.as_ptr(), tamanho, largo.as_mut_ptr(), largura) };
+    String::from_utf16_lossy(&largo[..escritos.max(0) as usize])
+}
+
+/// O caminho sai como foi gravado, em qualquer idioma do Windows (o aviso do Windows pode gravar em
+/// minúsculas).
 fn regra_cobre(saida_do_show: &str, exe: &str) -> bool {
     saida_do_show.to_lowercase().contains(&exe.to_lowercase())
 }
@@ -94,5 +115,16 @@ Ok.
         // Axon movido para outra pasta: a regra antiga não serve, o aviso aparece de novo.
         assert!(!regra_cobre(SHOW, r"C:\Users\Ronaldo Bueno\Downloads\Axon\Axon.exe"));
         assert!(!regra_cobre("Nenhuma regra corresponde aos critérios especificados.", exe));
+    }
+
+    #[test]
+    fn caminho_com_acento_bate_em_utf8_e_na_pagina_850() {
+        let exe = r"C:\Users\João\OneDrive\Área de Trabalho\Axon.exe";
+        let linha = format!("Programa:                             {exe}\r\nOk.\r\n");
+        assert!(regra_cobre(&texto_do_netsh(linha.as_bytes(), 850), exe));
+        // A mesma linha na página 850 (ã = 0xC6, Á = 0xB5) não é UTF-8 válido.
+        let oem: Vec<u8> = linha.chars().map(|c| match c { 'ã' => 0xC6, 'Á' => 0xB5, c => c as u8 }).collect();
+        assert!(std::str::from_utf8(&oem).is_err());
+        assert!(regra_cobre(&texto_do_netsh(&oem, 850), exe));
     }
 }
