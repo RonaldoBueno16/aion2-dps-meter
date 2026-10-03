@@ -51,11 +51,10 @@ pub fn descomprimir(origem: &[u8], destino: &mut [u8]) -> Option<usize> {
         }
 
         // Byte a byte de propósito: origem e destino da cópia podem se sobrepor.
-        let mut m = d - distancia;
-        for _ in 0..copia {
+        let inicio = d - distancia;
+        for m in inicio..inicio + copia {
             destino[d] = destino[m];
             d += 1;
-            m += 1;
         }
     }
     Some(d)

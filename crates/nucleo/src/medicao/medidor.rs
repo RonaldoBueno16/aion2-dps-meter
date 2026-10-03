@@ -33,7 +33,7 @@ pub struct LinhaSkill {
 }
 
 /// `nivel_lembrado`/`poder_lembrado`: valor da memória por nome (visto numa conexão anterior), não desta.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct LinhaJogador {
     pub id: u32,
     pub nome: String,
@@ -286,8 +286,7 @@ impl Medidor {
             return;
         }
 
-        let skill_de_classe = (11_000_000..20_000_000).contains(&e.skill);
-        if skill_de_classe {
+        if skill_de_classe(e.skill) {
             self.jogadores_conhecidos.insert(e.autor_id);
         }
 
@@ -326,7 +325,7 @@ impl Medidor {
     /// 0x8D04: quem morreu e quem matou. Se a skill que matou é de classe, o matador é jogador e o
     /// nome dele vale (mob que mata também pode trazer nome; invocação traz o do dono).
     pub fn registrar_morte(&mut self, entidade: u32, matador: u32, skill: u32, nome_matador: &str, hora: Hora) {
-        let matador_jogador = (11_000_000..20_000_000).contains(&skill) || self.jogadores_conhecidos.contains(&matador);
+        let matador_jogador = skill_de_classe(skill) || self.jogadores_conhecidos.contains(&matador);
         if matador != 0 && matador_jogador && !self.eh_invocacao(matador) && !nome_matador.is_empty() {
             self.nomear(matador, nome_matador);
             self.jogadores_conhecidos.insert(matador);
@@ -344,7 +343,7 @@ impl Medidor {
 
     fn iniciar_ou_continuar_luta(&mut self, hora: Hora) {
         if self.em_luta && hora - self.ultimo > self.inatividade {
-            self.limpar_luta();
+            self.reiniciar();
         }
         if !self.em_luta {
             self.inicio = hora;
@@ -353,7 +352,7 @@ impl Medidor {
         self.ultimo = hora;
     }
 
-    fn limpar_luta(&mut self) {
+    pub fn reiniciar(&mut self) {
         self.dano.clear();
         self.recebido.clear();
         self.cura_candidata.clear();
@@ -365,14 +364,10 @@ impl Medidor {
         *self.prefixos_de.entry(jogador).or_default().entry(skill / 1_000_000).or_insert(0) += 1;
     }
 
-    pub fn reiniciar(&mut self) {
-        self.limpar_luta();
-    }
-
     /// Conexão nova com o servidor (login, troca de servidor ou canal): os ids de entidade mudam
     /// (o mesmo personagem foi #11174, #7301 e #11179), então nada indexado por id continua valendo.
     pub fn nova_conexao(&mut self) {
-        self.limpar_luta();
+        self.reiniciar();
         self.nomes.clear();
         self.niveis.clear();
         self.poderes.clear();
@@ -510,4 +505,9 @@ fn somar<'a>(tabela: &'a mut IndexMap<u32, Acumulado>, quem: u32, skill: u32, va
     }
     s.maximo = s.maximo.max(valor);
     a
+}
+
+/// Faixa de id das skills de classe de jogador.
+fn skill_de_classe(skill: u32) -> bool {
+    (11_000_000..20_000_000).contains(&skill)
 }

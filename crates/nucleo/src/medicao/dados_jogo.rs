@@ -22,10 +22,6 @@ pub fn catalogo() -> Option<&'static CatalogoSkills> {
     CATALOGO.get()
 }
 
-fn nomes() -> Option<&'static HashMap<String, String>> {
-    NOMES.get()
-}
-
 pub fn carregar_nomes(caminho: &Path) {
     let Ok(texto) = std::fs::read_to_string(caminho) else { return };
     if let Ok(nomes) = serde_json::from_str::<HashMap<String, String>>(&texto) {
@@ -47,7 +43,7 @@ pub fn carregar_nomes_padrao() -> Option<PathBuf> {
 }
 
 pub fn nomes_carregados() -> usize {
-    nomes().map_or(0, HashMap::len)
+    NOMES.get().map_or(0, HashMap::len)
 }
 
 /// Skill de jogador (8 dígitos, prefixo 10 a 19), pedra Theo (3.0xx.xxx) ou pet (1xx.xxx).
@@ -93,7 +89,7 @@ pub fn nome_skill(skill: u32) -> String {
     if let Some(info) = catalogo().and_then(|c| c.obter(skill_base(skill))) {
         return info.nome;
     }
-    let ingles = nomes().and_then(|n| n.get(&skill.to_string()).or_else(|| n.get(&(skill / 10_000 * 10_000).to_string())));
+    let ingles = NOMES.get().and_then(|n| n.get(&skill.to_string()).or_else(|| n.get(&(skill / 10_000 * 10_000).to_string())));
     ingles.cloned().unwrap_or_else(|| format!("Skill {skill}"))
 }
 

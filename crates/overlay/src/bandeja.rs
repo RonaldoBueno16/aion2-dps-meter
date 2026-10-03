@@ -26,8 +26,6 @@ use crate::jogo;
 
 /// Mensagem que o Windows manda à janela oculta quando o ícone é clicado.
 const AVISO: u32 = WM_APP + 1;
-/// "Fechar Axon" do menu (também usada pelo teste, que não tem como abrir o menu).
-const FECHAR_AXON: u32 = WM_APP + 2;
 const ALTERNAR: usize = 1;
 const FECHAR: usize = 2;
 /// "TaskbarCreated": o Explorer reiniciou e o ícone precisa ser posto de novo.
@@ -122,7 +120,6 @@ unsafe extern "system" fn procedimento(janela: HWND, mensagem: u32, w: WPARAM, l
                 _ => {}
             },
             WM_TIMER => atualizar(overlay),
-            FECHAR_AXON => fechar(overlay),
             WM_CLOSE => {
                 icone_na_bandeja(janela, NIM_DELETE);
                 DestroyWindow(janela);
@@ -225,6 +222,6 @@ unsafe fn atualizar(overlay: HWND) {
     }
 }
 
-fn utf16(texto: &str) -> Vec<u16> {
+pub fn utf16(texto: &str) -> Vec<u16> {
     texto.encode_utf16().chain([0]).collect()
 }

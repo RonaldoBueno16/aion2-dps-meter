@@ -14,14 +14,6 @@ pub const TRANSPARENCIA_PADRAO: u32 = 15;
 /// Até 90%: com o fundo todo transparente, o overlay some sobre cenas claras do jogo.
 pub const TRANSPARENCIA_MAX: u32 = 90;
 
-/// Quem entra na medição. Party ainda não funciona: falta uma captura em grupo para ler o 0x9702.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Alcance {
-    #[default]
-    Proximidade,
-    Party,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -37,7 +29,6 @@ pub struct Config {
     pub gs: bool,
     /// Só a sua linha, nas três abas.
     pub so_meu_dano: bool,
-    pub alcance: Alcance,
     /// Segundos sem dano até a próxima pancada começar uma luta nova.
     pub inatividade: u32,
     /// Escala da janela inteira (1 = 470 px de largura).
@@ -56,7 +47,6 @@ impl Default for Config {
             nivel: true,
             gs: true,
             so_meu_dano: false,
-            alcance: Alcance::Proximidade,
             inatividade: 15,
             zoom: 1.0,
             transparencia: TRANSPARENCIA_PADRAO,
@@ -87,8 +77,6 @@ impl Config {
         self.inatividade = self.inatividade.clamp(INATIVIDADE_MIN, INATIVIDADE_MAX);
         self.zoom = if self.zoom.is_finite() { arredondar_zoom(self.zoom) } else { 1.0 };
         self.transparencia = self.transparencia.min(TRANSPARENCIA_MAX);
-        // Party ainda não lê o grupo: uma config feita à mão com Party volta para Proximidade.
-        self.alcance = Alcance::Proximidade;
         self
     }
 
