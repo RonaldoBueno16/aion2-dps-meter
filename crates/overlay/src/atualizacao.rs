@@ -1,5 +1,6 @@
 //! Atualização pelo GitHub. Na abertura, uma consulta à última release (a API pública aceita 60 por
-//! hora sem login); com versão nova, o rodapé mostra "v0.5.0 → v0.5.1" e o botão Atualizar. O
+//! hora sem login), repetida quando o usuário clica em "Verificar atualização" no rodapé; com versão
+//! nova, o rodapé mostra "v0.5.0 → v0.5.1" e o botão Atualizar. O
 //! clique baixa o `Axon.exe` solto da release, confere tamanho, SHA-256 (o `digest` que a API
 //! publica para cada asset) e o cabeçalho "MZ", e troca o exe em uso: o Windows deixa renomear um
 //! exe rodando, então o atual vira `.old` e o novo toma o nome. O overlay então abre o novo e fecha;
@@ -29,8 +30,14 @@ pub struct Novidade {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Estado {
-    /// Consultando, em dia, ou sem internet: o rodapé só mostra a versão.
+    /// Consulta da abertura em andamento, em dia, ou sem internet: o rodapé só mostra a versão.
     Nada,
+    /// Consulta pedida pelo botão em andamento.
+    Consultando,
+    /// O botão consultou e esta já é a última versão.
+    EmDia,
+    /// O botão consultou e o GitHub não respondeu (sem internet, API fora do ar, limite por hora).
+    SemResposta,
     Disponivel(Novidade),
     Baixando(Novidade),
     Falhou(Novidade, String),
@@ -47,14 +54,28 @@ impl Atualizacao {
             // Ainda preso se o processo antigo não terminou de fechar: fica para a próxima.
             let _ = std::fs::remove_file(com_sufixo(&exe, ".old"));
         }
-        let estado = Arc::new(Mutex::new(Estado::Nada));
-        let compartilhado = estado.clone();
-        let _ = std::thread::Builder::new().name("atualizacao".into()).spawn(move || {
-            if let Some(novidade) = consultar() {
-                *travar(&compartilhado) = Estado::Disponivel(novidade);
-            }
-        });
-        Self(estado)
+        let atualizacao = Self(Arc::new(Mutex::new(Estado::Nada)));
+        atualizacao.consultar(false);
+        atualizacao
+    }
+
+    /// Botão "Verificar atualização": a mesma consulta da abertura, sem reabrir o Axon.
+    pub fn verificar(&self) {
+        if matches!(self.estado(), Estado::Nada | Estado::EmDia | Estado::SemResposta) {
+            *travar(&self.0) = Estado::Consultando;
+            self.consultar(true);
+        }
+    }
+
+    fn consultar(&self, pelo_botao: bool) {
+        let compartilhado = self.0.clone();
+        let fio = std::thread::Builder::new()
+            .name("atualizacao".into())
+            .spawn(move || *travar(&compartilhado) = depois_da_consulta(ultima_release(), pelo_botao));
+        if fio.is_err() {
+            // Sem a thread, o botão voltaria a aparecer só se o estado sair de Consultando.
+            *travar(&self.0) = depois_da_consulta(Err(()), pelo_botao);
+        }
     }
 
     /// Só no debug (--nova-versao): finge uma versão nova, para ver o rodapé; o download dá 404.
@@ -100,14 +121,27 @@ fn travar(estado: &Mutex<Estado>) -> MutexGuard<'_, Estado> {
     estado.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Sem internet ou com a API fora do ar, não há o que mostrar: o rodapé fica só com a versão.
-fn consultar() -> Option<Novidade> {
+/// Ok(None): a última release não é mais nova que esta (ou não tem o exe solto). Err: sem internet,
+/// API fora do ar ou limite de consultas por hora.
+fn ultima_release() -> Result<Option<Novidade>, ()> {
     let mut resposta = nucleo::medicao::catalogo::cliente_http()
         .get(ULTIMA)
         .header("Accept", "application/vnd.github+json")
         .call()
-        .ok()?;
-    novidade(&resposta.body_mut().read_to_string().ok()?, env!("CARGO_PKG_VERSION"))
+        .map_err(drop)?;
+    let json = resposta.body_mut().read_to_string().map_err(drop)?;
+    Ok(novidade(&json, env!("CARGO_PKG_VERSION")))
+}
+
+/// Na abertura, em dia ou sem internet não há o que mostrar: o rodapé fica só com a versão. Pelo
+/// botão, o rodapé diz o resultado, para o clique não parecer ignorado.
+fn depois_da_consulta(consulta: Result<Option<Novidade>, ()>, pelo_botao: bool) -> Estado {
+    match consulta {
+        Ok(Some(novidade)) => Estado::Disponivel(novidade),
+        Ok(None) if pelo_botao => Estado::EmDia,
+        Err(()) if pelo_botao => Estado::SemResposta,
+        _ => Estado::Nada,
+    }
 }
 
 /// A release, se for mais nova que `atual` e tiver o exe solto com o digest SHA-256.
@@ -244,6 +278,19 @@ mod testes {
         // URL fora das releases do repositório: nada.
         assert!(novidade(&RELEASE.replace("https://github.com/RonaldoBueno16", "https://exemplo.com/x"), "0.4.0").is_none());
         assert_eq!(numeros("0.5.0-beta"), None);
+    }
+
+    #[test]
+    fn so_o_botao_mostra_em_dia_ou_sem_resposta() {
+        let nova = novidade(RELEASE, "0.4.0").unwrap();
+        for pelo_botao in [false, true] {
+            assert_eq!(depois_da_consulta(Ok(Some(nova.clone())), pelo_botao), Estado::Disponivel(nova.clone()));
+        }
+        // Na abertura, em dia ou sem internet: só a versão no rodapé, como antes do botão.
+        assert_eq!(depois_da_consulta(Ok(None), false), Estado::Nada);
+        assert_eq!(depois_da_consulta(Err(()), false), Estado::Nada);
+        assert_eq!(depois_da_consulta(Ok(None), true), Estado::EmDia);
+        assert_eq!(depois_da_consulta(Err(()), true), Estado::SemResposta);
     }
 
     #[test]
