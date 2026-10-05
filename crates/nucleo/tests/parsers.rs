@@ -53,6 +53,8 @@ fn spawn_de_armadilha_traz_dono_e_nome_do_dono() {
     assert_eq!(s.dono_id, 11174);
     assert_eq!(s.nome_dono, "Yoshi");
     assert_eq!(s.dono_marcado, 11174);
+    // Depois do nome: "Armadilha de Explosão" no questlog.
+    assert_eq!(s.codigo, 2920620);
 }
 
 #[test]
@@ -71,6 +73,7 @@ fn spawn_de_espirito_traz_dono_so_no_marcador() {
     assert_eq!(s.entidade_id, 39394);
     assert!(!s.invocacao); // não é 0x5F: o vínculo depende do Medidor conferir o dono
     assert_eq!(s.dono_marcado, 512);
+    assert_eq!(s.codigo, 2920110); // "Espírito do Fogo"
 }
 
 #[test]
@@ -98,6 +101,72 @@ fn golpe_de_mob_no_jogador() {
     assert_eq!(e.autor_id, 55242);
     assert_eq!(e.skill, 1223340);
     assert_eq!(e.dano, 166); // o HP do jogador caiu exatamente 166 (PROTOCOLO.md §6)
+}
+
+#[test]
+fn golpe_de_mob_com_flag_0x20_le_o_dano_depois_do_varint_do_bloco() {
+    // World boss de 2026-10-03: flags 0x30 e o 2º campo do bloco em 2 bytes (B4 03 = 436). Lido como
+    // u8, o dano saía 10.000 (o varint fixo 90 4E logo antes dele).
+    let e = combate::dano(&hex("250438AF400600A7AA0182D91200410230B40302D3F65C0701000000904E86110100")).unwrap();
+    assert_eq!(e.alvo_id, 8239);
+    assert_eq!(e.autor_id, 21799);
+    assert_eq!(e.skill, 1235330);
+    assert_eq!(e.dano, 2182);
+    assert!(e.frente);
+}
+
+#[test]
+fn golpe_pelas_costas() {
+    // Byte de direção 01 (world boss de 2026-10-03, seletor 0x26).
+    let e = combate::dano(&hex("2D0438A7AA012600C6498C75A8003802000001BBEACD41010000009E55F91804BF02BF02BF02BF020100"))
+        .unwrap();
+    assert_eq!(e.alvo_id, 21799);
+    assert_eq!(e.dano, 3193);
+    assert!(e.costas);
+    assert!(!e.frente);
+}
+
+#[test]
+fn estado_de_combate() {
+    assert_eq!(combate::estado_combate(&hex("0B218D97DE010000")), Some((28439, false)));
+    assert_eq!(combate::estado_combate(&hex("0A218DE1590001")), Some((11489, true)));
+}
+
+#[test]
+fn buff_novo_renovado_e_removido() {
+    // 0x382A de classe (163300001, da skill 16330000) e o 0x382C da mesma instância 0,15 s depois.
+    let novo = combate::buff(
+        &hex("352A38A7AA010113B10AA1C2BB09640000000000000092999A02A1010000A576012E2DF90000FBEF2148A4257CC78ADE2A46"),
+        true,
+    )
+    .unwrap();
+    assert_eq!(novo, combate::Buff { alvo: 21799, instancia: 1329, codigo: 163300001, duracao_ms: 100 });
+    assert_eq!(combate::buffs_removidos(&hex("122C38A7AA010200C6030100B10A01")), Some((21799, vec![454, 1329])));
+
+    // 0x382B (sem o u8 01) com a instância em 1, 2 e 3 bytes de varint.
+    let renovado = |h: &str| combate::buff(&hex(h), false).unwrap();
+    assert_eq!(
+        renovado("332B38A7AA01135827285D098813000000000000FAA99A02A1010000922D0137B7EF000270F71F481E7373C700D82946"),
+        combate::Buff { alvo: 21799, instancia: 88, codigo: 157100071, duracao_ms: 5000 }
+    );
+    assert_eq!(
+        renovado("332B38881A13C007EB92D70A600900000000000091679A02A1010000881A01B18E15010223B6F947702C6EC7008C4146"),
+        combate::Buff { alvo: 3336, instancia: 960, codigo: 181900011, duracao_ms: 2400 }
+    );
+    assert_eq!(
+        renovado("342B389A5213FDC001ABF8290BCF1800000000000074D09A02A10100009A520D11CC1D0100488920483EBA7BC7CBE72946"),
+        combate::Buff { alvo: 10522, instancia: 24701, codigo: 187300011, duracao_ms: 6351 }
+    );
+}
+
+#[test]
+fn remocao_de_buffs_com_entradas_tipo_0_e_tipo_7() {
+    // Tipo 7 traz 10 bytes a mais depois do motivo.
+    let pacote = hex(concat!(
+        "402C38A7AA01060083070100B00A0100EC0A0107EB0A0BFF211059C80062CA424E078E0C0BFF21",
+        "1059C80062CA424E07AF0B0BFF211059C80062CA424E",
+    ));
+    assert_eq!(combate::buffs_removidos(&pacote), Some((21799, vec![899, 1328, 1388, 1387, 1550, 1455])));
 }
 
 // 0x3645 de 2026-10-02: cabeçalho real + trecho real do bloco do level (os ~1.000 bytes de
@@ -181,4 +250,85 @@ fn spawn_de_mob_nao_e_invocacao() {
     assert_ne!(s.entidade_id, 0);
     assert_eq!(s.dono_id, 0);
     assert_eq!(s.dono_marcado, 0);
+    assert_eq!(s.codigo, 2701341); // "Seguidor de Zikel", Nv 20
+    assert_eq!(s.hp, Some((119_700, 119_700)));
+}
+
+#[test]
+fn tickets_do_login_trazem_a_odyle() {
+    // Login de 2026-10-05, com a tela mostrando 550(+270)/840: lista de 73 tickets.
+    let login = "F2030B614904010000000A01030000008085800100000000040400000006000600000004070000002004080000000301\
+                 090000008085800100000000040A0000000E040B00000002040C0000000E010D0000008085800100000000040E000000\
+                 0E040F0000000E04650000000E04660000000504670000000501C9000000808580010000000001CA0000008085800100\
+                 00000001CB000000808580010000000001CC000000808580010000000001CD000000808580010000000001CE00000080\
+                 858001000000000081969800008296980000839698000084969800008596980000869698000087969800008896980000\
+                 89969800008A969800008B969800008C9698000C01879303A6048E0204028793030604038793030A04048793030A0405\
+                 8793030A04068793030904078793032304088793031C04098793030A040A8793030704658793030A04C987930307044D\
+                 8B93030704B18B93030A04358F93030704998F93030A041D9393030704819393030A04059793030704699793030704B5\
+                 9B930304049D9F93030404BDA29303070421A393030A048DAA93030704F1AA93030A0445B693030704A9B6930307042D\
+                 BA9303070415BE93030704FDC193030704811D2C04030401B4C4040304814A5D050404824A5D050104834A5D05040484\
+                 4A5D050204854A5D050404864A5D0502";
+    let lista = combate::tickets(&hex(login)).unwrap();
+    assert_eq!(lista.len(), 73);
+    // Cortada no último byte: nada (a leitura tem de fechar no fim).
+    assert_eq!(combate::tickets(&hex(&login[..login.len() - 2])), None);
+    let odyle = |lista: &[combate::Ticket]| lista.iter().copied().find(|t| t.id == combate::TICKET_ODYLE);
+    let id = combate::TICKET_ODYLE;
+    assert_eq!(odyle(&lista), Some(combate::Ticket { id, valor: Some(550), extra: Some(270) }));
+    // Ticket comum: só o valor (entrada tipo 04).
+    let comum = lista.iter().find(|t| t.id == 60_000_002);
+    assert_eq!(comum, Some(&combate::Ticket { id: 60_000_002, valor: Some(6), extra: None }));
+
+    // Login de 2026-10-02: a Odyle sem carregada (tipo 04, sem o extra).
+    let lista = combate::tickets(&hex(
+        "F0030B614904010000000201030000008085800100000000040400000002000600000004070000000404080000000101\
+         090000008085800100000000040A0000000E040B00000002040C00000002010D0000008085800100000000040E000000\
+         0E040F0000000E04650000000E04660000000104670000000101C9000000808580010000000001CA0000008085800100\
+         00000001CB000000808580010000000001CC000000808580010000000001CD000000808580010000000001CE00000080\
+         858001000000000081969800008296980000839698000084969800008596980000869698000087969800008896980000\
+         89969800008A969800008B969800008C96980004018793039B0104028793030204038793030204048793030204058793\
+         030204068793030304078793032304088793031C04098793030A040A8793030704658793030204C987930307044D8B93\
+         030704B18B93030204358F93030704998F930302041D9393030704819393030204059793030704699793030704B59B93\
+         0302049D9F93030204BDA29303070421A3930302048DAA93030704F1AA9303020445B693030704A9B6930307042DBA93\
+         03070415BE93030704FDC193030704811D2C04030401B4C4040304814A5D050404824A5D050104834A5D050404844A5D\
+         050204854A5D050404864A5D0502",
+    ))
+    .unwrap();
+    assert_eq!(odyle(&lista), Some(combate::Ticket { id, valor: Some(155), extra: None }));
+
+    // 0x610C de 2026-10-03: o ticket 10 com valor 14. Lido como lista, sobra byte: nada.
+    let mudou = hex("0E0C6100040A0000000E02");
+    assert_eq!(combate::ticket_mudou(&mudou), Some(combate::Ticket { id: 10, valor: Some(14), extra: None }));
+    assert_eq!(combate::tickets(&mudou), None);
+
+    // 0x610C de 2026-10-05 no uso de uma essência OD: carregada 300 → 310 (primeiro byte 01).
+    let essencia = hex("150C61010C01879303A604B602010A000000");
+    assert_eq!(combate::ticket_mudou(&essencia), Some(combate::Ticket { id, valor: Some(550), extra: Some(310) }));
+}
+
+#[test]
+fn spawn_traz_hp_atual_e_maximo() {
+    // Começo de spawns reais das capturas de 2026-10-02 e 03, um de cada flag depois do código.
+    let casos = [
+        // 0x40: world boss Axios, já apanhando (o 1º 0x8D00 depois dele traz 138.076.470).
+        ("FF0D4136A7AA01042000A9A024004002E7A62048C6047BC700042A466CE89A4350DC01B6C2EB4180D0A54C64000000", 21799, 2400425, Some((138_076_470, 160_000_000))),
+        // 0x00: mob comum inteiro.
+        ("6D4136ACAA0105200032A024000002C54F7246263781C700E06A466EAA2243AC730194A70794A70764000000", 21804, 2400306, Some((119_700, 119_700))),
+        // 0x00: mob que já veio morto.
+        ("6C4136CA8F010D20009BA024000002687C1F48CB3D79C7004C2946F1FC1B43ED6E000094A70764000000", 18378, 2400411, Some((0, 119_700))),
+        // 0x08 e 0x48: 3 floats a mais antes do HP.
+        ("AD01413682B9031D1000D48E2C000802703F1E4841CB7CC797CB2A460DC8AA43E4F2949C6C44B8C29DC37DE688C201E729E729E8060000", 56450, 2920148, Some((5_351, 5_351))),
+        ("AE014136E3EE021D1000AF8E2C004802A2F31F489C8E71C7A3612B4602E1914379CF951D8A4378062DC4079EA942018D6E8D6EC80A0000", 46947, 2920111, Some((14_093, 14_093))),
+    ];
+    for (pacote, entidade, codigo, hp) in casos {
+        let s = combate::spawn_invocacao(&hex(pacote));
+        assert_eq!((s.entidade_id, s.codigo, s.hp), (entidade, codigo, hp), "{pacote}");
+    }
+
+    // Flag nunca vista (0x01 no lugar do 0x40 do Axios): layout desconhecido, sem HP.
+    let s = combate::spawn_invocacao(&hex("FF0D4136A7AA01042000A9A024000102E7A62048C6047BC700042A466CE89A4350DC01B6C2EB4180D0A54C"));
+    assert_eq!((s.codigo, s.hp), (2400425, None));
+    // Atual acima do máximo: leitura errada, descartada.
+    let s = combate::spawn_invocacao(&hex("6D4136ACAA0105200032A024000002C54F7246263781C700E06A466EAA2243AC7301A0A70794A707"));
+    assert_eq!(s.hp, None);
 }

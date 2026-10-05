@@ -1,3 +1,4 @@
+pub mod latencia;
 pub mod montador;
 pub mod pcapng;
 pub mod segmento;

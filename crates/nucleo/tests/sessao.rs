@@ -144,3 +144,30 @@ fn download_https_com_heartbeat_por_acaso_nao_vira_o_servidor_do_jogo() {
     }
     assert_eq!(sessao.fluxo.as_deref(), Some(jogo.chave().as_str()));
 }
+
+#[test]
+fn ping_pelo_ack_do_servidor_no_fluxo_travado() {
+    let mut sessao = Sessao::default();
+    let mut jogo = Conexao::nova("193.202.112.171", 62225, 13328);
+    let mut t = T0;
+    for _ in 0..3 {
+        sessao.ao_segmento(&jogo.dados(HEARTBEAT), passar(&mut t, 50));
+    }
+    assert_eq!(sessao.ping(), None);
+
+    // O PC manda 20 bytes; o servidor confirma com um ACK puro (sem dados) 15 ms depois.
+    let envio = SegmentoTcp::novo(CLIENTE, 62225, jogo.servidor, 13328, 7_000, false, vec![0; 20]);
+    sessao.ao_segmento(&envio, passar(&mut t, 50));
+    let mut ack = SegmentoTcp::novo(jogo.servidor, 13328, CLIENTE, 62225, jogo.seq, false, Vec::new());
+    ack.ack = Some(7_020);
+    sessao.ao_segmento(&ack, passar(&mut t, 15));
+    assert_eq!(sessao.ping(), Some(15 * 10_000));
+
+    // Envio de outro programa para o mesmo servidor não entra.
+    let outro = SegmentoTcp::novo(CLIENTE, 50123, jogo.servidor, 13328, 9_000, false, vec![0; 20]);
+    sessao.ao_segmento(&outro, passar(&mut t, 1));
+    let mut ack = SegmentoTcp::novo(jogo.servidor, 13328, CLIENTE, 62225, jogo.seq, false, Vec::new());
+    ack.ack = Some(9_020);
+    sessao.ao_segmento(&ack, passar(&mut t, 1));
+    assert_eq!(sessao.ping(), Some(15 * 10_000));
+}

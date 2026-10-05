@@ -102,6 +102,23 @@ pub fn icone_skill(skill: u32) -> Option<PathBuf> {
     c.caminho_icone(c.obter(skill_base(skill))?.icone.as_deref())
 }
 
+/// Emblema oficial da classe (`UT_Class_*_Large` na CDN do jogo, o mesmo do questlog e do medidor
+/// Abyss), em branco e dourado. None enquanto não baixou, ou com a classe desconhecida.
+pub fn emblema_classe(classe: &str) -> Option<PathBuf> {
+    let nome = match classe {
+        "Gladiator" | "Templar" | "Assassin" | "Ranger" | "Sorcerer" | "Elementalist" | "Cleric" | "Chanter" => classe,
+        "Spirit" => "Elementalist",
+        "Brawler" => "Fighter",
+        _ => return None,
+    };
+    catalogo()?.caminho_icone(Some(&format!("UT_Class_{nome}_Large")))
+}
+
+/// Ícone do item Energia Odyle na CDN do jogo (o mesmo do medidor Abyss). None enquanto não baixou.
+pub fn icone_odyle() -> Option<PathBuf> {
+    catalogo()?.caminho_icone(Some("Icon_Item_Odenergy_A_001"))
+}
+
 /// Agrupa variantes da mesma skill (14030010, 14030020... viram 14030000).
 pub fn skill_base(skill: u32) -> u32 {
     if (10_000_000..20_000_000).contains(&skill) { skill / 10_000 * 10_000 } else { skill }

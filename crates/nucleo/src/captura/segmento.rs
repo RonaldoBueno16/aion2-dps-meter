@@ -7,6 +7,8 @@ pub struct SegmentoTcp {
     pub destino: Ipv4Addr,
     pub porta_destino: u16,
     pub seq: u32,
+    /// O número de ACK, quando o flag ACK vem ligado.
+    pub ack: Option<u32>,
     pub syn: bool,
     pub dados: Vec<u8>,
     /// "ip:porta > ip:porta", a identidade de uma direção do fluxo.
@@ -28,7 +30,7 @@ impl SegmentoTcp {
         dados: Vec<u8>,
     ) -> Self {
         let chave = format!("{origem}:{porta_origem} > {destino}:{porta_destino}");
-        Self { origem, porta_origem, destino, porta_destino, seq, syn, dados, chave }
+        Self { origem, porta_origem, destino, porta_destino, seq, ack: None, syn, dados, chave }
     }
 
     /// Extrai um segmento TCP sobre IPv4 de um quadro capturado.
@@ -74,15 +76,18 @@ impl SegmentoTcp {
         }
 
         let ipv4 = |i: usize| Ipv4Addr::new(quadro[i], quadro[i + 1], quadro[i + 2], quadro[i + 3]);
-        Some(Self::novo(
+        let be32 = |i: usize| u32::from_be_bytes([quadro[i], quadro[i + 1], quadro[i + 2], quadro[i + 3]]);
+        let mut segmento = Self::novo(
             ipv4(ip + 12),
             be16(quadro, tcp),
             ipv4(ip + 16),
             be16(quadro, tcp + 2),
-            u32::from_be_bytes([quadro[tcp + 4], quadro[tcp + 5], quadro[tcp + 6], quadro[tcp + 7]]),
+            be32(tcp + 4),
             quadro[tcp + 13] & 0x02 != 0,
             quadro[inicio_dados..fim_ip].to_vec(),
-        ))
+        );
+        segmento.ack = (quadro[tcp + 13] & 0x10 != 0).then(|| be32(tcp + 8));
+        Some(segmento)
     }
 }
 
