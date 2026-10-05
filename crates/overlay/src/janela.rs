@@ -37,6 +37,7 @@ use crate::atalho::Atalho;
 use crate::atualizacao::{self, Atualizacao, Estado};
 use crate::bandeja::{self, Bandeja};
 use crate::config::{self, Config};
+use crate::fenda::{self, Fenda};
 use crate::jogo;
 
 /// 470 e não os 390 do WPF: a tabela da aba DPS precisa de ~280 px ao lado do nome.
@@ -69,6 +70,8 @@ const ALTURA_LINHA: f32 = 28.0;
 const PARADO: Duration = Duration::from_secs(5);
 /// Logo do cabeçalho: o hexágono do axon.ico em 64 px.
 const LOGO: &[u8] = include_bytes!("../assets/axon-64.png");
+/// Portal da fenda no rodapé, gerado do assets/fenda.svg em 64 px.
+const FENDA: &[u8] = include_bytes!("../assets/fenda-64.png");
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tela {
@@ -129,6 +132,7 @@ pub struct Overlay {
     /// Ícone da primeira skill de cada classe, usado no medalhão, quando já baixou.
     emblemas: HashMap<&'static str, PathBuf>,
     logo: Option<Option<TextureHandle>>,
+    icone_fenda: Option<Option<TextureHandle>>,
     /// Altura do conteúdo (em pontos) e escala (pixels por ponto) com que o tamanho da janela foi
     /// pedido por último. A escala e não o zoom da config: ela muda também com o DPI do monitor.
     altura: f32,
@@ -222,6 +226,7 @@ impl Overlay {
             icones: HashMap::new(),
             emblemas: HashMap::new(),
             logo: None,
+            icone_fenda: None,
             altura: 0.0,
             escala_aplicada: 0.0,
             replay: replay.is_some(),
@@ -953,9 +958,15 @@ impl Overlay {
             livre_ate = sinal_de_ping(ui, ping, rect, livre_ate, meio) - 10.0;
         }
 
-        // Energia Odyle depois do total, se couber antes do ping: o cristal (ou "Odyle", enquanto o
-        // ícone não baixou) e os valores.
-        let Some((basica, carregada)) = self.odyle else { return };
+        // Depois do total, cada um se couber antes do ping: a Energia Odyle e a fenda.
+        let fim_odyle = self.odyle_no_rodape(ui, rect, meio, fim_esquerda, livre_ate);
+        self.fenda_no_rodape(ui, rect, meio, fim_odyle, livre_ate);
+    }
+
+    /// Energia Odyle: o cristal (ou "Odyle", enquanto o ícone não baixou) e os valores. Devolve onde
+    /// ela termina; sem Odyle ou sem espaço, o próprio `inicio`.
+    fn odyle_no_rodape(&mut self, ui: &Ui, rect: Rect, meio: f32, inicio: f32, livre_ate: f32) -> f32 {
+        let Some((basica, carregada)) = self.odyle else { return inicio };
         let icone = self.icone_odyle(ui.ctx());
         let rotulo = if icone.is_some() { "   ·   " } else { "   ·   Odyle " };
         let formato = TextFormat::simple(fonte(11.0, false), branco(0x99));
@@ -968,11 +979,12 @@ impl Overlay {
         let valor = montar(ui, job);
         let largura_icone = if icone.is_some() { 17.0 } else { 0.0 };
         let (largura_rotulo, largura_valor) = (rotulo.size().x, valor.size().x);
-        if fim_esquerda + largura_rotulo + largura_icone + largura_valor > livre_ate {
-            return;
+        if inicio + largura_rotulo + largura_icone + largura_valor > livre_ate {
+            return inicio;
         }
-        pintor.galley(pos2(fim_esquerda, meio - rotulo.size().y / 2.0), rotulo, texto());
-        let x = fim_esquerda + largura_rotulo;
+        let pintor = ui.painter();
+        pintor.galley(pos2(inicio, meio - rotulo.size().y / 2.0), rotulo, texto());
+        let x = inicio + largura_rotulo;
         if let Some(icone) = icone {
             let quadrado = Rect::from_center_size(pos2(x + 7.5, meio), Vec2::splat(15.0));
             egui::Image::new(SizedTexture::new(icone.id(), quadrado.size())).paint_at(ui, quadrado);
@@ -984,6 +996,54 @@ impl Overlay {
              (ticket 60000001 do 0x610B) e a cada mudança (0x610C, como no uso de essência OD). Com o \
              Axon aberto depois do login, ela aparece na próxima mudança ou no próximo login. O máximo \
              (o /840 da tela) não vem no pacote.",
+        );
+        x + largura_icone + largura_valor
+    }
+
+    /// Fenda Espaço-Temporal: o portal e quanto falta para ela abrir ou, aberta, para o portal fechar.
+    fn fenda_no_rodape(&mut self, ui: &Ui, rect: Rect, meio: f32, inicio: f32, livre_ate: f32) {
+        let icone = self.icone_fenda(ui.ctx());
+        let rotulo = if icone.is_some() { "   ·   " } else { "   ·   Fenda " };
+        let formato = TextFormat::simple(fonte(11.0, false), branco(0x99));
+        let rotulo = montar(ui, LayoutJob::single_section(rotulo.into(), formato));
+        let (aberta, segundos) = match fenda::fenda(nucleo::agora()) {
+            Fenda::Aberta(segundos) => (true, segundos),
+            Fenda::Fechada(segundos) => (false, segundos),
+        };
+        let ticks = segundos * TICKS_POR_SEGUNDO;
+        let tempo = match segundos / 3600 {
+            0 => minutos_e_segundos(ticks),
+            horas => format!("{horas}:{}", minutos_e_segundos(ticks)),
+        };
+        let mut job = LayoutJob::default();
+        if aberta {
+            let verde = Color32::from_rgb(0x5B, 0xD1, 0x6B);
+            trecho(&mut job, "aberta ", 11.0, false, verde);
+            trecho(&mut job, &tempo, 11.0, true, verde);
+        } else {
+            trecho(&mut job, &tempo, 11.0, true, branco(0xCC));
+        }
+        let valor = montar(ui, job);
+        let largura_icone = if icone.is_some() { 17.0 } else { 0.0 };
+        let (largura_rotulo, largura_valor) = (rotulo.size().x, valor.size().x);
+        if inicio + largura_rotulo + largura_icone + largura_valor > livre_ate {
+            return;
+        }
+        let pintor = ui.painter();
+        pintor.galley(pos2(inicio, meio - rotulo.size().y / 2.0), rotulo, texto());
+        let x = inicio + largura_rotulo;
+        if let Some(icone) = icone {
+            let quadrado = Rect::from_center_size(pos2(x + 7.5, meio), Vec2::splat(15.0));
+            egui::Image::new(SizedTexture::new(icone.id(), quadrado.size())).paint_at(ui, quadrado);
+        }
+        pintor.galley(pos2(x + largura_icone, meio - valor.size().y / 2.0), valor, texto());
+        let area = Rect::from_min_max(pos2(x, rect.min.y), pos2(x + largura_icone + largura_valor, rect.max.y));
+        ui.interact(area, ui.id().with("fenda"), Sense::hover()).on_hover_text(
+            "Fenda Espaço-Temporal: quanto falta para a próxima abertura (a cada 3 h, às 02h, 05h, 08h, \
+             11h, 14h, 17h, 20h e 23h de Brasília) e, com \"aberta\", quanto falta para o portal fechar \
+             (fica aberto 10 min; lá dentro o evento dura 1 h). Conta pelo relógio do PC. A NCSoft não \
+             publicou o horário do servidor SA: esta é a tabela dos sites de timer (shugo.gg, \
+             aion2timers.com).",
         );
     }
 
@@ -1082,6 +1142,14 @@ impl Overlay {
         }
         let caminho = self.icone_odyle.clone()?;
         self.textura(ctx, &caminho)
+    }
+
+    fn icone_fenda(&mut self, ctx: &egui::Context) -> Option<TextureHandle> {
+        if self.icone_fenda.is_none() {
+            let imagem = decodificar(std::io::Cursor::new(FENDA));
+            self.icone_fenda = Some(imagem.map(|imagem| ctx.load_texture("fenda", imagem, opcoes_de_textura())));
+        }
+        self.icone_fenda.clone().flatten()
     }
 
     fn status(&mut self, ui: &mut Ui) {

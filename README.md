@@ -182,7 +182,13 @@ cargo build --release -p overlay
   (`Icon_Item_Odenergy_A_001`, da CDN; "Odyle" escrito enquanto não baixou) e `550 (+270)`, a
   básica e a carregada como o servidor manda no login e a cada mudança, como o uso de essência
   OD (PROTOCOLO.md §7d), sem o máximo, que não vem no pacote. Com o Axon aberto depois do login,
-  ela aparece na próxima mudança ou no próximo login.
+  ela aparece na próxima mudança ou no próximo login. Depois dela vem a fenda (desde a 0.9.0): o
+  portal roxo e quanto falta para a próxima Fenda Espaço-Temporal, que abre a cada 3 h, às 02h,
+  05h, 08h, 11h, 14h, 17h, 20h e 23h de Brasília (servidor SA), contando a cada segundo; com o
+  portal aberto, `aberta 08:31` em verde, o que falta para ele fechar (fica aberto 10 min). Conta
+  pelo relógio do PC. A NCSoft não publicou o horário do SA: a tabela é a do shugo.gg e do
+  aion2timers.com em 2026-10-05 (`crates/overlay/src/fenda.rs`). A Odyle e a fenda só aparecem
+  se couberem antes do ping.
   Embaixo ficam a
   versão e o botão de atualização, e os avisos enquanto procura o servidor do jogo, enquanto
   baixa os nomes das skills ou quando a captura para.
@@ -270,7 +276,7 @@ código foi escrito do zero.
 | `crates/nucleo` | Protocolo (varint, LZ4, framing, parsers), captura (raw socket, pcapng, remontagem TCP), medição (placar, catálogo de skills) e formatação pt-BR |
 | `crates/nucleo/tests` | LZ4 contra o `lz4_flex`, framing, remontagem TCP, parsers com bytes reais, placar e troca de servidor (`cargo test`). O teste de rede do catálogo é opcional: `cargo test -p nucleo --test catalogo -- --ignored` |
 | `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y] [--limite N] [--nova-versao] [--pedir-firewall] [--lutas] [--ate S]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada; `--lutas` separa as lutas como ao vivo e abre a tela Lutas; `--ate 90` lê só os 90 primeiros segundos da captura, para ver a janela no meio de uma luta) |
-| `crates/overlay/assets` | `logo-axon.jpg` (a logo original) e `axon.ico`, o hexágono recortado dela com fundo transparente, de 16 a 256 px |
+| `crates/overlay/assets` | `logo-axon.jpg` (a logo original) e `axon.ico`, o hexágono recortado dela com fundo transparente, de 16 a 256 px; `fenda.svg`, o portal da fenda do rodapé, e o `fenda-64.png` embutido no exe, gerado dele pelo Chrome com caminhos absolutos: `chrome --headless=new --hide-scrollbars --default-background-color=00000000 --window-size=64,64 --screenshot=<pasta>\fenda-64.png file:///<pasta>/fenda.svg` |
 | `crates/replay` | Replay de `.pcapng` com diagnóstico e modo `ao-vivo` no console; `--lutas` lista as lutas como o overlay ao vivo as separa |
 | `dados/skills.json` | Opcional, fora do repositório e das releases: nomes em inglês do RATmeter (GPL-3.0, ver PROTOCOLO.md §9), só reserva quando o questlog não tem a skill |
 | `capturar.ps1` | Grava `captura.pcapng` com o pktmon do Windows (admin). Capturas ficam fora do repositório: têm o seu tráfego |

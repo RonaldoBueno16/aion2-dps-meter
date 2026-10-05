@@ -6,6 +6,7 @@ mod atalho;
 mod atualizacao;
 mod bandeja;
 mod config;
+mod fenda;
 mod firewall;
 mod janela;
 mod jogo;
