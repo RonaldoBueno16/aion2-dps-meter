@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use super::medidor::Medidor;
+use crate::captura::latencia::Latencia;
 use crate::captura::montador::{Entrega, MontadorTcp};
 use crate::captura::segmento::SegmentoTcp;
 use crate::protocolo::desempacotador::Desempacotador;
@@ -38,6 +39,11 @@ pub struct Sessao {
     enquadrador: Enquadrador,
     ultima_faxina: Hora,
     porta_servidor: u16,
+    /// O fluxo do PC para o servidor (o inverso de `fluxo`), que alimenta o ping.
+    volta: Option<String>,
+    latencia: Latencia,
+    /// Hora do último segmento do jogo: o ping olha os 10 s antes dela (ao vivo e no replay).
+    ultimo_segmento: Hora,
 
     pub medidor: Medidor,
     /// Fluxo servidor → cliente em uso, no formato "ip:porta > ip:porta".
@@ -55,6 +61,15 @@ impl Sessao {
     }
 
     pub fn ao_segmento(&mut self, seg: &SegmentoTcp, hora: Hora) {
+        // Antes do filtro abaixo: o ACK puro do servidor também mede o ping.
+        if self.fluxo.as_deref() == Some(seg.chave.as_str()) {
+            self.ultimo_segmento = hora;
+            if let Some(ack) = seg.ack {
+                self.latencia.chegou(ack, hora);
+            }
+        } else if self.volta.as_deref() == Some(seg.chave.as_str()) && !seg.dados.is_empty() {
+            self.latencia.enviou(seg.seq, seg.dados.len(), hora);
+        }
         // ACK sem dados não leva nada ao montador e, guardado, nunca chega ao limite de bytes: a
         // memória cresceria enquanto o fluxo durasse. HTTPS e HTTP nunca são o jogo, e um download
         // grande traz 0E 00 36 por acaso a cada ~16 MB: três bastariam para tomar o lugar do jogo.
@@ -119,8 +134,15 @@ impl Sessao {
         true
     }
 
+    /// Menor ida e volta TCP até o servidor nos últimos 10 s, em ticks (`captura::latencia`).
+    pub fn ping(&self) -> Option<i64> {
+        self.latencia.ping(self.ultimo_segmento)
+    }
+
     fn trocar_para(&mut self, chave: &str) {
         self.fluxo = Some(chave.to_string());
+        self.volta = chave.split_once(" > ").map(|(de, para)| format!("{para} > {de}"));
+        self.latencia = Latencia::default();
         self.montador = MontadorTcp::default();
         self.enquadrador = Enquadrador::default();
         // Ids de entidade valem só dentro da conexão: o mesmo personagem volta com outro id.
@@ -184,9 +206,20 @@ fn ao_pacote(medidor: &mut Medidor, pacote: &[u8], hora: Hora) {
                 medidor.definir_invocacao(spawn.entidade_id, spawn.dono_id, &spawn.nome_dono);
             } else if spawn.entidade_id != 0 {
                 medidor.esquecer_invocacao(spawn.entidade_id);
+                if spawn.codigo != 0 {
+                    medidor.registrar_npc(spawn.entidade_id, spawn.codigo);
+                }
+                if let Some((atual, maximo)) = spawn.hp {
+                    medidor.registrar_hp_do_spawn(spawn.entidade_id, atual, maximo);
+                }
             }
             if spawn.dono_marcado != 0 {
                 medidor.marcar_dono(spawn.entidade_id, spawn.dono_marcado);
+            }
+        }
+        opcodes::HP_RESTANTE => {
+            if let Some((entidade, hp)) = combate::hp_restante(pacote) {
+                medidor.registrar_hp(entidade, hp, hora);
             }
         }
         opcodes::MORTE_ENTIDADE => {
@@ -203,6 +236,31 @@ fn ao_pacote(medidor: &mut Medidor, pacote: &[u8], hora: Hora) {
             if let Some(outro) = combate::info_jogador(pacote) {
                 medidor.definir_jogador(outro.entidade_id, &outro.nome, outro.nivel, false);
                 medidor.definir_poder(outro.entidade_id, outro.poder);
+            }
+        }
+        opcodes::ESTADO_COMBATE => {
+            if let Some((entidade, em_combate)) = combate::estado_combate(pacote) {
+                medidor.registrar_estado_combate(entidade, em_combate, hora);
+            }
+        }
+        opcodes::BUFF_NOVO | opcodes::BUFF_RENOVADO => {
+            if let Some(buff) = combate::buff(pacote, op == opcodes::BUFF_NOVO) {
+                medidor.registrar_buff(buff, hora);
+            }
+        }
+        opcodes::TICKETS => {
+            for ticket in combate::tickets(pacote).unwrap_or_default() {
+                medidor.registrar_ticket(ticket);
+            }
+        }
+        opcodes::TICKET_MUDOU => {
+            if let Some(ticket) = combate::ticket_mudou(pacote) {
+                medidor.registrar_ticket(ticket);
+            }
+        }
+        opcodes::BUFF_REMOVIDO => {
+            if let Some((alvo, instancias)) = combate::buffs_removidos(pacote) {
+                medidor.remover_buffs(alvo, &instancias, hora);
             }
         }
         _ => {}

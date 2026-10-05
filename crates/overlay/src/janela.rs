@@ -1,9 +1,13 @@
-//! A janela: título com duração e total, abas DPS | Tank | Healer, uma linha de duas partes por
-//! jogador (nome em cima, "Classe · Nv · GS" embaixo; na aba DPS, a tabela à direita), skills ao
-//! expandir e status. Mais: configurações, recolher para a borda e a alça que muda o tamanho.
+//! A janela, no visual da 0.8.0 (inspirado no medidor do TK): cabeçalho com o logo e botões de
+//! ícone, a barra do alvo (o chefe da luta ou o mob que mais apanhou), abas DPS | Tank | Healer,
+//! uma linha por jogador (medalhão da classe, barra em degradê na cor dela, total, por segundo e %),
+//! a ficha e as skills ao expandir, e o rodapé com o estado e o tempo da luta. Mais: configurações,
+//! lutas anteriores e recolher para a borda.
 
 mod configuracoes;
+mod lutas;
 mod recolher;
+mod visual;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -11,30 +15,32 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use eframe::egui::load::SizedTexture;
 use eframe::egui::text::{LayoutJob, TextWrapping};
 use eframe::egui::{
-    self, Align, Color32, CornerRadius, CursorIcon, FontData, FontFamily, FontId, Galley, Rect, RichText, Sense, Stroke,
-    StrokeKind, TextFormat, TextureHandle, Ui, Vec2, ViewportCommand, pos2, vec2,
+    self, Align, Color32, CornerRadius, CursorIcon, FontData, FontFamily, FontId, Galley, Painter, Rect, RichText,
+    Sense, Stroke, StrokeKind, TextFormat, TextureHandle, Ui, Vec2, ViewportCommand, pos2, vec2,
 };
 use indexmap::IndexMap;
-use nucleo::TICKS_POR_SEGUNDO;
+use lutas::ResumoLuta;
 use nucleo::captura::socket_bruto::CapturaSocketBruto;
 use nucleo::formato::{f, n, p};
 use nucleo::medicao::catalogo::{self, CatalogoSkills};
 use nucleo::medicao::dados_jogo;
-use nucleo::medicao::medidor::{LinhaJogador, LinhaSkill, Medidor, PerfilJogador, Placar, Tabela};
+use nucleo::medicao::medidor::{Alvo, LinhaBuff, LinhaJogador, LinhaSkill, Medidor, PerfilJogador, Placar, Tabela};
 use nucleo::medicao::sessao::Sessao;
+use nucleo::{Hora, TICKS_POR_SEGUNDO};
 use recolher::{Dobra, Lado};
 use serde::{Deserialize, Serialize};
 
+use crate::atalho::Atalho;
 use crate::atualizacao::{self, Atualizacao, Estado};
-use crate::bandeja::Bandeja;
+use crate::bandeja::{self, Bandeja};
 use crate::config::{self, Config};
 use crate::jogo;
 
 /// 470 e não os 390 do WPF: a tabela da aba DPS precisa de ~280 px ao lado do nome.
 pub const LARGURA: f32 = 470.0;
-const INTERVALO: Duration = Duration::from_millis(500);
 const SALVAR_A_CADA: Duration = Duration::from_secs(30);
 const SEMIBOLD: &str = "semibold";
 const TEXTO_DA_ABA: [&str; 2] = ["Overlay ›", "‹ Overlay"];
@@ -47,30 +53,32 @@ enum Aba {
 }
 
 impl Aba {
-    /// Cabeçalho e pior caso (para a largura) de cada coluna da tabela da aba.
-    fn colunas(self) -> &'static [(&'static str, &'static str); 5] {
+    /// O que os três números da linha medem nesta aba (legenda acima das linhas).
+    fn rotulos(self) -> [&'static str; 3] {
         match self {
-            Aba::Dps => &COLUNAS_DPS,
-            Aba::Tank => &COLUNAS_TANK,
-            Aba::Healer => &COLUNAS_HEALER,
+            Aba::Dps => ["Dano", "DPS", "%"],
+            Aba::Tank => ["Recebido", "DTPS", "%"],
+            Aba::Healer => ["Cura", "HPS", "%"],
         }
     }
 }
 
-const COLUNAS_DPS: [(&str, &str); 5] =
-    [("DPS", "999,9K"), ("Damage(%)", "99,99M (100%)"), ("CRIT", "100%"), ("AVG", "999,9K"), ("MAX", "999,9K")];
-/// PARRY no lugar do AVG: o golpe médio recebido depende de qual monstro bateu em quem e não diz
-/// nada do tank; a fração de golpes aparados é o único sinal de mitigação que o pacote traz.
-const COLUNAS_TANK: [(&str, &str); 5] =
-    [("DTPS", "999,9K"), ("Taken(%)", "99,99M (100%)"), ("PARRY", "100%"), ("CRIT", "100%"), ("MAX", "999,9K")];
-const COLUNAS_HEALER: [(&str, &str); 5] =
-    [("HPS", "999,9K"), ("Heal(%)", "99,99M (100%)"), ("CRIT", "100%"), ("AVG", "999,9K"), ("MAX", "999,9K")];
+/// Altura de uma linha de jogador, em pontos.
+const ALTURA_LINHA: f32 = 28.0;
+/// Sem mudança no placar por esse tempo, o rodapé passa de "Em luta" para "Aguardando".
+const PARADO: Duration = Duration::from_secs(5);
+/// Logo do cabeçalho: o hexágono do axon.ico em 64 px.
+const LOGO: &[u8] = include_bytes!("../assets/axon-64.png");
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tela {
     Medidor,
     Configuracoes,
+    Lutas,
 }
+
+/// Buffs mostrados embaixo das skills de um jogador expandido.
+const BUFFS_MOSTRADOS: usize = 8;
 
 /// Último level e power de cada nome (inclusive o seu), para o overlay aberto no meio da sessão.
 /// Mesmo formato do jogadores.json da versão em C#.
@@ -91,17 +99,36 @@ pub struct Overlay {
     catalogo: &'static CatalogoSkills,
     aba: Aba,
     expandidos: HashSet<(Aba, u32)>,
-    // Placar lido a cada 500 ms: com o mouse em cima o egui redesenha a ~60 fps, e cada leitura
-    // segura o Mutex que as threads de captura usam.
+    // Placar lido a cada `atualizacao_ms` (500 ms por padrão): com o mouse em cima o egui redesenha a
+    // ~60 fps, e cada leitura segura o Mutex que as threads de captura usam.
     placar: Placar,
+    /// Luta do histórico aberta no lugar da de agora: número e começo dela. None = ao vivo.
+    vendo: Option<(u64, Hora)>,
+    /// Resumo das lutas passadas, lido só com a tela de lutas aberta.
+    lutas: Vec<ResumoLuta>,
     fluxo: Option<String>,
+    /// Menor ida e volta TCP dos últimos 10 s, em ticks (`Sessao::ping`).
+    ping: Option<i64>,
+    /// Energia Odyle (básica, carregada), como o medidor recebeu.
+    odyle: Option<(u64, Option<u64>)>,
+    /// PNG do cristal da Odyle, depois de baixado.
+    icone_odyle: Option<PathBuf>,
     /// Quando a captura abriu e quando o jogo apareceu aberto: o rodapé só aponta um problema
     /// depois de dar tempo de o servidor aparecer.
     captura_desde: Instant,
     jogo_desde: Option<Instant>,
     lido_em: Instant,
     salvo_em: Instant,
+    /// Quando a duração ou os totais mudaram por último, e o que eles eram: o rodapé diz "Em luta"
+    /// enquanto o placar anda.
+    mudou_em: Instant,
+    /// Quando o último resumo foi copiado: o rodapé avisa por uns segundos.
+    copiado_em: Option<Instant>,
+    assinatura: (i64, u64),
     icones: HashMap<PathBuf, Option<TextureHandle>>,
+    /// Ícone da primeira skill de cada classe, usado no medalhão, quando já baixou.
+    emblemas: HashMap<&'static str, PathBuf>,
+    logo: Option<Option<TextureHandle>>,
     /// Altura do conteúdo (em pontos) e escala (pixels por ponto) com que o tamanho da janela foi
     /// pedido por último. A escala e não o zoom da config: ela muda também com o DPI do monitor.
     altura: f32,
@@ -125,6 +152,9 @@ pub struct Overlay {
     amostra: Option<LinhaJogador>,
     /// Ícone ao lado do relógio; None se o Windows não deixou criar.
     bandeja: Option<Bandeja>,
+    /// O que foi pedido à janela por último: o clique passa por ela até o jogo (atalho ou menu da
+    /// bandeja).
+    atravessando: bool,
     atualizacao: Atualizacao,
     /// Depois de trocar o exe: Ok com a versão nova aberta (esta fecha), Err se não abriu.
     reabertura: Option<Result<(), String>>,
@@ -144,6 +174,8 @@ impl Overlay {
         if let Some(zoom) = opcoes_debug.iter().skip_while(|a| *a != "--zoom").nth(1).and_then(|z| z.parse().ok()) {
             config.zoom = config::arredondar_zoom(zoom);
         }
+        config.compacta |= tem("--compacta");
+        config.ocultar_nomes |= tem("--ocultar-nomes");
         cc.egui_ctx.set_zoom_factor(config.zoom);
 
         let sessao = Arc::new(Mutex::new(Sessao::default()));
@@ -155,7 +187,8 @@ impl Overlay {
         let pedir_firewall = tem("--pedir-firewall") || (replay.is_none() && !crate::firewall::liberada());
         let (captura, erro_captura) = match &replay {
             Some(arquivo) => {
-                reproduzir(sessao.clone(), arquivo.clone());
+                let ate = opcoes_debug.iter().skip_while(|a| *a != "--ate").nth(1).and_then(|s| s.parse::<f64>().ok());
+                reproduzir(sessao.clone(), arquivo.clone(), tem("--lutas"), ate);
                 (None, None)
             }
             None => {
@@ -173,12 +206,22 @@ impl Overlay {
             aba: if tem("--tank") { Aba::Tank } else { Aba::Dps },
             expandidos: HashSet::new(),
             placar: Placar::default(),
+            vendo: None,
+            lutas: Vec::new(),
             fluxo: None,
+            ping: None,
+            odyle: None,
+            icone_odyle: None,
             captura_desde: Instant::now(),
             jogo_desde: None,
             lido_em: Instant::now(),
             salvo_em: Instant::now(),
+            mudou_em: Instant::now(),
+            copiado_em: None,
+            assinatura: (0, 0),
             icones: HashMap::new(),
+            emblemas: HashMap::new(),
+            logo: None,
             altura: 0.0,
             escala_aplicada: 0.0,
             replay: replay.is_some(),
@@ -190,29 +233,65 @@ impl Overlay {
                 .and_then(|n| n.parse().ok())
                 .unwrap_or(LIMITE_DE_LINHAS),
             config,
-            tela: if tem("--config") { Tela::Configuracoes } else { Tela::Medidor },
+            tela: if tem("--config") {
+                Tela::Configuracoes
+            } else if tem("--lutas") {
+                Tela::Lutas
+            } else {
+                Tela::Medidor
+            },
             dobra: Dobra::Aberto,
             janela: manter_sem_ativar(cc),
             arraste: None,
             amostra: None,
             bandeja: None,
+            atravessando: false,
             atualizacao: if tem("--nova-versao") { Atualizacao::falsa() } else { Atualizacao::iniciar() },
             reabertura: None,
             teste_dobra: (tem("--recolher") || tem("--recolher-e-voltar"))
                 .then(|| (Instant::now(), tem("--recolher-e-voltar"), false)),
         };
-        overlay.bandeja = Bandeja::iniciar(overlay.janela);
+        let c = &overlay.config;
+        let atalhos =
+            [&c.atalho_mostrar, &c.atalho_atravessar, &c.atalho_resumo, &c.atalho_compacta].map(|a| Atalho::ler(a));
+        overlay.bandeja = Bandeja::iniciar(overlay.janela, atalhos);
         overlay.ler_placar();
         Ok(overlay)
     }
 
     fn ler_placar(&mut self) {
         let sessao = travar(&self.sessao);
-        self.placar = sessao.medidor.obter_placar();
+        // Luta do histórico aberta: o placar dela, parado. Se ela saiu do histórico (20 lutas
+        // depois), volta ao vivo; os ids se repetem entre lutas, então nada fica expandido.
+        let lutas = sessao.medidor.lutas_passadas();
+        let passada =
+            self.vendo.and_then(|(numero, _)| lutas.iter().find(|l| l.numero == numero)).map(|l| l.placar.clone());
+        if self.vendo.is_some() && passada.is_none() {
+            self.vendo = None;
+            self.expandidos.clear();
+        }
+        self.placar = match passada {
+            Some(placar) => (*placar).clone(),
+            None => sessao.medidor.obter_placar(),
+        };
+        if self.config.ocultar_nomes {
+            ocultar_nomes(&mut self.placar);
+        }
+        if self.tela == Tela::Lutas {
+            self.lutas = lutas.iter().map(|luta| ResumoLuta::de(luta, self.config.ocultar_nomes)).collect();
+        }
         self.fluxo = sessao.fluxo.clone();
+        self.ping = sessao.ping();
+        self.odyle = sessao.medidor.odyle;
         let memoria = (self.tela == Tela::Configuracoes).then(|| sessao.medidor.exportar_memoria());
         drop(sessao);
         self.lido_em = Instant::now();
+        let totais = self.placar.dano.total + self.placar.dano_recebido.total + self.placar.cura.total;
+        let assinatura = (self.placar.duracao, totais.to_bits());
+        if assinatura != self.assinatura {
+            self.assinatura = assinatura;
+            self.mudou_em = self.lido_em;
+        }
         if self.jogo_desde.is_none() && jogo::aberto() {
             self.jogo_desde = Some(self.lido_em);
         }
@@ -254,8 +333,30 @@ impl Overlay {
         self.config.salvar();
     }
 
+    fn intervalo(&self) -> Duration {
+        Duration::from_millis(u64::from(self.config.atualizacao_ms))
+    }
+
+    fn copiar_resumo(&mut self, ctx: &egui::Context) {
+        ctx.copy_text(resumo(&self.placar, self.config.resumo_em_linhas));
+        self.copiado_em = Some(Instant::now());
+    }
+
+    fn alternar_compacta(&mut self) {
+        self.config.compacta = !self.config.compacta;
+        self.aplicar_config();
+    }
+
     fn zerar(&mut self) {
         travar(&self.sessao).medidor.reiniciar();
+        self.expandidos.clear();
+        self.ler_placar();
+    }
+
+    /// Abre uma luta do histórico (`Some`) ou volta à de agora (`None`).
+    fn ver(&mut self, luta: Option<(u64, Hora)>) {
+        self.vendo = luta;
+        self.tela = Tela::Medidor;
         self.expandidos.clear();
         self.ler_placar();
     }
@@ -274,46 +375,60 @@ impl Overlay {
         if self.config.so_meu_dano { tabela.so_voce() } else { tabela.clone() }
     }
 
-    /// As colunas ligadas na configuração para a aba atual.
-    fn colunas_ligadas(&mut self) -> &mut [bool; 5] {
-        match self.aba {
-            Aba::Dps => &mut self.config.colunas,
-            Aba::Tank => &mut self.config.colunas_tank,
-            Aba::Healer => &mut self.config.colunas_healer,
-        }
+    fn em_luta(&self) -> bool {
+        self.vendo.is_none() && self.placar.duracao > 0 && self.mudou_em.elapsed() < PARADO
     }
 
     fn conteudo(&mut self, ui: &mut Ui) {
-        if self.tela == Tela::Configuracoes {
-            self.tela_configuracoes(ui);
-            return;
+        match self.tela {
+            Tela::Configuracoes => return self.tela_configuracoes(ui),
+            Tela::Lutas => return self.tela_lutas(ui),
+            Tela::Medidor => {}
         }
         let tabela = self.tabela();
-        self.cabecalho(ui, &tabela);
-        ui.add_space(6.0);
+        if self.config.compacta && !self.pedir_firewall {
+            return self.barra_compacta(ui);
+        }
+        self.cabecalho(ui);
+        ui.add_space(8.0);
         if self.pedir_firewall {
             self.aviso_firewall(ui);
             ui.add_space(6.0);
             self.status(ui);
             return;
         }
+        if let Some(alvo) = self.placar.alvo.clone() {
+            self.barra_do_alvo(ui, &alvo);
+            ui.add_space(6.0);
+        }
         self.abas(ui);
-        ui.add_space(6.0);
+        ui.add_space(4.0);
         self.linhas(ui, &tabela);
-        ui.add_space(6.0);
+        ui.add_space(8.0);
+        self.rodape(ui, &tabela);
+        ui.add_space(2.0);
         self.status(ui);
     }
 
-    fn cabecalho(&mut self, ui: &mut Ui, tabela: &Tabela) {
-        let titulo = if tabela.jogadores.is_empty() {
-            "Axon".to_string()
-        } else {
-            format!("Axon  ·  {}  ·  {}", minutos_e_segundos(self.placar.duracao), compacto(tabela.total))
-        };
+    fn cabecalho(&mut self, ui: &mut Ui) {
+        let logo = self.logo(ui.ctx());
         ui.horizontal(|ui| {
-            ui.label(RichText::new(titulo).font(fonte(12.0, true)).color(texto()));
+            if let Some(logo) = logo {
+                let (rect, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
+                ui.painter().image(logo.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                ui.add_space(6.0);
+            }
+            let mut marca = LayoutJob::default();
+            let formato = TextFormat {
+                font_id: fonte(15.0, true),
+                color: visual::DOURADO,
+                extra_letter_spacing: 2.5,
+                ..Default::default()
+            };
+            marca.append("AXON", 0.0, formato);
+            ui.label(marca);
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if botao(ui, "✕", false).on_hover_text("Fechar o medidor").clicked() {
+                if visual::botao_icone(ui, "✕", 13.0).on_hover_text("Fechar o medidor").clicked() {
                     ui.ctx().send_viewport_cmd(ViewportCommand::Close);
                 }
                 // A seta aponta para a borda para onde a janela vai.
@@ -321,18 +436,155 @@ impl Overlay {
                     Lado::Esquerda => "‹",
                     Lado::Direita => "›",
                 };
-                if botao(ui, seta, false).on_hover_text("Recolher para a borda da tela").clicked() {
+                if visual::botao_icone(ui, seta, 17.0).on_hover_text("Recolher para a borda da tela").clicked() {
                     self.dobra.recolher(self.janela);
                 }
-                if botao(ui, "⚙", false).on_hover_text("Configurações").clicked() {
+                if visual::botao_icone(ui, "⚙", 15.0).on_hover_text("Configurações").clicked() {
                     self.tela = Tela::Configuracoes;
                     self.ler_placar();
                 }
-                if botao(ui, "Zerar", false).on_hover_text("Começa uma luta nova").clicked() {
+                if visual::botao_icone(ui, "☰", 14.0).on_hover_text("Lutas anteriores").clicked() {
+                    self.tela = Tela::Lutas;
+                    self.ler_placar();
+                }
+                if visual::botao_icone(ui, "▭", 14.0).on_hover_text("Barra compacta: uma linha só").clicked() {
+                    self.alternar_compacta();
+                }
+                let dica = "Copiar o resumo da luta (DPS e % de cada um) para colar no chat";
+                if visual::botao_icone(ui, "⧉", 14.0).on_hover_text(dica).clicked() {
+                    self.copiar_resumo(ui.ctx());
+                }
+                // Vendo uma luta passada, o Zerar (que mexe na de agora) dá lugar à volta ao vivo.
+                if self.vendo.is_some() {
+                    if botao(ui, "● Ao vivo", true).on_hover_text("Volta à luta de agora").clicked() {
+                        self.ver(None);
+                    }
+                } else if visual::botao_icone(ui, "↺", 16.0).on_hover_text("Zerar: começa uma luta nova").clicked() {
                     self.zerar();
                 }
             });
         });
+    }
+
+    /// O alvo da luta: retrato (ou espadas), nome e level do questlog, HP como o servidor manda e
+    /// o seu dano e o do grupo nele.
+    fn barra_do_alvo(&mut self, ui: &mut Ui, alvo: &Alvo) {
+        let retrato = alvo.retrato.as_deref().and_then(|caminho| self.textura(ui.ctx(), caminho));
+        let largura = ui.available_width();
+        let (rect, resposta) = ui.allocate_exact_size(vec2(largura, 48.0), Sense::hover());
+        let maximo = alvo.hp_maximo.map_or_else(String::new, |m| format!(" de {}", n(m as f64, 0)));
+        resposta.on_hover_text(format!(
+            "Alvo: na guerra com chefe, o chefe; sem chefe, o último mob em que você bateu (o alvo selecionado \
+             no jogo não chega ao Axon). HP{maximo} como o servidor manda (0x8D00; o máximo e o % vêm do pacote \
+             de criação do mob). \"Derrota em\": quanto falta na velocidade em que o HP caiu nos últimos 30 s. \
+             Sem nome (\"Chefe #id\", \"Alvo #id\"): o mob já estava na tela quando o Axon abriu, e o nome e o \
+             HP máximo vêm do pacote de criação dele; abra o Axon antes de chegar à luta."
+        ));
+        let pintor = ui.painter().clone();
+        let (forte, fraco) = if alvo.morto {
+            (
+                Color32::from_rgba_unmultiplied(0x4A, 0x40, 0x30, 0xF0),
+                Color32::from_rgba_unmultiplied(0x1E, 0x1A, 0x14, 0xE6),
+            )
+        } else {
+            (
+                Color32::from_rgba_unmultiplied(0x8E, 0x1B, 0x22, 0xF0),
+                Color32::from_rgba_unmultiplied(0x2B, 0x0B, 0x10, 0xE6),
+            )
+        };
+        visual::degrade(&pintor, rect, 6.0, forte, fraco);
+        pintor.rect_stroke(
+            rect,
+            6,
+            Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0xFF, 0x7B, 0x7B, 0x50)),
+            StrokeKind::Inside,
+        );
+
+        let centro = pos2(rect.min.x + 24.0, rect.center().y);
+        pintor.circle_filled(centro, 17.0, Color32::from_rgb(0x1A, 0x0A, 0x0D));
+        match retrato {
+            Some(textura) => {
+                let circulo = Rect::from_center_size(centro, Vec2::splat(33.0));
+                egui::Image::new(SizedTexture::new(textura.id(), circulo.size()))
+                    .corner_radius(16)
+                    .paint_at(ui, circulo);
+            }
+            None => {
+                let simbolo = if alvo.morto { "☠" } else { "⚔" };
+                let galley = ui.fonts_mut(|f| f.layout_no_wrap(simbolo.into(), fonte(17.0, false), visual::DOURADO));
+                pintor.galley(centro - galley.size() / 2.0, galley, visual::DOURADO);
+            }
+        }
+        pintor.circle_stroke(centro, 17.0, Stroke::new(1.5_f32, visual::DOURADO));
+
+        // Barra de HP no pé do card, quando o spawn trouxe o máximo.
+        let fracao = match (alvo.hp, alvo.hp_maximo) {
+            (Some(hp), Some(maximo)) if !alvo.morto => Some(hp as f64 / maximo as f64),
+            _ => None,
+        };
+        if let Some(fracao) = fracao {
+            let canto = pos2(rect.min.x + 48.0, rect.max.y - 7.0);
+            let trilho = Rect::from_min_max(canto, pos2(rect.max.x - 10.0, rect.max.y - 4.0));
+            pintor.rect_filled(trilho, 2, Color32::from_black_alpha(0xA0));
+            let cheio = trilho.with_max_x(trilho.min.x + trilho.width() * fracao.clamp(0.0, 1.0) as f32);
+            pintor.rect_filled(cheio, 2, visual::VERMELHO_CLARO);
+        }
+
+        // Direita: HP (ou "Derrotado") em cima, o dano do grupo embaixo.
+        let mut hp = LayoutJob::default();
+        if alvo.morto {
+            trecho(&mut hp, "Derrotado", 13.0, true, visual::DOURADO);
+        } else {
+            trecho(&mut hp, "HP ", 10.0, false, branco(0xBB));
+            let valor = alvo.hp.map_or_else(|| "?".to_string(), |hp| n(hp as f64, 0));
+            trecho(&mut hp, &valor, 13.0, true, visual::VERMELHO_CLARO);
+            if let Some(fracao) = fracao {
+                trecho(&mut hp, &format!("  {}", p(fracao, 1)), 10.0, true, branco(0xDD));
+            }
+        }
+        let hp = montar(ui, hp);
+        let mut dano = LayoutJob::default();
+        if alvo.meu_dano > 0.0 {
+            trecho(&mut dano, "Você ", 10.0, false, branco(0xBB));
+            trecho(&mut dano, &compacto(alvo.meu_dano), 10.0, true, visual::DOURADO);
+            trecho(&mut dano, &format!("  ·  grupo {}", compacto(alvo.dano)), 10.0, false, branco(0xBB));
+        } else {
+            trecho(&mut dano, &format!("{} de dano do grupo", compacto(alvo.dano)), 10.0, false, branco(0xBB));
+        }
+        let dano = montar(ui, dano);
+        let direita = hp.size().x.max(dano.size().x);
+
+        let mut job = LayoutJob::single_section(nome_do_alvo(alvo), TextFormat::simple(fonte(13.0, true), texto()));
+        job.wrap = uma_linha((largura - 48.0 - direita - 18.0).max(60.0));
+        let nome = montar(ui, job);
+        let mut detalhe = LayoutJob::default();
+        if alvo.nivel > 0 {
+            trecho(&mut detalhe, &format!("Nv {}", alvo.nivel), 10.0, false, branco(0xCC));
+        }
+        if alvo.chefe {
+            let separador = if alvo.nivel > 0 { "  ·  " } else { "" };
+            trecho(&mut detalhe, &format!("{separador}Chefe"), 10.0, true, visual::DOURADO);
+        }
+        if let Some(segundos) = alvo.derrota_em {
+            let separador = if detalhe.sections.is_empty() { "" } else { "  ·  " };
+            let falta = minutos_e_segundos((segundos * TICKS_POR_SEGUNDO as f64) as i64);
+            trecho(&mut detalhe, &format!("{separador}derrota em {falta}"), 10.0, false, branco(0xCC));
+        }
+        let detalhe = (!detalhe.sections.is_empty()).then(|| montar(ui, detalhe));
+
+        let x = rect.min.x + 48.0;
+        let altura = nome.size().y + detalhe.as_ref().map_or(0.0, |g| g.size().y);
+        let topo = rect.center().y - altura / 2.0;
+        let altura_nome = nome.size().y;
+        visual::com_sombra(&pintor, pos2(x, topo), nome);
+        if let Some(detalhe) = detalhe {
+            visual::com_sombra(&pintor, pos2(x, topo + altura_nome), detalhe);
+        }
+        let x = rect.max.x - 10.0;
+        let topo = rect.center().y - (hp.size().y + dano.size().y) / 2.0;
+        let altura_hp = hp.size().y;
+        visual::com_sombra(&pintor, pos2(x - hp.size().x, topo), hp);
+        visual::com_sombra(&pintor, pos2(x - dano.size().x, topo + altura_hp), dano);
     }
 
     fn abas(&mut self, ui: &mut Ui) {
@@ -341,8 +593,8 @@ impl Overlay {
             (
                 Aba::Tank,
                 "Tank",
-                "Dano recebido de monstros. PARRY: fração dos golpes que o jogador aparou. \"aggro N\": N monstros \
-                 têm este jogador como último alvo (8 s); a ameaça em número fica no servidor e não chega ao jogo.",
+                "Dano recebido de monstros. No mouse: golpes aparados e \"aggro N\" (N monstros têm este jogador \
+                 como último alvo, 8 s); a ameaça em número fica no servidor e não chega ao jogo.",
             ),
             (
                 Aba::Healer,
@@ -351,14 +603,33 @@ impl Overlay {
                  passou do HP cheio. Leitura ainda não conferida numa luta com curandeiro.",
             ),
         ];
-        ui.horizontal(|ui| {
-            for (aba, nome, dica) in abas {
-                if botao(ui, nome, self.aba == aba).on_hover_text(dica).clicked() {
-                    self.aba = aba;
-                    self.ler_placar();
+        let direita = ui.max_rect().max.x;
+        let linha = ui
+            .horizontal(|ui| {
+                for (aba, nome, dica) in abas {
+                    if visual::aba(ui, nome, self.aba == aba).on_hover_text(dica).clicked() {
+                        self.aba = aba;
+                        self.ler_placar();
+                    }
                 }
-            }
+                if self.placar.so_chefe && self.aba == Aba::Dps {
+                    ui.add_space(4.0);
+                    let selo = RichText::new("⚔ só no chefe").font(fonte(9.5, true)).color(visual::DOURADO);
+                    ui.label(selo).on_hover_text(
+                        "Guerra com chefe: o DPS conta só o dano no chefe, do primeiro golpe nele em diante. \
+                         Golpes nos mobs em volta ficam de fora.",
+                    );
+                }
+            })
+            .response
+            .rect;
+        // Legenda dos três números, alinhada com eles.
+        let tres = Tres::medir(ui, self.config.numeros);
+        let legendas = self.aba.rotulos().map(|r| {
+            montar(ui, LayoutJob::single_section(r.into(), TextFormat::simple(fonte(9.5, false), branco(0x88))))
         });
+        let faixa = Rect::from_min_max(pos2(linha.min.x, linha.min.y), pos2(direita, linha.max.y));
+        tres.pintar(ui.painter(), faixa, legendas, false);
     }
 
     fn linhas(&mut self, ui: &mut Ui, tabela: &Tabela) {
@@ -372,17 +643,13 @@ impl Overlay {
                     Aba::Dps => "Sem dano ainda.",
                 }
             };
+            ui.add_space(4.0);
             ui.add(egui::Label::new(RichText::new(vazio).font(fonte(12.0, false)).color(texto().gamma_multiply(0.6))).wrap());
+            ui.add_space(4.0);
             return;
         }
 
-        // A tabela da aba (DPS, Tank ou Healer), com as colunas ligadas na configuração.
-        let ligadas = *self.colunas_ligadas();
-        let colunas = Colunas::medir(ui, self.aba.colunas(), ligadas);
-        if colunas.alguma() {
-            colunas.cabecalho(ui);
-        }
-
+        let tres = Tres::medir(ui, self.config.numeros);
         let maior = tabela.jogadores[0].total;
         let voce = tabela.jogadores.iter().position(|j| j.voce);
         let (primeiras, abaixo) = linhas_mostradas(tabela.jogadores.len(), voce, self.limite);
@@ -396,17 +663,21 @@ impl Overlay {
                 separador(ui);
             }
             let j = &tabela.jogadores[i];
-            self.linha_jogador(ui, j, posicao, maior, &colunas);
+            self.linha_jogador(ui, j, posicao, maior, &tres);
             if self.expandidos.contains(&(self.aba, j.id)) {
-                // Todas as skills que aconteceram, com as mesmas colunas do jogador.
+                self.ficha(ui, j);
                 for s in &j.skills {
-                    self.linha_skill(ui, s, &colunas);
+                    self.linha_skill(ui, s, j.classe, &tres);
                 }
+                if !j.buffs.is_empty() {
+                    self.buffs(ui, &j.buffs);
+                }
+                ui.add_space(4.0);
             }
         }
     }
 
-    /// Dica da linha na aba Tank: as contagens que não cabem na tabela.
+    /// Dica da linha na aba Tank: as contagens que não cabem na linha.
     fn detalhe_tank(j: &LinhaJogador) -> String {
         let mut texto = format!(
             "{} golpes recebidos  ·  {} aparados ({})  ·  {} {}",
@@ -423,115 +694,394 @@ impl Overlay {
         texto
     }
 
-    fn linha_jogador(&mut self, ui: &mut Ui, j: &LinhaJogador, posicao: usize, maior: f64, colunas: &Colunas) {
+    /// Dica da linha do jogador: classe, level, GS e os números que saíram da linha.
+    fn dica_jogador(&self, j: &LinhaJogador) -> String {
+        let perfil =
+            segmentos_do_perfil(j).map(|pedacos| pedacos.into_iter().map(|(t, _)| t).collect::<String>()).join("  ·  ");
+        let numeros = numeros_extras(self.aba, j.golpes, j.criticos, j.aparos, j.total, j.maximo);
+        let extra = match self.aba {
+            Aba::Dps => detalhe_dps(j.golpes, j.costas),
+            Aba::Tank => Self::detalhe_tank(j),
+            Aba::Healer => format!("{} curas", j.golpes),
+        };
+        format!("{perfil}\n{numeros}\n{extra}\nClique para ver as skills")
+    }
+
+    fn linha_jogador(&mut self, ui: &mut Ui, j: &LinhaJogador, posicao: usize, maior: f64, tres: &Tres) {
         let largura = ui.available_width();
-        let expandido = self.expandidos.contains(&(self.aba, j.id));
-        let tank = self.aba == Aba::Tank;
-
-        let celulas: Vec<Arc<Galley>> = celulas(self.aba, Numeros::from(j))
-            .into_iter()
-            .enumerate()
-            .map(|(i, t)| montar(ui, LayoutJob::single_section(t, TextFormat::simple(fonte(12.0, i == 0), texto()))))
-            .collect();
-        let altura_direita = celulas
-            .iter()
-            .zip(colunas.visiveis)
-            .filter(|(_, visivel)| *visivel)
-            .fold(0.0_f32, |maior, (g, _)| maior.max(g.size().y));
-        let max_esquerda = (largura - colunas.largura_total() - 6.0 - 8.0).max(40.0);
-
-        // Selos da aba Tank, medidos à parte: o corte com "…" encurta o nome e eles ficam inteiros.
-        // Aggro: quantos monstros têm este jogador como último alvo; a ameaça em número fica no servidor.
-        let mut selos = LayoutJob::default();
-        if tank && j.segurando_aggro > 0 {
-            trecho(&mut selos, &format!("  aggro {}", j.segurando_aggro), 10.0, true, Color32::from_rgb(0xFF, 0xB5, 0x47));
-        }
-        if tank && j.mortes > 0 {
-            trecho(&mut selos, &format!("  ☠{}", j.mortes), 10.0, j.voce, Color32::from_rgb(0xFF, 0x6B, 0x6B));
-        }
-        let selos = (!selos.sections.is_empty()).then(|| montar(ui, selos));
-        let largura_selos = selos.as_ref().map_or(0.0, |g| g.size().x);
-
-        let mut nome = LayoutJob::default();
-        let seta = if expandido { "▾" } else { "▸" };
-        let voce = if j.voce { " (você)" } else { "" };
-        trecho(&mut nome, &format!("{seta} "), 12.0, j.voce, texto());
-        trecho(&mut nome, &format!("{posicao}. "), 12.0, false, branco(0x88));
-        trecho(&mut nome, &format!("{}{voce}", j.nome), 12.0, j.voce, texto());
-        nome.wrap = uma_linha((max_esquerda - largura_selos).max(40.0));
-        let nome = montar(ui, nome);
-
-        // Sem nenhum dado ligado na configuração, a linha do jogador fica só com o nome.
-        let perfil = linha_perfil(j, self.config.perfil()).map(|mut job| {
-            job.wrap = uma_linha(max_esquerda - 12.0);
-            montar(ui, job)
-        });
-        let altura_perfil = perfil.as_ref().map_or(0.0, |g| g.size().y);
-        let altura_esquerda = nome.size().y + altura_perfil + 4.0;
-
-        let altura = altura_esquerda.max(altura_direita);
-        let (rect, resposta) = ui.allocate_exact_size(vec2(largura, altura + 2.0), Sense::click());
-        let linha = rect.shrink2(vec2(0.0, 1.0));
-        let pintor = ui.painter();
-
+        let (rect, resposta) = ui.allocate_exact_size(vec2(largura, ALTURA_LINHA + 3.0), Sense::click());
+        let linha = Rect::from_min_size(rect.min, vec2(largura, ALTURA_LINHA));
         let fracao = if maior > 0.0 { (j.total / maior) as f32 } else { 0.0 };
-        let barra = Rect::from_min_size(linha.min, vec2(linha.width() * fracao.clamp(0.0, 1.0), linha.height()));
-        let cor = cor_da_classe(j.classe);
-        pintor.rect_filled(barra, 3, Color32::from_rgba_unmultiplied(cor.r(), cor.g(), cor.b(), 0x66));
+        let numeros = numeros_da_linha(ui, textos(j.total, j.por_segundo, j.porcentagem), 12.0);
+        let expandido = self.expandidos.contains(&(self.aba, j.id));
+        self.pintar_linha(ui, linha, j, Some(posicao), fracao, numeros, tres, expandido);
 
-        let altura_nome = nome.size().y;
-        let topo = linha.min.y + (linha.height() - altura_esquerda) / 2.0;
-        let largura_nome = nome.size().x;
-        pintor.galley(pos2(linha.min.x + 6.0, topo + 2.0), nome, texto());
-        if let Some(selos) = selos {
-            let y = topo + 2.0 + (altura_nome - selos.size().y) / 2.0 + 1.0;
-            pintor.galley(pos2(linha.min.x + 6.0 + largura_nome, y), selos, texto());
-        }
-        if let Some(perfil) = perfil {
-            pintor.galley(pos2(linha.min.x + 18.0, topo + 2.0 + altura_nome), perfil, texto());
-        }
-        colunas.pintar(pintor, linha, celulas);
-
-        let mut resposta = resposta.on_hover_cursor(CursorIcon::PointingHand);
-        if tank {
-            resposta = resposta.on_hover_text(Self::detalhe_tank(j));
-        }
+        let dica = self.dica_jogador(j);
+        let resposta = resposta.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(dica);
         if resposta.clicked() && !self.expandidos.remove(&(self.aba, j.id)) {
             self.expandidos.insert((self.aba, j.id));
         }
     }
 
-    /// Skill expandida: ícone e nome à esquerda, as mesmas colunas do jogador à direita.
-    fn linha_skill(&mut self, ui: &mut Ui, s: &LinhaSkill, colunas: &Colunas) {
+    /// Fundo, barra em degradê na cor da classe, medalhão, nome e os três números. Também desenha a
+    /// amostra da tela de configurações.
+    #[allow(clippy::too_many_arguments)]
+    fn pintar_linha(
+        &mut self,
+        ui: &Ui,
+        linha: Rect,
+        j: &LinhaJogador,
+        posicao: Option<usize>,
+        fracao: f32,
+        numeros: [Arc<Galley>; 3],
+        tres: &Tres,
+        expandido: bool,
+    ) {
+        let cor = cor_da_classe(j.classe);
+        let emblema = self.emblema(ui.ctx(), j.classe);
+        let pintor = ui.painter().clone();
+        pintor.rect_filled(linha, 5, Color32::from_black_alpha(0x5A));
+        let barra = Rect::from_min_size(linha.min, vec2(linha.width() * fracao.clamp(0.0, 1.0), linha.height()));
+        visual::degrade(&pintor, barra, 5.0, visual::escurecer(cor, 0.42, 0xF0), visual::escurecer(cor, 0.88, 0xF0));
+        if barra.width() > 12.0 {
+            // Brilho fino no alto da barra.
+            pintor.hline(barra.x_range().shrink(5.0), barra.min.y + 1.5, Stroke::new(1.0_f32, branco(0x30)));
+        }
+        if j.voce {
+            pintor.rect_stroke(linha, 5, Stroke::new(1.5_f32, visual::DOURADO), StrokeKind::Inside);
+        }
+
+        // Medalhão: o emblema oficial da classe, tingido na cor dela (como no medidor Abyss), num
+        // círculo com anel da mesma cor.
+        let centro = pos2(linha.min.x + 15.0, linha.center().y);
+        pintor.circle_filled(centro, 11.0, Color32::from_rgb(0x12, 0x15, 0x1B));
+        match emblema {
+            Some(textura) => {
+                let quadrado = Rect::from_center_size(centro, Vec2::splat(19.0));
+                egui::Image::new(SizedTexture::new(textura.id(), quadrado.size())).tint(cor).paint_at(ui, quadrado);
+            }
+            None => {
+                let sigla: String = j.classe.chars().take(2).collect();
+                let sigla = if sigla.is_empty() { "?".to_string() } else { sigla };
+                let galley = ui.fonts_mut(|f| f.layout_no_wrap(sigla, fonte(9.5, true), cor));
+                pintor.galley(centro - galley.size() / 2.0, galley, cor);
+            }
+        }
+        pintor.circle_stroke(centro, 11.0, Stroke::new(1.5_f32, cor));
+
+        // Selos da aba Tank, medidos à parte: o corte com "…" encurta o nome e eles ficam inteiros.
+        let tank = self.aba == Aba::Tank;
+        let mut selos = LayoutJob::default();
+        if tank && j.segurando_aggro > 0 {
+            trecho(&mut selos, &format!("  aggro {}", j.segurando_aggro), 10.0, true, Color32::from_rgb(0xFF, 0xB5, 0x47));
+        }
+        if tank && j.mortes > 0 {
+            trecho(&mut selos, &format!("  ☠{}", j.mortes), 10.0, j.voce, Color32::from_rgb(0xFF, 0x8B, 0x8B));
+        }
+        let selos = (!selos.sections.is_empty()).then(|| montar(ui, selos));
+        let largura_selos = selos.as_ref().map_or(0.0, |g| g.size().x);
+
+        let inicio_nome = 32.0;
+        let mut nome = LayoutJob::default();
+        if let Some(posicao) = posicao {
+            trecho(&mut nome, &format!("{posicao} "), 10.5, false, branco(0xAA));
+        }
+        trecho(&mut nome, &j.nome, 12.5, true, texto());
+        if j.voce {
+            trecho(&mut nome, " (você)", 10.5, true, visual::DOURADO);
+        }
+        trecho(&mut nome, if expandido { " ▾" } else { "" }, 10.5, false, branco(0xAA));
+        nome.wrap = uma_linha((linha.width() - inicio_nome - tres.largura_total() - largura_selos - 8.0).max(40.0));
+        let nome = montar(ui, nome);
+        let largura_nome = nome.size().x;
+        let y = linha.center().y - nome.size().y / 2.0;
+        visual::com_sombra(&pintor, pos2(linha.min.x + inicio_nome, y), nome);
+        if let Some(selos) = selos {
+            let y = linha.center().y - selos.size().y / 2.0;
+            visual::com_sombra(&pintor, pos2(linha.min.x + inicio_nome + largura_nome, y), selos);
+        }
+        tres.pintar(&pintor, linha, numeros, true);
+    }
+
+    /// Ao expandir: classe, level, GS e os números que não cabem na linha (CRIT, AVG, MAX...).
+    fn ficha(&self, ui: &mut Ui, j: &LinhaJogador) {
+        let mut job = linha_perfil(j);
+        trecho(&mut job, "     ", 10.0, false, branco(0xCC));
+        trecho(
+            &mut job,
+            &numeros_extras(self.aba, j.golpes, j.criticos, j.aparos, j.total, j.maximo),
+            10.0,
+            false,
+            branco(0xCC),
+        );
+        job.wrap = uma_linha(ui.available_width() - 20.0);
+        let galley = montar(ui, job);
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), galley.size().y + 6.0), Sense::hover());
+        ui.painter().galley(pos2(rect.min.x + 18.0, rect.min.y + 3.0), galley, texto());
+    }
+
+    /// Skill expandida: ícone, nome e os mesmos três números (a % é a parte no total do jogador),
+    /// com uma barra fina na cor da classe pela parte.
+    fn linha_skill(&mut self, ui: &mut Ui, s: &LinhaSkill, classe: &str, tres: &Tres) {
         let largura = ui.available_width();
-        let textos = celulas(self.aba, Numeros::from(s));
-        let formato = TextFormat::simple(fonte(11.0, false), texto().gamma_multiply(0.85));
-        let celulas: Vec<Arc<Galley>> =
-            textos.into_iter().map(|t| montar(ui, LayoutJob::single_section(t, formato.clone()))).collect();
+        let formato = TextFormat::simple(fonte(11.0, false), texto().gamma_multiply(0.9));
+        let numeros = numeros_da_linha(ui, textos(s.total, s.por_segundo, s.porcentagem), 11.0);
 
         // Moldura fixa: a linha não pula quando o ícone termina de baixar.
         let inicio_nome = 18.0 + 18.0 + 6.0;
-        let mut nome = LayoutJob::single_section(s.nome.clone(), TextFormat::simple(fonte(11.0, false), texto().gamma_multiply(0.9)));
-        nome.wrap = uma_linha((largura - inicio_nome - 8.0 - colunas.largura_total()).max(40.0));
+        let mut nome = LayoutJob::single_section(s.nome.clone(), formato);
+        nome.wrap = uma_linha((largura - inicio_nome - 8.0 - tres.largura_total()).max(40.0));
         let nome = montar(ui, nome);
 
-        let altura = celulas.iter().fold(nome.size().y.max(18.0), |maior, g| maior.max(g.size().y));
-        let (rect, _) = ui.allocate_exact_size(vec2(largura, altura + 2.0), Sense::hover());
+        let altura = nome.size().y.max(20.0);
+        let (rect, resposta) = ui.allocate_exact_size(vec2(largura, altura + 1.0), Sense::hover());
+        let media = if s.golpes > 0 { s.total / f64::from(s.golpes) } else { 0.0 };
+        let mut dica = format!(
+            "{} golpes  ·  CRIT {}  ·  AVG {}  ·  MAX {}",
+            s.golpes,
+            p(razao(s.criticos, s.golpes), 0),
+            compacto(media),
+            compacto(s.maximo)
+        );
+        if self.aba == Aba::Dps {
+            dica += &format!("  ·  {} pelas costas", p(razao(s.costas, s.golpes), 0));
+        }
+        resposta.on_hover_text(dica);
         let linha = Rect::from_min_size(rect.min, vec2(largura, altura));
 
-        self.icone(ui, s, linha);
+        let cor = cor_da_classe(classe);
+        let fundo = Rect::from_min_max(pos2(linha.min.x + 14.0, linha.min.y + 1.0), linha.max);
+        let parte = Rect::from_min_size(
+            fundo.min,
+            vec2(fundo.width() * (s.porcentagem as f32).clamp(0.0, 1.0), fundo.height()),
+        );
+        ui.painter().rect_filled(parte, 3, Color32::from_rgba_unmultiplied(cor.r(), cor.g(), cor.b(), 0x2E));
+
+        self.icone(ui, s.icone.as_deref(), linha);
         ui.painter().galley(pos2(linha.min.x + inicio_nome, linha.center().y - nome.size().y / 2.0), nome, texto());
-        colunas.pintar(ui.painter(), linha, celulas);
+        tres.pintar(ui.painter(), linha, numeros, false);
+    }
+
+    /// Buffs que o jogador recebeu na luta, do mais ativo para o menos: ícone e nome da skill que dá
+    /// o buff e a parte da luta com ele ativo.
+    fn buffs(&mut self, ui: &mut Ui, buffs: &[LinhaBuff]) {
+        let largura = ui.available_width();
+        let inicio_nome = 18.0 + 18.0 + 6.0;
+        let titulo = montar(
+            ui,
+            LayoutJob::single_section("Buffs recebidos".into(), TextFormat::simple(fonte(10.0, false), branco(0x99))),
+        );
+        let (rect, resposta) = ui.allocate_exact_size(vec2(largura, titulo.size().y + 4.0), Sense::hover());
+        ui.painter().galley(pos2(rect.min.x + inicio_nome, rect.min.y + 3.0), titulo, texto());
+        resposta.on_hover_text(
+            "Parte da luta com o buff ativo. O nome é o da skill que dá o buff; efeitos da mesma skill, \
+             ou o mesmo buff vindo de jogadores diferentes, contam juntos.",
+        );
+
+        for b in buffs.iter().take(BUFFS_MOSTRADOS) {
+            let formato = TextFormat::simple(fonte(11.0, false), texto().gamma_multiply(0.85));
+            let parte = montar(ui, LayoutJob::single_section(p(b.fracao, 0), formato.clone()));
+            let mut nome = LayoutJob::single_section(b.nome.clone(), formato);
+            nome.wrap = uma_linha((largura - inicio_nome - parte.size().x - MARGEM_DIREITA - 16.0).max(40.0));
+            let nome = montar(ui, nome);
+            let altura = nome.size().y.max(18.0).max(parte.size().y);
+            let (rect, _) = ui.allocate_exact_size(vec2(largura, altura + 2.0), Sense::hover());
+            let linha = Rect::from_min_size(rect.min, vec2(largura, altura));
+
+            self.icone(ui, b.icone.as_deref(), linha);
+            let pintor = ui.painter();
+            pintor.galley(pos2(linha.min.x + inicio_nome, linha.center().y - nome.size().y / 2.0), nome, texto());
+            let x = linha.max.x - MARGEM_DIREITA - parte.size().x;
+            pintor.galley(pos2(x, linha.center().y - parte.size().y / 2.0), parte, texto());
+        }
     }
 
     /// Moldura fixa de 18 px com o ícone da skill (a linha não pula quando o ícone termina de baixar).
-    fn icone(&mut self, ui: &Ui, s: &LinhaSkill, linha: Rect) {
+    fn icone(&mut self, ui: &Ui, caminho: Option<&Path>, linha: Rect) {
         let moldura = Rect::from_min_size(pos2(linha.min.x + 18.0, linha.min.y), vec2(18.0, 18.0));
         ui.painter().rect_filled(moldura, 3, branco(0x22));
-        if let Some(icone) = s.icone.as_deref().and_then(|c| self.textura(ui.ctx(), c)) {
+        if let Some(icone) = caminho.and_then(|c| self.textura(ui.ctx(), c)) {
             let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
             ui.painter().image(icone.id(), moldura, uv, Color32::WHITE);
         }
+    }
+
+    /// Estado da luta (bolinha verde enquanto o placar anda), total da aba e o tempo da luta.
+    fn rodape(&mut self, ui: &mut Ui, tabela: &Tabela) {
+        let largura = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(vec2(largura, 24.0), Sense::hover());
+        let pintor = ui.painter();
+        pintor.hline(
+            rect.x_range(),
+            rect.min.y,
+            Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0xE6, 0xC0, 0x6A, 0x38)),
+        );
+        let meio = rect.center().y + 2.0;
+
+        let copiado = self.copiado_em.is_some_and(|t| t.elapsed() < Duration::from_secs(3));
+        let (cor, estado) = match self.vendo {
+            _ if copiado => (visual::DOURADO, "Resumo copiado".to_string()),
+            Some((_, inicio)) => (Color32::from_rgb(0x6E, 0xA8, 0xFF), format!("Luta das {}", hora_local(inicio))),
+            None if self.em_luta() => (Color32::from_rgb(0x5B, 0xD1, 0x6B), "Em luta".to_string()),
+            None => (branco(0x77), "Aguardando".to_string()),
+        };
+        let bolinha = pos2(rect.min.x + 7.0, meio);
+        if self.em_luta() {
+            pintor.circle_filled(bolinha, 6.5, Color32::from_rgba_unmultiplied(cor.r(), cor.g(), cor.b(), 0x40));
+        }
+        pintor.circle_filled(bolinha, 3.5, cor);
+        let mut job = LayoutJob::default();
+        trecho(&mut job, &estado, 11.0, true, branco(0xCC));
+        if tabela.total > 0.0 {
+            trecho(&mut job, &format!("   ·   Total {}", compacto(tabela.total)), 11.0, false, branco(0x99));
+        }
+        let esquerda = montar(ui, job);
+        let fim_esquerda = rect.min.x + 18.0 + esquerda.size().x;
+        pintor.galley(pos2(rect.min.x + 18.0, meio - esquerda.size().y / 2.0), esquerda, texto());
+
+        let tempo = montar(
+            ui,
+            LayoutJob::single_section(
+                minutos_e_segundos(self.placar.duracao),
+                TextFormat::simple(fonte(13.0, true), texto()),
+            ),
+        );
+        let largura_tempo = tempo.size().x;
+        pintor.galley(pos2(rect.max.x - 6.0 - largura_tempo, meio - tempo.size().y / 2.0), tempo, texto());
+        let mut livre_ate = rect.max.x - 6.0 - largura_tempo - 14.0;
+        if let Some(ping) = self.ping {
+            livre_ate = sinal_de_ping(ui, ping, rect, livre_ate, meio) - 10.0;
+        }
+
+        // Energia Odyle depois do total, se couber antes do ping: o cristal (ou "Odyle", enquanto o
+        // ícone não baixou) e os valores.
+        let Some((basica, carregada)) = self.odyle else { return };
+        let icone = self.icone_odyle(ui.ctx());
+        let rotulo = if icone.is_some() { "   ·   " } else { "   ·   Odyle " };
+        let formato = TextFormat::simple(fonte(11.0, false), branco(0x99));
+        let rotulo = montar(ui, LayoutJob::single_section(rotulo.into(), formato));
+        let mut job = LayoutJob::default();
+        trecho(&mut job, &n(basica as f64, 0), 11.0, true, branco(0xCC));
+        if let Some(carregada) = carregada {
+            trecho(&mut job, &format!(" (+{})", n(carregada as f64, 0)), 11.0, false, branco(0x99));
+        }
+        let valor = montar(ui, job);
+        let largura_icone = if icone.is_some() { 17.0 } else { 0.0 };
+        let (largura_rotulo, largura_valor) = (rotulo.size().x, valor.size().x);
+        if fim_esquerda + largura_rotulo + largura_icone + largura_valor > livre_ate {
+            return;
+        }
+        pintor.galley(pos2(fim_esquerda, meio - rotulo.size().y / 2.0), rotulo, texto());
+        let x = fim_esquerda + largura_rotulo;
+        if let Some(icone) = icone {
+            let quadrado = Rect::from_center_size(pos2(x + 7.5, meio), Vec2::splat(15.0));
+            egui::Image::new(SizedTexture::new(icone.id(), quadrado.size())).paint_at(ui, quadrado);
+        }
+        pintor.galley(pos2(x + largura_icone, meio - valor.size().y / 2.0), valor, texto());
+        let area = Rect::from_min_max(pos2(x, rect.min.y), pos2(x + largura_icone + largura_valor, rect.max.y));
+        ui.interact(area, ui.id().with("odyle"), Sense::hover()).on_hover_text(
+            "Energia Odyle: a básica e, entre parênteses, a carregada, como o servidor manda no login \
+             (ticket 60000001 do 0x610B). Com o Axon aberto depois do login, ela aparece só no próximo \
+             login. A atualização do ticket (0x610C) ainda não foi vista com a Odyle: na dúvida, vale \
+             o valor do último login. O máximo (o /840 da tela) não vem no pacote.",
+        );
+    }
+
+    /// Barra compacta: numa linha só, o alvo e o HP, o seu DPS, o do grupo e o ping.
+    fn barra_compacta(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            let (rect, resposta) = ui.allocate_exact_size(vec2(ui.available_width() - 26.0, 24.0), Sense::hover());
+            resposta.on_hover_text(
+                "Barra compacta. \"grupo\": o dano de todos dividido pelo tempo da luta; \"Você\": o seu DPS, \
+                 do seu primeiro ao último golpe (o mesmo da aba DPS).",
+            );
+            let pintor = ui.painter().clone();
+            let meio = rect.center().y;
+            let cor = if self.em_luta() { Color32::from_rgb(0x5B, 0xD1, 0x6B) } else { branco(0x77) };
+            pintor.circle_filled(pos2(rect.min.x + 7.0, meio), 3.5, cor);
+
+            // Da direita para a esquerda: ping, DPS; o alvo fica com o que sobrar.
+            let mut x = rect.max.x - 4.0;
+            if let Some(ping) = self.ping {
+                x = sinal_de_ping(ui, ping, rect, x, meio) - 10.0;
+            }
+            let dano = &self.placar.dano;
+            let segundos = self.placar.duracao as f64 / TICKS_POR_SEGUNDO as f64;
+            let mut job = LayoutJob::default();
+            if let Some(voce) = dano.jogadores.iter().find(|j| j.voce) {
+                trecho(&mut job, "Você ", 10.0, false, branco(0xBB));
+                trecho(&mut job, &format!("{}/s", compacto(voce.por_segundo)), 12.0, true, visual::DOURADO);
+            }
+            if dano.total > 0.0 && segundos > 0.0 {
+                let separador = if job.sections.is_empty() { "" } else { "  ·  " };
+                let grupo = format!("{separador}grupo {}/s", compacto(dano.total / segundos.max(1.0)));
+                trecho(&mut job, &grupo, 10.0, false, branco(0xBB));
+            }
+            let dps = montar(ui, job);
+            x -= dps.size().x;
+            let altura_dps = dps.size().y;
+            visual::com_sombra(&pintor, pos2(x, meio - altura_dps / 2.0), dps);
+
+            // HP e "derrota em" antes do nome: sem espaço, a reticência corta o nome.
+            let mut job = LayoutJob::default();
+            match &self.placar.alvo {
+                Some(alvo) => {
+                    if alvo.morto {
+                        trecho(&mut job, "Derrotado  ", 10.0, true, visual::DOURADO);
+                    } else if let (Some(hp), Some(maximo)) = (alvo.hp, alvo.hp_maximo) {
+                        let fracao = format!("{}  ", p(hp as f64 / maximo as f64, 1));
+                        trecho(&mut job, &fracao, 11.0, true, visual::VERMELHO_CLARO);
+                    }
+                    if let Some(segundos) = alvo.derrota_em {
+                        let falta = minutos_e_segundos((segundos * TICKS_POR_SEGUNDO as f64) as i64);
+                        trecho(&mut job, &format!("derrota em {falta}  "), 10.0, false, branco(0xCC));
+                    }
+                    trecho(&mut job, &nome_do_alvo(alvo), 12.0, true, texto());
+                }
+                None if self.fluxo.is_none() => trecho(&mut job, self.procurando(), 10.0, false, branco(0x99)),
+                None => trecho(&mut job, "Aguardando luta", 10.0, false, branco(0x99)),
+            }
+            let inicio = rect.min.x + 18.0;
+            job.wrap = uma_linha((x - 10.0 - inicio).max(40.0));
+            let alvo = montar(ui, job);
+            let altura_alvo = alvo.size().y;
+            visual::com_sombra(&pintor, pos2(inicio, meio - altura_alvo / 2.0), alvo);
+
+            if visual::botao_icone(ui, "▭", 14.0).on_hover_text("Voltar ao medidor completo").clicked() {
+                self.alternar_compacta();
+            }
+        });
+    }
+
+    fn logo(&mut self, ctx: &egui::Context) -> Option<TextureHandle> {
+        if self.logo.is_none() {
+            let imagem = decodificar(std::io::Cursor::new(LOGO));
+            self.logo = Some(imagem.map(|imagem| ctx.load_texture("logo", imagem, opcoes_de_textura())));
+        }
+        self.logo.clone().flatten()
+    }
+
+    /// Emblema oficial da classe (CDN do jogo), o mesmo para todos os jogadores dela. None enquanto
+    /// não baixou.
+    fn emblema(&mut self, ctx: &egui::Context, classe: &'static str) -> Option<TextureHandle> {
+        if !self.emblemas.contains_key(classe) {
+            // Só pergunta ao catálogo a cada leitura do placar: cada pergunta olha o disco.
+            if self.lido_em.elapsed() > Duration::from_millis(100) {
+                return None;
+            }
+            self.emblemas.insert(classe, dados_jogo::emblema_classe(classe)?);
+        }
+        let caminho = self.emblemas[classe].clone();
+        self.textura(ctx, &caminho)
+    }
+
+    /// Cristal da Energia Odyle (CDN do jogo). None enquanto não baixou.
+    fn icone_odyle(&mut self, ctx: &egui::Context) -> Option<TextureHandle> {
+        if self.icone_odyle.is_none() && self.lido_em.elapsed() <= Duration::from_millis(100) {
+            self.icone_odyle = dados_jogo::icone_odyle();
+        }
+        let caminho = self.icone_odyle.clone()?;
+        self.textura(ctx, &caminho)
     }
 
     fn status(&mut self, ui: &mut Ui) {
@@ -549,6 +1099,15 @@ impl Overlay {
                     partes.push("baixando nomes das skills...".into());
                 }
             }
+        }
+        // Com o clique atravessando, o mouse não alcança o overlay: o rodapé diz como voltar.
+        if self.atravessando {
+            partes.push(match bandeja::atalho(bandeja::ALTERNAR_CLIQUE) {
+                Some((atalho, false)) => {
+                    format!("clique atravessando: {atalho} ou o menu da bandeja desliga")
+                }
+                _ => "clique atravessando: o menu da bandeja desliga".into(),
+            });
         }
         // Versão do build, para os amigos dizerem qual usam; com versão nova no GitHub, o botão
         // Atualizar, e sem ela o Verificar atualização.
@@ -679,9 +1238,8 @@ impl Overlay {
         if let Some(pronta) = self.icones.get(caminho) {
             return pronta.clone();
         }
-        // O PNG original tem 256×256: mipmap para não serrilhar em 18 px.
-        let opcoes = egui::TextureOptions { mipmap_mode: Some(egui::TextureFilter::Linear), ..egui::TextureOptions::LINEAR };
-        let textura = decodificar_png(caminho).map(|imagem| ctx.load_texture(caminho.to_string_lossy(), imagem, opcoes));
+        let textura = decodificar_png(caminho)
+            .map(|imagem| ctx.load_texture(caminho.to_string_lossy(), imagem, opcoes_de_textura()));
         self.icones.insert(caminho.to_path_buf(), textura.clone());
         textura
     }
@@ -704,11 +1262,23 @@ impl Overlay {
 impl eframe::App for Overlay {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.janela = manter_sem_ativar(frame);
+        // Pelo winit (WS_EX_TRANSPARENT): ele guarda o estado e não apaga o bit ao recalcular o estilo.
+        if bandeja::atravessando() != self.atravessando {
+            self.atravessando = !self.atravessando;
+            ctx.send_viewport_cmd(ViewportCommand::MousePassthrough(self.atravessando));
+        }
         if (ctx.zoom_factor() - self.config.zoom).abs() > 0.001 {
             ctx.set_zoom_factor(self.config.zoom);
         }
-        if self.lido_em.elapsed() >= INTERVALO {
+        if self.lido_em.elapsed() >= self.intervalo() {
             self.ler_placar();
+        }
+        let (pediu_resumo, pediu_compacta) = bandeja::pedidos();
+        if pediu_resumo {
+            self.copiar_resumo(ctx);
+        }
+        if pediu_compacta {
+            self.alternar_compacta();
         }
         if self.salvo_em.elapsed() >= SALVAR_A_CADA {
             self.salvar_memoria();
@@ -731,7 +1301,7 @@ impl eframe::App for Overlay {
             ctx.request_repaint();
         } else {
             // Sem isso o egui só redesenha com input, e o placar congelaria.
-            ctx.request_repaint_after(INTERVALO);
+            ctx.request_repaint_after(self.intervalo());
         }
 
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
@@ -752,9 +1322,9 @@ impl eframe::App for Overlay {
             }
 
             let quadro = egui::Frame::new()
-                .fill(Color32::from_rgba_unmultiplied(0x10, 0x14, 0x18, self.config.alfa_do_fundo()))
-                .stroke(Stroke::new(1.0_f32, branco(0x33)))
-                .corner_radius(6)
+                .fill(Color32::from_rgba_unmultiplied(0x0D, 0x10, 0x15, self.config.alfa_do_fundo()))
+                .stroke(Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0xE6, 0xC0, 0x6A, 0x55)))
+                .corner_radius(8)
                 .inner_margin(8)
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::ZERO;
@@ -784,6 +1354,80 @@ impl eframe::App for Overlay {
         self.captura = None;
         self.salvar_memoria();
     }
+}
+
+/// Ping terminando em `fim`: barrinhas na cor da faixa e os ms, com a explicação no mouse. Devolve o
+/// x onde o desenho começa.
+fn sinal_de_ping(ui: &Ui, ping: i64, rect: Rect, fim: f32, meio: f32) -> f32 {
+    let pintor = ui.painter();
+    let ms = ping as f64 * 1000.0 / TICKS_POR_SEGUNDO as f64;
+    let (cor, acesas) = match ms {
+        ..=60.0 => (Color32::from_rgb(0x5B, 0xD1, 0x6B), 3),
+        ..=120.0 => (visual::AMARELO, 2),
+        ..=200.0 => (Color32::from_rgb(0xFF, 0xB5, 0x47), 2),
+        _ => (visual::VERMELHO_CLARO, 1),
+    };
+    let formato = TextFormat::simple(fonte(11.0, false), branco(0xBB));
+    let valor = montar(ui, LayoutJob::single_section(format!("{} ms", n(ms.round(), 0)), formato));
+    let x_valor = fim - valor.size().x;
+    let altura_valor = valor.size().y;
+    pintor.galley(pos2(x_valor, meio - altura_valor / 2.0), valor, texto());
+    for i in 0..3 {
+        let altura = 4.0 + 3.0 * i as f32;
+        let x = x_valor - 17.0 + 4.5 * i as f32;
+        let barra = Rect::from_min_max(pos2(x, meio + 5.0 - altura), pos2(x + 3.0, meio + 5.0));
+        pintor.rect_filled(barra, 1, if i < acesas { cor } else { branco(0x40) });
+    }
+    let area = Rect::from_min_max(pos2(x_valor - 18.0, rect.min.y), pos2(fim, rect.max.y));
+    ui.interact(area, ui.id().with("ping"), Sense::hover()).on_hover_text(
+        "Ping: o menor tempo de ida e volta até o servidor do jogo nos últimos 10 s, medido no TCP (do envio \
+         do seu PC ao ACK do servidor). É a latência da rede; o número que o jogo mostra pode sair um pouco maior.",
+    );
+    x_valor - 18.0
+}
+
+/// Nome do questlog; sem ele, o código do NPC ou o id da entidade.
+fn nome_do_alvo(alvo: &Alvo) -> String {
+    if !alvo.nome.is_empty() {
+        alvo.nome.clone()
+    } else if alvo.codigo != 0 {
+        format!("NPC {}", alvo.codigo)
+    } else if alvo.chefe {
+        format!("Chefe #{}", alvo.entidade)
+    } else {
+        format!("Alvo #{}", alvo.entidade)
+    }
+}
+
+/// "Ocultar nomes": os outros jogadores pelo nome da classe; o seu continua.
+fn ocultar_nomes(placar: &mut Placar) {
+    for tabela in [&mut placar.dano, &mut placar.dano_recebido, &mut placar.cura] {
+        for j in tabela.jogadores.iter_mut().filter(|j| !j.voce) {
+            j.nome = nome_oculto(j.classe);
+        }
+    }
+}
+
+fn nome_oculto(classe: &str) -> String {
+    if classe.is_empty() { "Jogador".into() } else { classe.to_string() }
+}
+
+/// O texto do "Copiar resumo": alvo, duração e total, e os primeiros da aba DPS (mais você, se ficou
+/// fora deles) com o DPS e a parte no dano.
+fn resumo(placar: &Placar, em_linhas: bool) -> String {
+    let dano = &placar.dano;
+    let alvo = placar.alvo.as_ref().map(|a| a.nome.as_str()).filter(|nome| !nome.is_empty()).unwrap_or("Luta");
+    let cabeca = format!("{alvo} · {} · total {}", minutos_e_segundos(placar.duracao), compacto(dano.total));
+    let voce = dano.jogadores.iter().position(|j| j.voce);
+    let (primeiros, voce_abaixo) = linhas_mostradas(dano.jogadores.len(), voce, LIMITE_DE_LINHAS);
+    let linhas: Vec<String> = primeiros
+        .chain(voce_abaixo)
+        .map(|i| {
+            let j = &dano.jogadores[i];
+            format!("{}. {} {}/s {}", i + 1, j.nome, compacto(j.por_segundo), p(j.porcentagem, 1))
+        })
+        .collect();
+    if em_linhas { format!("{cabeca}\n{}", linhas.join("\n")) } else { format!("{cabeca} | {}", linhas.join(" · ")) }
 }
 
 /// Tamanho da aba recolhida, em pontos: o texto com folga.
@@ -860,14 +1504,22 @@ fn arquivo_replay() -> Option<PathBuf> {
     std::env::args().skip_while(|a| a != "--replay").nth(1).map(PathBuf::from)
 }
 
-fn reproduzir(sessao: Arc<Mutex<Sessao>>, arquivo: PathBuf) {
+/// `separar_lutas` (--lutas): as lutas acabam como ao vivo e enchem o histórico; sem ele, a captura
+/// inteira é uma luta só e o histórico só ganha luta com o "Zerar". `ate` (--ate S): só os S
+/// primeiros segundos da captura, para ver a janela no meio de uma luta.
+fn reproduzir(sessao: Arc<Mutex<Sessao>>, arquivo: PathBuf, separar_lutas: bool, ate: Option<f64>) {
     std::thread::spawn(move || {
         let quadros = match nucleo::captura::pcapng::ler(&arquivo) {
             Ok(quadros) => quadros,
             Err(erro) => return eprintln!("{erro}"),
         };
-        travar(&sessao).medidor.inatividade = i64::MAX;
-        for q in &quadros {
+        if !separar_lutas {
+            let mut s = travar(&sessao);
+            s.medidor.inatividade = i64::MAX;
+            s.medidor.fim_pelo_combate = false;
+        }
+        let fim = quadros.first().zip(ate).map_or(Hora::MAX, |(q, s)| q.hora + (s * TICKS_POR_SEGUNDO as f64) as Hora);
+        for q in quadros.iter().take_while(|q| q.hora <= fim) {
             if let Some(seg) = nucleo::captura::segmento::SegmentoTcp::extrair(&q.dados, q.tipo_enlace) {
                 travar(&sessao).ao_segmento(&seg, q.hora);
             }
@@ -908,23 +1560,18 @@ fn segmentos_do_perfil(j: &LinhaJogador) -> [Vec<(String, Color32)>; 3] {
     ]
 }
 
-/// Os dados ligados na configuração, separados por " · "; None com os três desligados.
-fn linha_perfil(j: &LinhaJogador, visiveis: [bool; 3]) -> Option<LayoutJob> {
+/// Classe, Nv e GS separados por " · ", com as cores de cada pedaço.
+fn linha_perfil(j: &LinhaJogador) -> LayoutJob {
     let mut job = LayoutJob::default();
-    let mut vazio = true;
-    for (pedacos, visivel) in segmentos_do_perfil(j).into_iter().zip(visiveis) {
-        if !visivel {
-            continue;
-        }
-        if !vazio {
+    for (i, pedacos) in segmentos_do_perfil(j).into_iter().enumerate() {
+        if i > 0 {
             trecho(&mut job, "  ·  ", 10.0, false, branco(0xCC));
         }
-        vazio = false;
         for (texto_pedaco, cor) in pedacos {
             trecho(&mut job, &texto_pedaco, 10.0, false, cor);
         }
     }
-    (!vazio).then_some(job)
+    job
 }
 
 /// Botão do WPF: texto claro, fundo transparente, realce ao passar o mouse; a aba ativa fica
@@ -946,115 +1593,86 @@ fn botao(ui: &mut Ui, rotulo: &str, ativo: bool) -> egui::Response {
     resposta.on_hover_cursor(CursorIcon::PointingHand)
 }
 
-/// Colunas da tabela de uma aba. Largura fixa pelo pior caso de cada coluna, para a tabela não
-/// dançar quando os números crescem no meio da luta. Coluna desligada não ocupa espaço.
-struct Colunas {
-    titulos: [&'static str; 5],
-    larguras: [f32; 5],
-    visiveis: [bool; 5],
+/// Os três números de cada linha (como no medidor do TK), alinhados à direita em colunas de largura
+/// fixa pelo pior caso de cada uma: a linha não dança quando os números crescem no meio da luta.
+/// Número desligado na configuração não ocupa espaço.
+struct Tres {
+    larguras: [f32; 3],
+    visiveis: [bool; 3],
 }
 
-const ESPACO_ENTRE_COLUNAS: f32 = 10.0;
-const MARGEM_DIREITA: f32 = 6.0;
+const PIOR_CASO: [&str; 3] = ["999,99M", "999,9K/s", "100,0%"];
+const ENTRE_NUMEROS: f32 = 12.0;
+const MARGEM_DIREITA: f32 = 8.0;
 
-impl Colunas {
-    fn medir(ui: &Ui, definicao: &[(&'static str, &'static str); 5], visiveis: [bool; 5]) -> Self {
-        let largura = |amostra: &str, tamanho: f32, negrito: bool| {
-            ui.fonts_mut(|f| f.layout_no_wrap(amostra.to_string(), fonte(tamanho, negrito), texto()).size().x)
-        };
-        let mut larguras = [0.0; 5];
-        for (i, (titulo, pior)) in definicao.iter().enumerate() {
-            larguras[i] = largura(titulo, 10.0, false).max(largura(pior, 12.0, i == 0)).ceil();
-        }
-        Self { titulos: definicao.map(|(titulo, _)| titulo), larguras, visiveis }
-    }
-
-    fn alguma(&self) -> bool {
-        self.visiveis.contains(&true)
+impl Tres {
+    fn medir(ui: &Ui, visiveis: [bool; 3]) -> Self {
+        let larguras = PIOR_CASO.map(|pior| {
+            ui.fonts_mut(|f| f.layout_no_wrap(pior.to_string(), fonte(12.0, true), texto()).size().x.ceil())
+        });
+        Self { larguras, visiveis }
     }
 
     fn largura_total(&self) -> f32 {
-        let (soma, quantas) = (0..5)
+        let (soma, quantos) = (0..3)
             .filter(|&i| self.visiveis[i])
-            .fold((0.0, 0), |(soma, quantas), i| (soma + self.larguras[i], quantas + 1));
-        if quantas == 0 { 0.0 } else { soma + ESPACO_ENTRE_COLUNAS * (quantas - 1) as f32 + MARGEM_DIREITA }
+            .fold((0.0, 0), |(soma, quantos), i| (soma + self.larguras[i], quantos + 1));
+        if quantos == 0 { 0.0 } else { soma + ENTRE_NUMEROS * (quantos - 1) as f32 + MARGEM_DIREITA }
     }
 
-    /// Distância da borda direita da linha até a borda direita de cada coluna (as desligadas não
-    /// empurram as outras).
-    fn direitas(&self) -> [f32; 5] {
-        let mut direitas = [MARGEM_DIREITA; 5];
+    /// Distância da borda direita da linha até a borda direita de cada número.
+    fn direitas(&self) -> [f32; 3] {
+        let mut direitas = [MARGEM_DIREITA; 3];
         let mut acumulado = MARGEM_DIREITA;
-        for i in (0..5).rev() {
+        for i in (0..3).rev() {
             direitas[i] = acumulado;
             if self.visiveis[i] {
-                acumulado += self.larguras[i] + ESPACO_ENTRE_COLUNAS;
+                acumulado += self.larguras[i] + ENTRE_NUMEROS;
             }
         }
         direitas
     }
 
-    /// Títulos das colunas, alinhados à direita como os números.
-    fn cabecalho(&self, ui: &mut Ui) {
-        let titulos: Vec<Arc<Galley>> = self
-            .titulos
-            .iter()
-            .map(|titulo| ui.fonts_mut(|f| f.layout_no_wrap(titulo.to_string(), fonte(10.0, false), branco(0x99))))
-            .collect();
-        let altura = titulos.iter().fold(0.0_f32, |maior, g| maior.max(g.size().y));
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), altura + 2.0), Sense::hover());
-        self.pintar(ui.painter(), Rect::from_min_size(rect.min, vec2(rect.width(), altura)), titulos);
-    }
-
-    /// Cada célula ligada alinhada à direita na sua coluna e centrada na altura da linha.
-    fn pintar(&self, pintor: &egui::Painter, linha: Rect, celulas: Vec<Arc<Galley>>) {
+    fn pintar(&self, pintor: &Painter, linha: Rect, celulas: [Arc<Galley>; 3], sombra: bool) {
         for ((celula, direita), visivel) in celulas.into_iter().zip(self.direitas()).zip(self.visiveis) {
             if !visivel {
                 continue;
             }
             let posicao = pos2(linha.max.x - direita - celula.size().x, linha.center().y - celula.size().y / 2.0);
-            pintor.galley(posicao, celula, texto());
+            if sombra {
+                visual::com_sombra(pintor, posicao, celula);
+            } else {
+                pintor.galley(posicao, celula, texto());
+            }
         }
     }
 }
 
-/// Os números de uma linha da tabela, de um jogador ou de uma skill dele.
-struct Numeros {
-    por_segundo: f64,
-    total: f64,
-    porcentagem: f64,
-    golpes: i32,
-    criticos: i32,
-    aparos: i32,
-    maximo: f64,
+/// Total, por segundo e a parte no total de quem está sendo medido (do jogador no grupo, ou da
+/// skill no jogador).
+fn textos(total: f64, por_segundo: f64, parte: f64) -> [String; 3] {
+    [compacto(total), format!("{}/s", compacto(por_segundo)), p(parte, 1)]
 }
 
-impl From<&LinhaJogador> for Numeros {
-    fn from(j: &LinhaJogador) -> Self {
-        let LinhaJogador { por_segundo, total, porcentagem, golpes, criticos, aparos, maximo, .. } = *j;
-        Self { por_segundo, total, porcentagem, golpes, criticos, aparos, maximo }
-    }
+/// Total em semibold branco, por segundo em branco, % em amarelo.
+fn numeros_da_linha(ui: &Ui, textos: [String; 3], tamanho: f32) -> [Arc<Galley>; 3] {
+    let cores = [(true, texto()), (false, branco(0xE6)), (true, visual::AMARELO)];
+    let [a, b, c] = textos;
+    let montar_um = |t: String, (negrito, cor): (bool, Color32)| {
+        montar(ui, LayoutJob::single_section(t, TextFormat::simple(fonte(tamanho, negrito), cor)))
+    };
+    [montar_um(a, cores[0]), montar_um(b, cores[1]), montar_um(c, cores[2])]
 }
 
-impl From<&LinhaSkill> for Numeros {
-    fn from(s: &LinhaSkill) -> Self {
-        let LinhaSkill { por_segundo, total, porcentagem, golpes, criticos, aparos, maximo, .. } = *s;
-        Self { por_segundo, total, porcentagem, golpes, criticos, aparos, maximo }
-    }
-}
-
-/// As células na ordem das colunas da aba (Aba::colunas). O % é a parte no total de quem está
-/// sendo medido (do jogador no grupo, ou da skill no jogador).
-fn celulas(aba: Aba, n: Numeros) -> [String; 5] {
-    let por_segundo = compacto(n.por_segundo);
-    let parte = format!("{} ({})", compacto(n.total), p(n.porcentagem, 0));
-    let critico = p(razao(n.criticos, n.golpes), 0);
-    let maximo = compacto(n.maximo);
+/// Os números que saíram da linha na 0.8.0 (eram colunas): vão para o mouse e para a ficha.
+fn numeros_extras(aba: Aba, golpes: i32, criticos: i32, aparos: i32, total: f64, maximo: f64) -> String {
+    let critico = p(razao(criticos, golpes), 0);
+    let maximo = compacto(maximo);
     match aba {
-        Aba::Tank => [por_segundo, parte, p(razao(n.aparos, n.golpes), 0), critico, maximo],
+        Aba::Tank => format!("PARRY {}  ·  CRIT {critico}  ·  MAX {maximo}", p(razao(aparos, golpes), 0)),
         Aba::Dps | Aba::Healer => {
-            let media = if n.golpes > 0 { n.total / f64::from(n.golpes) } else { 0.0 };
-            [por_segundo, parte, critico, compacto(media), maximo]
+            let media = if golpes > 0 { total / f64::from(golpes) } else { 0.0 };
+            format!("CRIT {critico}  ·  AVG {}  ·  MAX {maximo}", compacto(media))
         }
     }
 }
@@ -1158,10 +1776,18 @@ pub fn avisar(mensagem: &str) {
     unsafe { MessageBoxW(std::ptr::null_mut(), texto.as_ptr(), titulo.as_ptr(), MB_OK | MB_ICONERROR) };
 }
 
-/// PNG em RGBA para textura (os ícones do CDN são RGBA; o resto é convertido).
+/// O PNG original tem 256×256: mipmap para não serrilhar em 18 px.
+fn opcoes_de_textura() -> egui::TextureOptions {
+    egui::TextureOptions { mipmap_mode: Some(egui::TextureFilter::Linear), ..egui::TextureOptions::LINEAR }
+}
+
 fn decodificar_png(caminho: &Path) -> Option<egui::ColorImage> {
-    let arquivo = std::io::BufReader::new(std::fs::File::open(caminho).ok()?);
-    let mut decodificador = png::Decoder::new(arquivo);
+    decodificar(std::io::BufReader::new(std::fs::File::open(caminho).ok()?))
+}
+
+/// PNG em RGBA para textura (os ícones do CDN são RGBA; o resto é convertido).
+fn decodificar(leitor: impl std::io::BufRead + std::io::Seek) -> Option<egui::ColorImage> {
+    let mut decodificador = png::Decoder::new(leitor);
     decodificador.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut leitor = decodificador.read_info().ok()?;
     let mut buffer = vec![0; leitor.output_buffer_size()?];
@@ -1221,6 +1847,29 @@ fn razao(parte: i32, todo: i32) -> f64 {
     if todo > 0 { f64::from(parte) / f64::from(todo) } else { 0.0 }
 }
 
+/// Dica das linhas da aba DPS: os golpes pelas costas (byte de direção do 0x3804), que não têm
+/// coluna. Perfeito e duplo ficam de fora até serem conferidos na tela.
+fn detalhe_dps(golpes: i32, costas: i32) -> String {
+    format!("{golpes} golpes  ·  {} pelas costas", p(razao(costas, golpes), 0))
+}
+
+/// "HH:mm" no fuso do Windows (com horário de verão) de uma hora da captura, que vem em UTC.
+fn hora_local(hora: Hora) -> String {
+    use windows_sys::Win32::Foundation::{FILETIME, SYSTEMTIME};
+    use windows_sys::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
+
+    // O FILETIME conta desde 1601 e a Hora desde 1970, os dois em ticks de 100 ns.
+    let ticks = (hora + 116_444_736_000_000_000) as u64;
+    let arquivo = FILETIME { dwLowDateTime: ticks as u32, dwHighDateTime: (ticks >> 32) as u32 };
+    let mut utc = unsafe { std::mem::zeroed::<SYSTEMTIME>() };
+    let mut local = unsafe { std::mem::zeroed::<SYSTEMTIME>() };
+    let ok = unsafe {
+        FileTimeToSystemTime(&arquivo, &mut utc) != 0
+            && SystemTimeToTzSpecificLocalTime(std::ptr::null(), &utc, &mut local) != 0
+    };
+    if ok { format!("{:02}:{:02}", local.wHour, local.wMinute) } else { "--:--".into() }
+}
+
 /// "mm:ss" do TimeSpan: o componente de minutos volta a 00 depois de 1 h.
 fn minutos_e_segundos(ticks: i64) -> String {
     let s = ticks / TICKS_POR_SEGUNDO;
@@ -1268,5 +1917,43 @@ mod testes {
         assert_eq!(procurando(900, 500, s(60), Some(s(30))), PROCURANDO);
         // Jogo aberto há mais de 2 min sem o servidor aparecer.
         assert!(procurando(900, 500, s(200), Some(s(150))).contains("VPN"));
+    }
+
+    fn placar_de_12() -> Placar {
+        let jogador = |i: usize| LinhaJogador {
+            nome: format!("J{i}"),
+            classe: if i == 0 { "Cleric" } else { "" },
+            voce: i == 11,
+            por_segundo: 100.0 - i as f64,
+            porcentagem: (100.0 - i as f64) / 1000.0,
+            ..Default::default()
+        };
+        let mut placar = Placar { duracao: 83 * TICKS_POR_SEGUNDO, ..Default::default() };
+        placar.alvo = Some(Alvo { nome: "Kromede".into(), ..Default::default() });
+        placar.dano.total = 1_234_567.0;
+        placar.dano.jogadores = (0..12).map(jogador).collect();
+        placar
+    }
+
+    #[test]
+    fn resumo_tem_alvo_tempo_total_e_os_10_primeiros_com_voce_abaixo() {
+        let placar = placar_de_12();
+        let cabeca = format!("Kromede · 01:23 · total {}", compacto(1_234_567.0));
+        let linha = resumo(&placar, false);
+        assert!(linha.starts_with(&format!("{cabeca} | 1. J0 100/s {}", p(0.1, 1))), "{linha}");
+        // Você em 12º, fora dos 10: entra no fim com a posição de verdade, e o 11º fica de fora.
+        assert!(linha.ends_with(&format!("10. J9 91/s {} · 12. J11 89/s {}", p(0.091, 1), p(0.089, 1))), "{linha}");
+        assert!(!linha.contains("J10"));
+        let linhas = resumo(&placar, true);
+        assert_eq!(linhas.lines().count(), 12);
+        assert_eq!(linhas.lines().next(), Some(cabeca.as_str()));
+    }
+
+    #[test]
+    fn ocultar_nomes_troca_os_outros_pela_classe_e_guarda_o_seu() {
+        let mut placar = placar_de_12();
+        ocultar_nomes(&mut placar);
+        let nomes: Vec<&str> = placar.dano.jogadores.iter().map(|j| j.nome.as_str()).collect();
+        assert_eq!((nomes[0], nomes[1], nomes[11]), ("Cleric", "Jogador", "J11"));
     }
 }

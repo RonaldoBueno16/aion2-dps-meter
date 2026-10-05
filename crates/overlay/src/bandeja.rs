@@ -1,40 +1,61 @@
 //! Ícone na área de notificação (a seta ao lado do relógio) enquanto o Axon roda. Clique esquerdo
 //! liga ou desliga o overlay; clique direito abre o menu. Ligado, o overlay só aparece com o jogo
 //! em primeiro plano e fica dentro da área dele; escondido, o medidor continua contando.
-//! Fica numa thread própria, com uma janela oculta para receber os cliques e o temporizador: com o
-//! overlay escondido, o egui para de desenhar e não teria como trazê-lo de volta.
+//! Fica numa thread própria, com uma janela oculta para receber os cliques, o temporizador e os
+//! atalhos globais: com o overlay escondido, o egui para de desenhar e não teria como trazê-lo de
+//! volta. O RegisterHotKey só vale na thread da janela que recebe o WM_HOTKEY, por isso fica aqui.
 
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey};
 use windows_sys::Win32::UI::Shell::{NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, ChangeWindowMessageFilterEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
     DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetCursorPos, GetMessageW, GetSystemMetrics, GetWindowLongPtrW,
-    GetWindowRect, IMAGE_ICON, IsWindowVisible, LR_DEFAULTCOLOR, LoadImageW, MF_SEPARATOR, MF_STRING, MSG,
-    MSGFLT_ALLOW, PostMessageW, PostQuitMessage,
+    GetWindowRect, IMAGE_ICON, IsWindowVisible, LR_DEFAULTCOLOR, LoadImageW, MF_CHECKED, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED, MSG, MSGFLT_ALLOW, PostMessageW, PostQuitMessage,
     RegisterClassW, RegisterWindowMessageW, SM_CXSMICON, SM_CYSMICON, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
     SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos,
     ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE,
-    WM_DESTROY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
+    WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
 };
 
+use crate::atalho::Atalho;
 use crate::jogo;
 
 /// Mensagem que o Windows manda à janela oculta quando o ícone é clicado.
 const AVISO: u32 = WM_APP + 1;
 const ALTERNAR: usize = 1;
 const FECHAR: usize = 2;
+const ATRAVESSAR: usize = 3;
 /// "TaskbarCreated": o Explorer reiniciou e o ícone precisa ser posto de novo.
 static BARRA_RECRIADA: AtomicU32 = AtomicU32::new(0);
 /// A chave da bandeja. Desligado, o overlay não aparece nem por cima do jogo.
 static LIGADO: AtomicBool = AtomicBool::new(true);
+/// O clique passa pelo overlay e chega ao jogo. Quem aplica na janela é o overlay, a cada quadro.
+static ATRAVESSANDO: AtomicBool = AtomicBool::new(false);
 /// Fechando: o temporizador para de esconder o overlay.
 static SAINDO: AtomicBool = AtomicBool::new(false);
 const CONFERIR_A_CADA_MS: u32 = 200;
+
+/// Os atalhos, na ordem do id do WM_HOTKEY menos 1.
+pub const MOSTRAR: usize = 0;
+pub const ALTERNAR_CLIQUE: usize = 1;
+pub const COPIAR_RESUMO: usize = 2;
+pub const ALTERNAR_COMPACTA: usize = 3;
+pub const ATALHOS_TOTAL: usize = 4;
+static ATALHOS: OnceLock<[Option<Atalho>; ATALHOS_TOTAL]> = OnceLock::new();
+static REGISTRADO: [AtomicBool; ATALHOS_TOTAL] = [const { AtomicBool::new(false) }; ATALHOS_TOTAL];
+/// O Windows recusou o atalho: outro programa já usa a combinação.
+static OCUPADO: [AtomicBool; ATALHOS_TOTAL] = [const { AtomicBool::new(false) }; ATALHOS_TOTAL];
+/// Pedidos dos atalhos que mexem no conteúdo do overlay: ele atende no próximo quadro.
+static PEDIU_RESUMO: AtomicBool = AtomicBool::new(false);
+static PEDIU_COMPACTA: AtomicBool = AtomicBool::new(false);
 
 pub struct Bandeja {
     janela: isize,
@@ -43,7 +64,8 @@ pub struct Bandeja {
 
 impl Bandeja {
     /// `overlay` = HWND da janela do medidor. None se a janela oculta não pôde ser criada.
-    pub fn iniciar(overlay: isize) -> Option<Self> {
+    pub fn iniciar(overlay: isize, atalhos: [Option<Atalho>; ATALHOS_TOTAL]) -> Option<Self> {
+        let _ = ATALHOS.set(atalhos);
         let (avisar, pronta) = mpsc::channel();
         let fio = std::thread::spawn(move || unsafe { laco(overlay, avisar) });
         let janela = pronta.recv().ok().filter(|&j| j != 0)?;
@@ -119,7 +141,17 @@ unsafe extern "system" fn procedimento(janela: HWND, mensagem: u32, w: WPARAM, l
                 WM_RBUTTONUP => menu(janela, overlay),
                 _ => {}
             },
-            WM_TIMER => atualizar(overlay),
+            WM_TIMER => {
+                atualizar(overlay);
+                conferir_atalhos(janela);
+            }
+            WM_HOTKEY => match w {
+                1 => alternar(overlay),
+                2 => alternar_clique(),
+                3 => PEDIU_RESUMO.store(true, Ordering::Relaxed),
+                4 => PEDIU_COMPACTA.store(true, Ordering::Relaxed),
+                _ => {}
+            },
             WM_CLOSE => {
                 icone_na_bandeja(janela, NIM_DELETE);
                 DestroyWindow(janela);
@@ -159,6 +191,10 @@ unsafe fn menu(janela: HWND, overlay: HWND) {
         let menu = CreatePopupMenu();
         let rotulo = if LIGADO.load(Ordering::Relaxed) { "Esconder overlay" } else { "Mostrar overlay" };
         AppendMenuW(menu, MF_STRING, ALTERNAR, utf16(rotulo).as_ptr());
+        // Com o clique atravessando, o overlay não responde ao mouse: o menu é a saída garantida
+        // (o atalho pode estar ocupado ou desligado).
+        let marca = if ATRAVESSANDO.load(Ordering::Relaxed) { MF_CHECKED } else { MF_UNCHECKED };
+        AppendMenuW(menu, MF_STRING | marca, ATRAVESSAR, utf16("Clique atravessa o overlay").as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         AppendMenuW(menu, MF_STRING, FECHAR, utf16("Fechar Axon").as_ptr());
         let mut cursor = POINT { x: 0, y: 0 };
@@ -178,8 +214,51 @@ unsafe fn menu(janela: HWND, overlay: HWND) {
         DestroyMenu(menu);
         match escolha as usize {
             ALTERNAR => alternar(overlay),
+            ATRAVESSAR => alternar_clique(),
             FECHAR => fechar(overlay),
             _ => {}
+        }
+    }
+}
+
+fn alternar_clique() {
+    ATRAVESSANDO.fetch_xor(true, Ordering::Relaxed);
+}
+
+/// O clique deve passar pelo overlay até o jogo.
+pub fn atravessando() -> bool {
+    ATRAVESSANDO.load(Ordering::Relaxed)
+}
+
+/// Atalhos de resumo e de barra compacta apertados desde a última pergunta: (resumo, compacta).
+pub fn pedidos() -> (bool, bool) {
+    (PEDIU_RESUMO.swap(false, Ordering::Relaxed), PEDIU_COMPACTA.swap(false, Ordering::Relaxed))
+}
+
+/// O atalho (MOSTRAR, ALTERNAR_CLIQUE...) e se o Windows o recusou por estar em uso por outro
+/// programa. None com o atalho desligado ou inválido na config.
+pub fn atalho(qual: usize) -> Option<(&'static str, bool)> {
+    let atalho = ATALHOS.get()?[qual].as_ref()?;
+    Some((atalho.texto.as_str(), OCUPADO[qual].load(Ordering::Relaxed)))
+}
+
+/// Registra os atalhos só com o jogo na frente (sem seguir o jogo, sempre) e tira quando ele sai:
+/// enquanto registrada, a combinação não chega a nenhum outro programa (Ctrl+T abre aba no
+/// navegador, Ctrl+H o histórico).
+unsafe fn conferir_atalhos(janela: HWND) {
+    let Some(atalhos) = ATALHOS.get() else { return };
+    let querer = !jogo::seguindo() || jogo::em_primeiro_plano();
+    for (i, atalho) in atalhos.iter().enumerate() {
+        let Some(a) = atalho else { continue };
+        let id = i as i32 + 1;
+        let registrado = REGISTRADO[i].load(Ordering::Relaxed);
+        if querer && !registrado {
+            let ok = unsafe { RegisterHotKey(janela, id, a.modificadores | MOD_NOREPEAT, a.tecla) } != 0;
+            REGISTRADO[i].store(ok, Ordering::Relaxed);
+            OCUPADO[i].store(!ok, Ordering::Relaxed);
+        } else if !querer && registrado {
+            unsafe { UnregisterHotKey(janela, id) };
+            REGISTRADO[i].store(false, Ordering::Relaxed);
         }
     }
 }

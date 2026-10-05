@@ -1,11 +1,12 @@
-//! Nome em português e ícone de cada skill, buscados sob demanda e guardados em disco.
+//! Nome em português e ícone de cada skill, e nome, level e retrato de cada NPC (o alvo da luta),
+//! buscados sob demanda e guardados em disco.
 //! Nomes: questlog.gg, base comunitária montada a partir do cliente Global (idioma "pt"),
 //! API não documentada: pode mudar sem aviso. Ícones: CDN oficial da NCSoft.
 //! Uma requisição por vez, com intervalo, para não sobrecarregar ninguém.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -23,6 +24,34 @@ pub struct Info {
     pub cura: Option<bool>,
 }
 
+/// NPC do questlog pelo código do spawn (0x3641). `retrato`: só alguns têm (o world boss tem, mob
+/// comum quase nunca).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InfoNpc {
+    #[serde(rename = "Nome")]
+    pub nome: String,
+    #[serde(rename = "Nivel", default)]
+    pub nivel: i32,
+    /// isNamed do questlog: chefe com nome próprio.
+    #[serde(rename = "Nomeado", default)]
+    pub nomeado: bool,
+    /// npcSubType do questlog: "normalmonster", "heromonster", "normalsummon"...
+    #[serde(rename = "Tipo", default)]
+    pub tipo: String,
+    #[serde(rename = "Retrato", default)]
+    pub retrato: Option<String>,
+}
+
+impl InfoNpc {
+    /// Chefe: nomeado, herói ou lendário no questlog. Na amostra de 2026-10-05, world boss e chefe de
+    /// dungeon (Kromede, Bakarma) vieram heromonster nomeados, legendmonster também nomeado;
+    /// elitemonster e normalmonster, não. Invocação (normalsummon) vem nomeada às vezes e fica de fora.
+    pub fn chefe(&self) -> bool {
+        !self.tipo.contains("summon")
+            && (self.nomeado || ["hero", "legend", "boss"].iter().any(|t| self.tipo.contains(t)))
+    }
+}
+
 const API: &str = "https://questlog.gg/aion-2/api/trpc/database.";
 const CDN: &str = "https://assets.playnccdn.com/static-aion2-gamedata/resources/";
 const IDIOMA: &str = "pt";
@@ -34,6 +63,8 @@ struct Estado {
     pasta: PathBuf,
     arquivo_nomes: PathBuf,
     infos: Mutex<HashMap<u32, Info>>,
+    arquivo_npcs: PathBuf,
+    npcs: Mutex<HashMap<u32, InfoNpc>>,
     ja_pedido: Mutex<HashSet<String>>,
     /// Vira true quando o cache foi lido ou a listagem inicial terminou (com ou sem rede).
     pronto: (Mutex<bool>, Condvar),
@@ -42,6 +73,9 @@ struct Estado {
 pub struct CatalogoSkills {
     estado: Arc<Estado>,
     fila: Sender<String>,
+    /// Nome de NPC e retrato passam na frente: num world boss, centenas de skills e ícones entram na
+    /// fila antes, a 400 ms cada, e o nome do boss esperaria minutos.
+    urgente: Sender<String>,
 }
 
 /// %LOCALAPPDATA%\Aion2Meter, onde ficam o cache das skills, os ícones e a memória dos jogadores.
@@ -61,17 +95,28 @@ impl CatalogoSkills {
             .and_then(|texto| serde_json::from_str(&texto).ok())
             .unwrap_or_default();
 
+        let arquivo_npcs = pasta.join(format!("npcs-{IDIOMA}.json"));
+        let npcs: HashMap<u32, InfoNpc> = std::fs::read_to_string(&arquivo_npcs)
+            .ok()
+            .and_then(|texto| serde_json::from_str(&texto).ok())
+            .unwrap_or_default();
+
         let estado = Arc::new(Estado {
             pasta,
             arquivo_nomes,
             infos: Mutex::new(infos),
+            arquivo_npcs,
+            npcs: Mutex::new(npcs),
             ja_pedido: Mutex::new(HashSet::new()),
             pronto: (Mutex::new(false), Condvar::new()),
         });
         let (fila, recebidos) = mpsc::channel();
+        let (urgente, urgentes) = mpsc::channel();
         let trabalhador = estado.clone();
-        let _ = std::thread::Builder::new().name("catalogo".into()).spawn(move || trabalhar(&trabalhador, &recebidos));
-        Self { estado, fila }
+        let _ = std::thread::Builder::new()
+            .name("catalogo".into())
+            .spawn(move || trabalhar(&trabalhador, &urgentes, &recebidos));
+        Self { estado, fila, urgente }
     }
 
     /// Espera o cache ou a listagem inicial, no máximo `limite`.
@@ -104,6 +149,15 @@ impl CatalogoSkills {
         None
     }
 
+    /// Nome, level e retrato do NPC; None enquanto não chegou ou se o questlog não tem (pede uma vez).
+    pub fn npc(&self, codigo: u32) -> Option<InfoNpc> {
+        if let Some(info) = self.estado.npcs().get(&codigo) {
+            return Some(info.clone());
+        }
+        self.pedir(format!("npc:{codigo}"));
+        None
+    }
+
     /// Caminho local do PNG do ícone; None enquanto não baixou (pede o download uma vez).
     pub fn caminho_icone(&self, icone: Option<&str>) -> Option<PathBuf> {
         let icone = icone.filter(|i| !i.is_empty())?;
@@ -118,7 +172,9 @@ impl CatalogoSkills {
     fn pedir(&self, item: String) {
         let novo = self.estado.ja_pedido.lock().unwrap_or_else(|e| e.into_inner()).insert(item.clone());
         if novo {
-            let _ = self.fila.send(item);
+            // Retrato de mob e emblema de classe (UT_) e ícone de item (a Odyle) não esperam as skills.
+            let urgente = ["npc:", "icone:UT_", "icone:Icon_Item_"].iter().any(|p| item.starts_with(p));
+            let _ = if urgente { self.urgente.send(item) } else { self.fila.send(item) };
         }
     }
 }
@@ -128,6 +184,10 @@ impl Estado {
         self.infos.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    fn npcs(&self) -> std::sync::MutexGuard<'_, HashMap<u32, InfoNpc>> {
+        self.npcs.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn marcar_pronto(&self) {
         let (trava, sinal) = &self.pronto;
         *trava.lock().unwrap_or_else(|e| e.into_inner()) = true;
@@ -135,7 +195,7 @@ impl Estado {
     }
 }
 
-fn trabalhar(estado: &Estado, fila: &Receiver<String>) {
+fn trabalhar(estado: &Estado, urgentes: &Receiver<String>, fila: &Receiver<String>) {
     let http = cliente_http();
 
     // Primeira execução: uma listagem por classe cobre quase todas as skills ativas.
@@ -148,13 +208,28 @@ fn trabalhar(estado: &Estado, fila: &Receiver<String>) {
     }
     estado.marcar_pronto();
 
-    for item in fila {
+    loop {
+        let item = match urgentes.try_recv() {
+            Ok(item) => item,
+            Err(_) => match fila.recv_timeout(Duration::from_millis(100)) {
+                Ok(item) => item,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break,
+            },
+        };
         // Falha de rede ou formato: a skill fica com o nome de reserva até a próxima execução.
         if let Some(codigo) = item.strip_prefix("skill:") {
             if let Ok(id) = codigo.parse::<u32>()
                 && baixar_skill(estado, &http, id).is_ok()
             {
                 let _ = salvar(estado);
+            }
+        } else if let Some(codigo) = item.strip_prefix("npc:") {
+            // NPC que o questlog não tem fica sem nome até a próxima execução.
+            if let Ok(id) = codigo.parse::<u32>()
+                && baixar_npc(estado, &http, id).is_ok()
+            {
+                let _ = salvar_npcs(estado);
             }
         } else if let Some(icone) = item.strip_prefix("icone:") {
             let _ = baixar_icone(estado, &http, icone);
@@ -193,6 +268,28 @@ fn baixar_skill(estado: &Estado, http: &ureq::Agent, id: u32) -> Result<(), Falh
     Ok(())
 }
 
+fn baixar_npc(estado: &Estado, http: &ureq::Agent, id: u32) -> Result<(), Falha> {
+    let dados = trpc(http, "getNpc", &format!(r#"{{"id":"{id}","language":"{IDIOMA}"}}"#))?;
+    let (codigo, info) = ler_npc(&dados).ok_or("NPC sem nome")?;
+    estado.npcs().insert(codigo, info);
+    Ok(())
+}
+
+/// Resposta do getNpc do questlog. O retrato vem como o ícone de skill:
+/// "/assets/.../UT_256_MOB_DstrArchonE_01.UT_256_MOB_DstrArchonE_01" → "UT_256_MOB_DstrArchonE_01".
+pub fn ler_npc(n: &Value) -> Option<(u32, InfoNpc)> {
+    let codigo = n.get("id").and_then(Value::as_str)?.parse::<u32>().ok()?;
+    let nome = n.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty())?;
+    let info = InfoNpc {
+        nome: nome.to_string(),
+        nivel: n.get("level").and_then(Value::as_i64).map_or(0, |l| l.clamp(0, 999) as i32),
+        nomeado: n.get("isNamed").and_then(Value::as_bool).unwrap_or(false),
+        tipo: n.get("npcSubType").and_then(Value::as_str).unwrap_or_default().to_string(),
+        retrato: n.get("icon").and_then(Value::as_str).and_then(|i| i.rsplit('.').next()).map(str::to_string),
+    };
+    Some((codigo, info))
+}
+
 fn guardar(estado: &Estado, s: &Value) {
     let Some(codigo) = s.get("id").and_then(Value::as_str).and_then(|t| t.parse::<u32>().ok()) else { return };
     let Some(nome) = s.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()) else { return };
@@ -228,13 +325,24 @@ fn trpc(http: &ureq::Agent, procedimento: &str, entrada: &str) -> Result<Value, 
 fn escapar(texto: &str) -> String {
     texto
         .bytes()
-        .map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { char::from(b).to_string() } else { format!("%{b:02X}") })
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+                char::from(b).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
         .collect()
 }
 
 fn salvar(estado: &Estado) -> std::io::Result<()> {
     let json = serde_json::to_string(&*estado.infos()).map_err(std::io::Error::other)?;
     escrever_trocando(&estado.arquivo_nomes, json.as_bytes())
+}
+
+fn salvar_npcs(estado: &Estado) -> std::io::Result<()> {
+    let json = serde_json::to_string(&*estado.npcs()).map_err(std::io::Error::other)?;
+    escrever_trocando(&estado.arquivo_npcs, json.as_bytes())
 }
 
 /// Grava num .tmp e troca, para um arquivo pela metade nunca substituir o bom.

@@ -1,6 +1,8 @@
 //! Dois modos com o mesmo núcleo do medidor:
-//!   captura.pcapng [--hex N] [--op 3804] [--procurar-quedas] [--entidade ID]
-//!       reprocessa uma captura: sincronização, LZ4, opcodes, conferência com HP e placar.
+//!   captura.pcapng [--hex N] [--op 3804] [--procurar-quedas] [--entidade ID] [--lutas]
+//!       reprocessa uma captura: sincronização, LZ4, opcodes, conferência com HP e placar. Com
+//!       --lutas, lista também as lutas como o overlay ao vivo as separa (15 s sem dano ou saída
+//!       de combate dos mobs).
 //!   ao-vivo [segundos]
 //!       captura por raw socket (precisa de administrador) e imprime o placar.
 
@@ -89,9 +91,10 @@ fn main() {
         s.relatar(&config, amostras_hex);
     }
 
-    // Mesmo arquivo pelo caminho do medidor ao vivo (Sessao + Medidor), sem fim de luta por inatividade.
+    // Mesmo arquivo pelo caminho do medidor ao vivo (Sessao + Medidor), sem fim de luta.
     let mut replay = Sessao::default();
     replay.medidor.inatividade = i64::MAX;
+    replay.medidor.fim_pelo_combate = false;
     for quadro in &quadros {
         if let Some(seg) = SegmentoTcp::extrair(&quadro.dados, quadro.tipo_enlace) {
             replay.ao_segmento(&seg, quadro.hora);
@@ -100,6 +103,41 @@ fn main() {
     println!();
     println!("=== Placar pelo pipeline do medidor (fluxo {})", replay.fluxo.as_deref().unwrap_or(""));
     imprimir_placar(&replay.medidor.obter_placar());
+
+    if args.iter().any(|a| a == "--lutas") {
+        imprimir_lutas(&quadros);
+    }
+}
+
+/// As lutas com o fim do overlay ao vivo (padrões do Medidor), da mais velha para a mais nova.
+fn imprimir_lutas(quadros: &[pcapng::QuadroCapturado]) {
+    let mut sessao = Sessao::default();
+    for quadro in quadros {
+        if let Some(seg) = SegmentoTcp::extrair(&quadro.dados, quadro.tipo_enlace) {
+            sessao.ao_segmento(&seg, quadro.hora);
+        }
+    }
+    sessao.medidor.reiniciar(); // a luta em andamento no fim da captura também entra
+    let lutas = sessao.medidor.lutas_passadas();
+    let comeco = lutas.back().map_or(0, |l| l.inicio);
+    println!();
+    println!("=== Lutas como o overlay ao vivo separa: {}", lutas.len());
+    for luta in lutas.iter().rev() {
+        let dano = &luta.placar.dano;
+        let primeiro =
+            dano.jogadores.first().map_or(String::new(), |j| format!(", 1º {} {}", j.nome, p(j.porcentagem, 0)));
+        println!(
+            "  #{:<3} de {:>6} s a {:>6} s ({:>5} s): dano {}, recebido {}, cura {}, {} jogadores{primeiro}",
+            luta.numero,
+            n(segundos(luta.inicio - comeco), 1),
+            n(segundos(luta.fim - comeco), 1),
+            n(segundos(luta.fim - luta.inicio), 1),
+            n(dano.total, 0),
+            n(luta.placar.dano_recebido.total, 0),
+            n(luta.placar.cura.total, 0),
+            dano.jogadores.len()
+        );
+    }
 }
 
 fn ao_vivo(duracao: u64) {
@@ -177,6 +215,11 @@ fn imprimir_tabela(titulo: &str, por_segundo: &str, tabela: &Tabela) {
             if j.segurando_aggro > 0 { format!(", segurando {} mob(s)", j.segurando_aggro) } else { String::new() },
             if j.voce { "  (você)" } else { "" },
         );
+        if j.voce && !j.buffs.is_empty() {
+            let buffs: Vec<String> =
+                j.buffs.iter().take(8).map(|b| format!("{} ({}) {}", b.nome, b.skill, p(b.fracao, 0))).collect();
+            println!("    buffs: {}", buffs.join("; "));
+        }
         for s in j.skills.iter().take(10) {
             println!(
                 "    {:<28} {:>14} {:>6}  {:>4}x  máx {}",

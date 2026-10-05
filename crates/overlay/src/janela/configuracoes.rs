@@ -1,4 +1,4 @@
-//! Tela de configurações. O que aparece em cada linha se escolhe clicando numa linha de amostra (a
+//! Tela de configurações. Os números de cada linha se escolhem clicando numa linha de amostra (a
 //! sua, ou um esboço com o seu nome): o que está escondido fica no lugar, apagado e riscado. O resto
 //! é quem entra na medição, quando a luta zera, o tamanho e a transparência do fundo. Tudo vale na
 //! hora e fica salvo.
@@ -11,13 +11,16 @@ use eframe::egui::{
 };
 
 use super::{
-    Colunas, Numeros, Overlay, Tela, botao, branco, celulas, cor_da_classe, fonte, montar, segmentos_do_perfil, texto,
+    ALTURA_LINHA, Aba, Overlay, Tela, Tres, botao, branco, cor_da_classe, fonte, montar, numeros_da_linha, texto,
+    textos,
 };
+use crate::bandeja;
 use crate::config::{
-    self, INATIVIDADE_MAX, INATIVIDADE_MIN, TRANSPARENCIA_MAX, TRANSPARENCIA_PADRAO, ZOOM_MAX, ZOOM_MIN,
+    self, ATUALIZACAO_MAX, ATUALIZACAO_MIN, INATIVIDADE_MAX, INATIVIDADE_MIN, TRANSPARENCIA_MAX, TRANSPARENCIA_PADRAO,
+    ZOOM_MAX, ZOOM_MIN,
 };
 
-const NOMES_DO_PERFIL: [&str; 3] = ["a classe", "o level", "o GS"];
+const NOMES_DOS_NUMEROS: [&str; 3] = ["o total", "o por segundo", "a %"];
 
 impl Overlay {
     pub(super) fn tela_configuracoes(&mut self, ui: &mut Ui) {
@@ -33,10 +36,12 @@ impl Overlay {
         });
 
         ui.add_space(10.0);
-        secao(ui, "Linha de cada jogador");
-        dica(ui, "Clique numa coluna ou num dado para mostrar ou esconder. Cada aba tem as suas colunas.");
-        ui.add_space(6.0);
-        self.abas(ui);
+        secao(ui, "Números de cada jogador");
+        dica(
+            ui,
+            "Clique num número da amostra para mostrar ou esconder; vale nas três abas. Classe, level, GS, CRIT, \
+             AVG e MAX ficam no mouse e na ficha que abre com o clique no jogador.",
+        );
         ui.add_space(6.0);
         self.linha_de_amostra(ui);
 
@@ -69,6 +74,40 @@ impl Overlay {
             }
             frase(ui, "sem dano");
         });
+
+        ui.add_space(14.0);
+        secao(ui, "Exibição");
+        ui.add_space(4.0);
+        interruptor(
+            ui,
+            "Ocultar nomes",
+            "Os outros jogadores aparecem pelo nome da classe, no medidor, nas lutas anteriores e no resumo \
+             copiado. O seu nome continua. Bom para print e live.",
+            &mut self.config.ocultar_nomes,
+            acento,
+        );
+        ui.add_space(6.0);
+        interruptor(
+            ui,
+            "Resumo em linhas",
+            "\"Copiar resumo\" (o ⧉ no topo): um jogador por linha. Desligado, sai tudo numa linha só, \
+             que cabe numa mensagem do chat do jogo.",
+            &mut self.config.resumo_em_linhas,
+            acento,
+        );
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            frase(ui, "Atualizar a cada");
+            let ms = self.config.atualizacao_ms;
+            if passo(ui, "−", ms > ATUALIZACAO_MIN) {
+                self.config.atualizacao_ms = (ms - 100).max(ATUALIZACAO_MIN);
+            }
+            valor(ui, &format!("{ms} ms"), 56.0);
+            if passo(ui, "+", ms < ATUALIZACAO_MAX) {
+                self.config.atualizacao_ms = (ms + 100).min(ATUALIZACAO_MAX);
+            }
+        });
+        dica(ui, "Menos ms: o placar anda mais liso e o Axon usa um pouco mais de CPU.");
 
         ui.add_space(14.0);
         secao(ui, "Tamanho");
@@ -111,6 +150,9 @@ impl Overlay {
                 }
             }
         });
+
+        ui.add_space(14.0);
+        self.atalhos(ui);
         ui.add_space(4.0);
 
         if self.config != antes {
@@ -124,6 +166,44 @@ impl Overlay {
             Some(classe) if !classe.is_empty() => cor_da_classe(classe),
             _ => texto(),
         }
+    }
+
+    /// Os atalhos globais, lidos do config.json na abertura. O overlay não recebe teclado (não tira o
+    /// foco do jogo), então a troca é pelo arquivo.
+    fn atalhos(&self, ui: &mut Ui) {
+        secao(ui, "Atalhos");
+        dica(ui, "Valem com o jogo na frente; fora dele, a combinação volta para os outros programas.");
+        ui.add_space(4.0);
+        let c = &self.config;
+        let escritos = [&c.atalho_mostrar, &c.atalho_atravessar, &c.atalho_resumo, &c.atalho_compacta];
+        let acoes = [
+            (bandeja::MOSTRAR, "mostra ou esconde o overlay"),
+            (bandeja::ALTERNAR_CLIQUE, "o clique atravessa o overlay até o jogo, ou volta"),
+            (bandeja::COPIAR_RESUMO, "copia o resumo da luta"),
+            (bandeja::ALTERNAR_COMPACTA, "barra compacta, ou volta ao medidor"),
+        ];
+        for (qual, acao) in acoes {
+            let (tecla, cor) = match bandeja::atalho(qual) {
+                Some((atalho, false)) => (atalho.to_string(), texto()),
+                Some((atalho, true)) => {
+                    (format!("{atalho} (em uso por outro programa)"), Color32::from_rgb(0xFF, 0x6B, 0x6B))
+                }
+                None if escritos[qual].trim().is_empty() => ("desligado".to_string(), branco(0x77)),
+                None => (format!("\"{}\" não vale", escritos[qual].trim()), Color32::from_rgb(0xFF, 0x6B, 0x6B)),
+            };
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(tecla).font(fonte(12.0, true)).color(cor));
+                ui.add_space(8.0);
+                ui.label(RichText::new(acao).font(fonte(12.0, false)).color(texto()));
+            });
+        }
+        ui.add_space(2.0);
+        dica(
+            ui,
+            "Para trocar, feche o Axon e edite atalho_mostrar, atalho_atravessar, atalho_resumo e \
+             atalho_compacta no config.json (%LOCALAPPDATA%\\Aion2Meter). Ex.: \"Ctrl+Shift+F9\"; precisa de \
+             Ctrl, Alt ou Win; vazio desliga (o resumo e a barra compacta vêm desligados).",
+        );
     }
 
     /// Proximidade | Party. Party fica desligado até haver uma captura em grupo para ler o 0x9702.
@@ -172,135 +252,59 @@ impl Overlay {
         }
     }
 
-    /// A sua linha como aparece na aba DPS. Cada coluna e cada dado abaixo do nome é um botão.
+    /// A sua linha como aparece na aba DPS; cada um dos três números é um botão.
     fn linha_de_amostra(&mut self, ui: &mut Ui) {
         let Some(j) = self.amostra.clone() else { return };
         let largura = ui.available_width();
-        let todas = Colunas::medir(ui, self.aba.colunas(), [true; 5]);
-        let ligadas = *self.colunas_ligadas();
-        let escondido = |tamanho: f32, negrito: bool| TextFormat {
-            font_id: fonte(tamanho, negrito),
-            color: branco(0x44),
-            strikethrough: Stroke::new(1.0_f32, branco(0x66)),
+        let todas = Tres::medir(ui, [true; 3]);
+        let ligados = self.config.numeros;
+        let escondido = |tamanho: f32| TextFormat {
+            font_id: fonte(tamanho, false),
+            color: branco(0x55),
+            strikethrough: Stroke::new(1.0_f32, branco(0x77)),
             ..Default::default()
         };
+        let [a, b, c] = numeros_da_linha(ui, textos(j.total, j.por_segundo, j.porcentagem), 12.0);
+        let mut normais = [Some(a), Some(b), Some(c)];
+        let numeros_texto = textos(j.total, j.por_segundo, j.porcentagem);
+        let numeros: [Arc<Galley>; 3] = std::array::from_fn(|i| match normais[i].take() {
+            Some(g) if ligados[i] => g,
+            _ => montar(ui, LayoutJob::single_section(numeros_texto[i].clone(), escondido(12.0))),
+        });
+        let legendas: [Arc<Galley>; 3] = std::array::from_fn(|i| {
+            let formato = if ligados[i] { TextFormat::simple(fonte(9.5, false), branco(0x88)) } else { escondido(9.5) };
+            montar(ui, LayoutJob::single_section(Aba::Dps.rotulos()[i].to_string(), formato))
+        });
 
-        let titulos: Vec<Arc<Galley>> = todas
-            .titulos
-            .iter()
-            .enumerate()
-            .map(|(i, titulo)| {
-                let formato = if ligadas[i] {
-                    TextFormat::simple(fonte(10.0, false), branco(0x99))
-                } else {
-                    escondido(10.0, false)
-                };
-                montar(ui, LayoutJob::single_section(titulo.to_string(), formato))
-            })
-            .collect();
-        let numeros: Vec<Arc<Galley>> = celulas(self.aba, Numeros::from(&j))
-            .into_iter()
-            .enumerate()
-            .map(|(i, t)| {
-                let formato = if ligadas[i] {
-                    TextFormat::simple(fonte(12.0, i == 0), texto())
-                } else {
-                    escondido(12.0, i == 0)
-                };
-                montar(ui, LayoutJob::single_section(t, formato))
-            })
-            .collect();
+        let altura_legenda = legendas.iter().fold(0.0_f32, |m, g| m.max(g.size().y));
+        let (bloco, _) = ui.allocate_exact_size(vec2(largura, altura_legenda + 3.0 + ALTURA_LINHA), Sense::hover());
+        let faixa = Rect::from_min_size(bloco.min, vec2(largura, altura_legenda));
+        let linha = Rect::from_min_max(pos2(bloco.min.x, bloco.max.y - ALTURA_LINHA), bloco.max);
 
-        let nome = montar(
-            ui,
-            LayoutJob::single_section(format!("▸ {} (você)", j.nome), TextFormat::simple(fonte(12.0, true), texto())),
-        );
-        let visiveis = self.config.perfil();
-        let segmentos: Vec<Arc<Galley>> = segmentos_do_perfil(&j)
-            .into_iter()
-            .zip(visiveis)
-            .map(|(pedacos, visivel)| {
-                let mut job = LayoutJob::default();
-                for (texto_pedaco, cor) in pedacos {
-                    let formato = if visivel { TextFormat::simple(fonte(10.0, false), cor) } else { escondido(10.0, false) };
-                    job.append(&texto_pedaco, 0.0, formato);
-                }
-                montar(ui, job)
-            })
-            .collect();
-        let separador = montar(ui, LayoutJob::single_section("  ·  ".into(), TextFormat::simple(fonte(10.0, false), branco(0x77))));
-
-        let altura_titulos = titulos.iter().fold(0.0_f32, |m, g| m.max(g.size().y));
-        let altura_esquerda = nome.size().y + segmentos[0].size().y + 4.0;
-        let altura_linha = altura_esquerda.max(numeros.iter().fold(0.0_f32, |m, g| m.max(g.size().y))) + 6.0;
-        let (bloco, _) = ui.allocate_exact_size(vec2(largura, altura_titulos + 4.0 + altura_linha), Sense::hover());
-        let faixa_titulos = Rect::from_min_size(bloco.min, vec2(largura, altura_titulos));
-        let linha = Rect::from_min_max(pos2(bloco.min.x, bloco.max.y - altura_linha), bloco.max);
-
-        // Primeiro as áreas clicáveis (o realce vai por baixo do texto), depois o desenho.
         let direitas = todas.direitas();
         let mut realces: Vec<Rect> = Vec::new();
-        for i in 0..5 {
+        for i in 0..3 {
             let direita = bloco.max.x - direitas[i];
             let area = Rect::from_min_max(pos2(direita - todas.larguras[i] - 4.0, bloco.min.y), pos2(direita + 4.0, bloco.max.y));
-            let acao = if ligadas[i] { "Esconder" } else { "Mostrar" };
+            let acao = if ligados[i] { "Esconder" } else { "Mostrar" };
             let resposta = ui
-                .interact(area, ui.id().with(("coluna", i)), Sense::click())
+                .interact(area, ui.id().with(("numero", i)), Sense::click())
                 .on_hover_cursor(CursorIcon::PointingHand)
-                .on_hover_text(format!("{acao} {}", todas.titulos[i]));
+                .on_hover_text(format!("{acao} {}", NOMES_DOS_NUMEROS[i]));
             if resposta.hovered() {
                 realces.push(area);
             }
             if resposta.clicked() {
-                self.colunas_ligadas()[i] = !ligadas[i];
+                self.config.numeros[i] = !ligados[i];
             }
         }
 
-        let topo_esquerda = linha.min.y + (linha.height() - altura_esquerda) / 2.0;
-        let y_perfil = topo_esquerda + 2.0 + nome.size().y;
-        let mut x = linha.min.x + 18.0;
-        let mut posicoes = Vec::new();
-        for (k, segmento) in segmentos.iter().enumerate() {
-            if k > 0 {
-                x += separador.size().x;
-            }
-            let area = Rect::from_min_size(pos2(x, y_perfil), segmento.size()).expand2(vec2(4.0, 2.0));
-            posicoes.push(pos2(x, y_perfil));
-            let acao = if visiveis[k] { "Esconder" } else { "Mostrar" };
-            let resposta = ui
-                .interact(area, ui.id().with(("perfil", k)), Sense::click())
-                .on_hover_cursor(CursorIcon::PointingHand)
-                .on_hover_text(format!("{acao} {}", NOMES_DO_PERFIL[k]));
-            if resposta.hovered() {
-                realces.push(area);
-            }
-            if resposta.clicked() {
-                match k {
-                    0 => self.config.classe = !self.config.classe,
-                    1 => self.config.nivel = !self.config.nivel,
-                    _ => self.config.gs = !self.config.gs,
-                }
-            }
-            x += segmento.size().x;
-        }
-
+        self.pintar_linha(ui, linha, &j, None, 0.55, numeros, &todas, false);
         let pintor = ui.painter();
-        let cor = cor_da_classe(j.classe);
-        let barra = Rect::from_min_size(linha.min, vec2(linha.width() * 0.55, linha.height()));
-        pintor.rect_filled(barra, 3, Color32::from_rgba_unmultiplied(cor.r(), cor.g(), cor.b(), 0x66));
-        pintor.rect_stroke(linha, 3, Stroke::new(1.0_f32, branco(0x22)), StrokeKind::Inside);
         for area in realces {
             pintor.rect_filled(area, 3, branco(0x1A));
         }
-        todas.pintar(pintor, faixa_titulos, titulos);
-        todas.pintar(pintor, linha, numeros);
-        pintor.galley(pos2(linha.min.x + 6.0, topo_esquerda + 2.0), nome, texto());
-        for (k, (segmento, posicao)) in segmentos.into_iter().zip(posicoes).enumerate() {
-            if k > 0 {
-                pintor.galley(posicao - vec2(separador.size().x, 0.0), separador.clone(), texto());
-            }
-            pintor.galley(posicao, segmento, texto());
-        }
+        todas.pintar(pintor, faixa, legendas, false);
     }
 }
 

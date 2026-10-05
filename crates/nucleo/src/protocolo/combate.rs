@@ -42,7 +42,10 @@ pub fn dano(pacote: &[u8]) -> Result<EventoDano, String> {
     let (mut flags, mut direcao) = (0u8, 0u8);
     if variante != 4 {
         flags = r.ler_u8()?;
-        r.ler_u8()?; // desconhecido
+        // Varint, não u8: vem ≠ 0 só com a flag 0x20 (golpe de mob em jogador, ~20% do dano) e aí
+        // ocupa 2 bytes. Lido como u8, o dano saía 10.000 (o varint fixo antes do dano) em vez de
+        // 2.182 no world boss de 2026-10-03.
+        r.ler_varint()?;
         direcao = r.ler_u8()?;
     }
     r.pular(8)?; // desconhecido
@@ -97,6 +100,69 @@ pub fn hp_restante(pacote: &[u8]) -> Option<(u32, u64)> {
     ler().ok()
 }
 
+/// Estado de combate de uma entidade (mob ou jogador), opcode 0x8D21:
+/// [varint entidade][varint 0][varint 1 = entrou em combate, 0 = saiu]. No mob, o 0 chega no
+/// instante da morte ou quando ele larga a luta (PROTOCOLO.md §5b). Devolve (entidade, em combate).
+pub fn estado_combate(pacote: &[u8]) -> Option<(u32, bool)> {
+    let ler = || -> Resultado<(u32, u64)> {
+        let mut r = abrir_corpo(pacote)?;
+        let entidade = r.ler_varint()? as u32;
+        r.ler_varint()?; // 0 nos 901 pacotes vistos
+        Ok((entidade, r.ler_varint()?))
+    };
+    ler()
+        .ok()
+        .filter(|&(entidade, estado)| entidade > 0 && estado <= 1)
+        .map(|(entidade, estado)| (entidade, estado == 1))
+}
+
+/// Buff aplicado (0x382A) ou renovado (0x382B, cerca de 1 vez por segundo enquanto dura).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Buff {
+    pub alvo: u32,
+    /// Junto com o alvo, identifica o buff até a remoção (0x382C).
+    pub instancia: u32,
+    /// Skill × 10 + dígito do efeito (174100011 vem da skill 17410001) na maioria dos buffs de classe.
+    pub codigo: u32,
+    /// 0xFFFFFFFF = permanente.
+    pub duracao_ms: u32,
+}
+
+/// 0x382A: [varint alvo][u8 01][u8 tipo][varint instância][u32 código][u32 duração ms][u32 0]
+/// [u64 hora do servidor ms][varint autor]... O 0x382B é igual sem o u8 01. O autor e a hora não
+/// são lidos: o tempo ativo usa a hora da captura e junta o mesmo buff vindo de jogadores diferentes.
+pub fn buff(pacote: &[u8], novo: bool) -> Option<Buff> {
+    let ler = || -> Resultado<Buff> {
+        let mut r = abrir_corpo(pacote)?;
+        let alvo = r.ler_varint()? as u32;
+        if novo {
+            r.ler_u8()?;
+        }
+        r.ler_u8()?; // tipo: 0x13 ou 0x11
+        let instancia = r.ler_varint()? as u32;
+        Ok(Buff { alvo, instancia, codigo: r.ler_u32()?, duracao_ms: r.ler_u32()? })
+    };
+    ler().ok().filter(|b| b.alvo > 0 && b.codigo > 0)
+}
+
+/// Buffs que saíram, opcode 0x382C: [varint alvo][u8 n] e n × [u8 tipo 0|7][varint instância][u8 motivo],
+/// com mais 10 bytes quando o tipo é 7. Devolve (alvo, instâncias); fechou em 7.317 de 7.317 pacotes.
+pub fn buffs_removidos(pacote: &[u8]) -> Option<(u32, Vec<u32>)> {
+    let ler = || -> Resultado<(u32, Vec<u32>)> {
+        let mut r = abrir_corpo(pacote)?;
+        let alvo = r.ler_varint()? as u32;
+        let n = r.ler_u8()?;
+        let mut instancias = Vec::with_capacity(usize::from(n));
+        for _ in 0..n {
+            let tipo = r.ler_u8()?;
+            instancias.push(r.ler_varint()? as u32);
+            r.pular(1 + if tipo == 7 { 10 } else { 0 })?;
+        }
+        Ok((alvo, instancias))
+    };
+    ler().ok().filter(|(alvo, _)| *alvo > 0)
+}
+
 /// Jogador lido de 0x3633 ou 0x3645. Nível e poder 0 = desconhecido.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InfoJogador {
@@ -134,6 +200,59 @@ pub fn info_personagem(pacote: &[u8]) -> Option<InfoJogador> {
 /// Power mudou, opcode 0x561C: [varint entidade][u32 power]... Visto uma vez, com o seu
 /// personagem (355 → 361 junto com o 0x561D, que traz o mesmo valor duas vezes sem a entidade).
 /// Devolve (entidade, power).
+/// Ticket de conteúdo da Energia Odyle. No login de 2026-10-05 a tela mostrava 550(+270)/840 e o
+/// ticket veio com valor 550 e extra 270; o máximo não vem no pacote.
+pub const TICKET_ODYLE: u32 = 60_000_001;
+
+/// Ticket de conteúdo (entradas de dungeon, Energia Odyle...): o valor e, em alguns, um segundo
+/// valor (na Odyle, a energia carregada).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ticket {
+    pub id: u32,
+    pub valor: Option<u64>,
+    pub extra: Option<u64>,
+}
+
+/// Lista de tickets de conteúdo, opcode 0x610B, que chega no login: [varint n] e n entradas no
+/// formato de `ler_ticket`. Nas duas listas capturadas (73 entradas cada) a leitura fecha no último
+/// byte; sobrando ou faltando byte, None.
+pub fn tickets(pacote: &[u8]) -> Option<Vec<Ticket>> {
+    let mut r = abrir_corpo(pacote).ok()?;
+    let n = r.ler_varint().ok()?;
+    // Cada entrada tem ao menos 5 bytes: um n maior que isso é lixo.
+    if n > r.restante() as u64 / 5 {
+        return None;
+    }
+    let lista = (0..n).map(|_| ler_ticket(&mut r)).collect::<Option<Vec<_>>>()?;
+    (r.restante() == 0).then_some(lista)
+}
+
+/// Um ticket mudou, opcode 0x610C: [u8 0][entrada][u8]. Visto uma vez (2026-10-03: ticket 10 com
+/// valor 14, o mesmo do 0x610B do login), nunca com a Odyle.
+pub fn ticket_mudou(pacote: &[u8]) -> Option<Ticket> {
+    let mut r = abrir_corpo(pacote).ok()?;
+    if r.ler_u8().ok()? != 0 {
+        return None;
+    }
+    ler_ticket(&mut r)
+}
+
+/// [u8 tipo][u32 id][tipo & 0x01: 8 bytes, sem uso][tipo & 0x04: varint valor][tipo & 0x08: varint
+/// extra]. Tipo com outro bit: None, porque o tamanho da entrada fica desconhecido.
+fn ler_ticket(r: &mut LeitorPacote<'_>) -> Option<Ticket> {
+    let tipo = r.ler_u8().ok()?;
+    if tipo & !0x0D != 0 {
+        return None;
+    }
+    let id = r.ler_u32().ok()?;
+    if tipo & 0x01 != 0 {
+        r.pular(8).ok()?;
+    }
+    let valor = if tipo & 0x04 != 0 { Some(r.ler_varint().ok()?) } else { None };
+    let extra = if tipo & 0x08 != 0 { Some(r.ler_varint().ok()?) } else { None };
+    Some(Ticket { id, valor, extra })
+}
+
 pub fn poder(pacote: &[u8]) -> Option<(u32, i32)> {
     let ler = || -> Resultado<(u32, i32)> {
         let mut r = abrir_corpo(pacote)?;
@@ -236,15 +355,21 @@ const TIPO_INVOCACAO: u16 = 0x5F;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Spawn {
     pub entidade_id: u32,
+    /// Código do NPC (7 dígitos, o id do questlog: 2400425 = Arconte da Alma Perdida Axios); 0 se
+    /// não leu. Veio em 1.229 de 1.229 spawns das capturas, de mob, cidadão e invocação.
+    pub codigo: u32,
     pub invocacao: bool,
     pub dono_id: u32,
     pub nome_dono: String,
     /// Dono do marcador `FF×8 … 07 02 01|06 [u32]`, em qualquer tipo de spawn. Ainda não conferido:
     /// o Medidor só aceita se for jogador conhecido.
     pub dono_marcado: u32,
+    /// HP atual e máximo, como o pacote manda; None com layout desconhecido (`hp_do_spawn`).
+    pub hp: Option<(u64, u64)>,
 }
 
 /// Spawn de invocação, pet ou armadilha (0x3641 com tipo 0x5F no byte baixo da máscara).
+/// [varint entidade][u16 máscara][u8 flags][nome se flags & 1][u32 código do NPC]...
 /// A invocação dá dano com id próprio; o dono vem no bloco
 /// [u32 dono][u32 legião][u16 0][u16 servidor][u8 tamanho][nome da legião UTF-8],
 /// achado por varredura com todas as validações juntas (formato documentado pelo
@@ -257,18 +382,29 @@ pub fn spawn_invocacao(pacote: &[u8]) -> Spawn {
         s.entidade_id = r.ler_varint()? as u32;
         let mascara = r.ler_u16()?;
         s.dono_marcado = procurar_marcador_dono(pacote, r.posicao, s.entidade_id);
+
+        let mut nome = String::new();
+        let mut nome_lido = true;
+        if r.ler_u8()? & 0x01 != 0 {
+            let tamanho = r.ler_varint()?;
+            nome_lido = (1..=72).contains(&tamanho);
+            if nome_lido {
+                nome = sem_controle(r.ler_bytes(tamanho as usize)?);
+            }
+        }
+        let depois_do_nome = r.posicao;
+        if nome_lido {
+            s.codigo = Some(r.ler_u32()?).filter(|c| (1_000_000..10_000_000).contains(c)).unwrap_or(0);
+            if s.codigo != 0 {
+                s.hp = hp_do_spawn(pacote, r.posicao);
+            }
+        }
         if mascara & 0xFF != TIPO_INVOCACAO {
             return Ok(());
         }
 
-        if r.ler_u8()? & 0x01 != 0 {
-            let tamanho = r.ler_varint()?;
-            if (1..=72).contains(&tamanho) {
-                s.nome_dono = sem_controle(r.ler_bytes(tamanho as usize)?);
-            }
-        }
-
-        s.dono_id = procurar_bloco_dono(pacote, r.posicao, s.entidade_id);
+        s.nome_dono = nome;
+        s.dono_id = procurar_bloco_dono(pacote, depois_do_nome, s.entidade_id);
         s.invocacao = s.dono_id != 0 || !s.nome_dono.is_empty();
         Ok(())
     };
@@ -276,6 +412,31 @@ pub fn spawn_invocacao(pacote: &[u8]) -> Spawn {
         s.invocacao = false;
     }
     s
+}
+
+/// Bits do byte que vem depois do código do NPC, vistos nas capturas: 0x40 e 0x08 (0x48 = os dois).
+const FLAGS_DO_SPAWN_VISTAS: u8 = 0x48;
+/// Com ele, mais 3 floats antes do HP (9 spawns, todos coerentes com o 0x8D00 seguinte).
+const FLAG_TRES_FLOATS: u8 = 0x08;
+
+/// HP do mob no 0x3641, logo depois do código do NPC: [u8 flags][u8][4 × f32][12 bytes se
+/// flags & 0x08][3 bytes][varint HP atual][varint HP máximo]. Em 889 spawns de 5 capturas
+/// (2026-10-01 a 03), o HP de todo 0x8D00 seguinte ficou abaixo do máximo; world boss lv45 vem com
+/// 160.000.000, o mesmo que o Abyss DPS Meter mostra. Flag fora das vistas: layout desconhecido.
+fn hp_do_spawn(pacote: &[u8], posicao: usize) -> Option<(u64, u64)> {
+    let mut r = LeitorPacote::novo(pacote, posicao);
+    let flags = r.ler_u8().ok()?;
+    if flags & !FLAGS_DO_SPAWN_VISTAS != 0 {
+        return None;
+    }
+    r.pular(1 + 16).ok()?;
+    if flags & FLAG_TRES_FLOATS != 0 {
+        r.pular(12).ok()?;
+    }
+    r.pular(3).ok()?;
+    let atual = r.ler_varint().ok()?;
+    let maximo = r.ler_varint().ok()?;
+    (maximo > 0 && atual <= maximo).then_some((atual, maximo))
 }
 
 fn procurar_bloco_dono(p: &[u8], desde: usize, propria_entidade: u32) -> u32 {
