@@ -180,9 +180,9 @@ cargo build --release -p overlay
   200 e vermelho acima. É a latência da rede; o número que o jogo mostra pode sair um pouco
   maior. Depois do total vem a Energia Odyle (desde a 0.8.0): o cristal do item Energia Odyle
   (`Icon_Item_Odenergy_A_001`, da CDN; "Odyle" escrito enquanto não baixou) e `550 (+270)`, a
-  básica e a carregada como o servidor manda no login (PROTOCOLO.md §7d), sem o máximo, que não
-  vem no pacote. Abra o Axon antes de entrar no mundo: aberto depois, ela só aparece no próximo
-  login.
+  básica e a carregada como o servidor manda no login e a cada mudança, como o uso de essência
+  OD (PROTOCOLO.md §7d), sem o máximo, que não vem no pacote. Com o Axon aberto depois do login,
+  ela aparece na próxima mudança ou no próximo login.
   Embaixo ficam a
   versão e o botão de atualização, e os avisos enquanto procura o servidor do jogo, enquanto
   baixa os nomes das skills ou quando a captura para.
@@ -336,9 +336,8 @@ testes → release) fica para quando o Actions voltar; aí a tag sozinha publica
   ativo (o PC de desenvolvimento usa o firewall do Kaspersky).
 - **Party** (só quem está no seu grupo): o pacote do grupo (`0x9702` em outros medidores)
   não apareceu em nenhuma captura local; falta uma captura em grupo.
-- **Energia Odyle**: só o login (`0x610B`) foi conferido com a tela. A atualização de um
-  ticket (`0x610C`) foi vista uma vez, com outro ticket, então não se sabe se a Odyle muda
-  sozinha no rodapé quando é gasta; até lá, vale o valor do último login.
+- **Energia Odyle**: conferida com a tela no login (`0x610B`) e no uso de essência OD
+  (`0x610C`). O gasto em dungeon ainda não foi capturado; deve chegar no mesmo `0x610C`.
 - **Ping**: conferido só contra as capturas (mínimo de 10 a 14 ms por janela de 10 s); falta
   comparar ao vivo com o número do jogo.
 

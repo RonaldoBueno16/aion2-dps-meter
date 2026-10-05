@@ -981,9 +981,9 @@ impl Overlay {
         let area = Rect::from_min_max(pos2(x, rect.min.y), pos2(x + largura_icone + largura_valor, rect.max.y));
         ui.interact(area, ui.id().with("odyle"), Sense::hover()).on_hover_text(
             "Energia Odyle: a básica e, entre parênteses, a carregada, como o servidor manda no login \
-             (ticket 60000001 do 0x610B). Com o Axon aberto depois do login, ela aparece só no próximo \
-             login. A atualização do ticket (0x610C) ainda não foi vista com a Odyle: na dúvida, vale \
-             o valor do último login. O máximo (o /840 da tela) não vem no pacote.",
+             (ticket 60000001 do 0x610B) e a cada mudança (0x610C, como no uso de essência OD). Com o \
+             Axon aberto depois do login, ela aparece na próxima mudança ou no próximo login. O máximo \
+             (o /840 da tela) não vem no pacote.",
         );
     }
 

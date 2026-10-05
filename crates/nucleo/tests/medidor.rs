@@ -3,7 +3,7 @@ mod comum;
 use comum::{T0, quase_igual, segundos};
 use nucleo::medicao::catalogo::InfoNpc;
 use nucleo::medicao::medidor::{LUTAS_GUARDADAS, Medidor, PerfilJogador};
-use nucleo::protocolo::combate::{Buff, EventoDano};
+use nucleo::protocolo::combate::{Buff, EventoDano, TICKET_ODYLE, Ticket};
 
 const MOB: u32 = 46027;
 
@@ -522,6 +522,21 @@ fn hp_maximo_do_spawn_e_derrota_pela_queda_do_hp() {
     // Id reaproveitado: o máximo do mob anterior não vale.
     m.registrar_npc(MOB, 2400031);
     assert_eq!(m.obter_placar().alvo.unwrap().hp_maximo, None);
+}
+
+#[test]
+fn odyle_vem_do_login_e_muda_com_o_ticket_dela() {
+    let mut m = Medidor::default();
+    let ticket = |id, valor, extra| Ticket { id, valor: Some(valor), extra };
+    m.registrar_ticket(ticket(TICKET_ODYLE, 550, Some(300)));
+    // Outro ticket não mexe na Odyle; a essência OD muda a carregada.
+    m.registrar_ticket(ticket(60_000_002, 6, None));
+    assert_eq!(m.odyle, Some((550, Some(300))));
+    m.registrar_ticket(ticket(TICKET_ODYLE, 550, Some(310)));
+    assert_eq!(m.odyle, Some((550, Some(310))));
+    // Troca de conexão (teleporte entre servidores) não apaga: o login manda de novo.
+    m.nova_conexao();
+    assert_eq!(m.odyle, Some((550, Some(310))));
 }
 
 /// Questlog de mentira: 2400425 é o world boss (nomeado), o resto é mob comum.

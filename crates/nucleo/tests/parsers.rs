@@ -300,6 +300,10 @@ fn tickets_do_login_trazem_a_odyle() {
     let mudou = hex("0E0C6100040A0000000E02");
     assert_eq!(combate::ticket_mudou(&mudou), Some(combate::Ticket { id: 10, valor: Some(14), extra: None }));
     assert_eq!(combate::tickets(&mudou), None);
+
+    // 0x610C de 2026-10-05 no uso de uma essência OD: carregada 300 → 310 (primeiro byte 01).
+    let essencia = hex("150C61010C01879303A604B602010A000000");
+    assert_eq!(combate::ticket_mudou(&essencia), Some(combate::Ticket { id, valor: Some(550), extra: Some(310) }));
 }
 
 #[test]

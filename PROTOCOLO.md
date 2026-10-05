@@ -62,7 +62,7 @@ eles são preenchimento). Na captura, o bloco descomprimiu com o tamanho exato d
 | `0x382A`, `0x382B`, `0x382C` | Buff novo, renovado e removido | confirmado (seção 5c) |
 | `0x382D` | Ligado a buffs (1.909 de 1.962 no world boss) | não fechou (seção 5c) |
 | `0x610B` | Tickets de conteúdo no login, entre eles a Energia Odyle | confirmado (seção 7d) |
-| `0x610C` | Um ticket de conteúdo mudou | visto uma vez (seção 7d) |
+| `0x610C` | Um ticket de conteúdo mudou (ex.: essência OD usada) | confirmado com a Odyle (seção 7d) |
 | `0x3603` | Hora, a cada 10 s: `[u16 0][u64 relógio][u64 hora do servidor em ms Unix]` | lido nas capturas, não usado |
 | `0x3620`, `0x3649`, `0x3847`, `0x9702` | vínculo de sessão, atributos, cooldown, grupo | não usados |
 
@@ -376,8 +376,14 @@ ticket veio com tipo `0x0C`, valor 550 e extra 270. No de 2026-10-02 veio com ti
 valor 155, sem extra. O máximo (840) não vem no pacote. Em 2026-10-05, um teleporte no mesmo
 servidor não mandou nem `0x610B` nem `0x610C`.
 
-`0x610C` = `[u8 0][uma entrada como acima][u8]`, visto uma vez (2026-10-03: ticket 10 com valor
-14, o mesmo do login). O medidor aplica o `0x610C` também à Odyle, mas nenhum foi visto com ela.
+`0x610C` = `[u8 ?][uma entrada como acima][resto]`. Visto duas vezes:
+
+- 2026-10-03: `00`, ticket 10 com valor 14 (o mesmo do login), resto `02`;
+- 2026-10-05, no uso de uma essência OD (tela: carregada de 300 para 310): `01`, tipo `0x0C`,
+  ticket 60.000.001, valor 550 e extra 310, resto `01 0A000000`.
+
+O primeiro byte não é contagem (com `00` ainda vem uma entrada), e o medidor ignora o valor dele
+e o resto. O gasto de Odyle em dungeon ainda não foi capturado.
 
 O `0x3656` (`[u64][u64]`, chega no login junto com o `0x610B`) não é a Odyle: o primeiro número
 sobe até igualar o segundo (15.578 → 19.501; 33.762 → 33.862) e não bate com a tela.

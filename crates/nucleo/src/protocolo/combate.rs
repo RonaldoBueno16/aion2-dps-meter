@@ -227,13 +227,13 @@ pub fn tickets(pacote: &[u8]) -> Option<Vec<Ticket>> {
     (r.restante() == 0).then_some(lista)
 }
 
-/// Um ticket mudou, opcode 0x610C: [u8 0][entrada][u8]. Visto uma vez (2026-10-03: ticket 10 com
-/// valor 14, o mesmo do 0x610B do login), nunca com a Odyle.
+/// Um ticket mudou, opcode 0x610C: [u8 ?][entrada][resto sem uso]. O primeiro byte veio 00
+/// (2026-10-03: ticket 10 com valor 14, o mesmo do 0x610B do login, e resto `02`) e 01 (2026-10-05,
+/// essência OD usada: Odyle 550 e carregada 310, e resto `01 0A000000`); não é contagem, então o
+/// valor não importa.
 pub fn ticket_mudou(pacote: &[u8]) -> Option<Ticket> {
     let mut r = abrir_corpo(pacote).ok()?;
-    if r.ler_u8().ok()? != 0 {
-        return None;
-    }
+    r.ler_u8().ok()?;
     ler_ticket(&mut r)
 }
 
