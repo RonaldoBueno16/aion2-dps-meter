@@ -78,9 +78,10 @@ pub(super) fn chefes_vistos(
     ChefesDaRegiao { regiao, chefes, antiga_desde: antiga.then_some(recebida) }
 }
 
-/// Segundos até renascer, sem passar de zero.
+/// Segundos até renascer, sem passar de zero. A hora vem do pacote: saturando, um valor absurdo não
+/// estoura.
 pub(super) fn falta_para_renascer(chefe: &ChefeVisto, agora: Hora) -> i64 {
-    (chefe.hora_ms * TICKS_POR_MS - agora).max(0) / TICKS_POR_SEGUNDO
+    chefe.hora_ms.saturating_mul(TICKS_POR_MS).saturating_sub(agora).max(0) / TICKS_POR_SEGUNDO
 }
 
 impl Overlay {
@@ -188,7 +189,7 @@ impl Overlay {
         } else if chefe.provavel {
             trecho(&mut direita, &format!("renasceu às {horario} (provável)"), 10.0, false, visual::AMARELO);
             format!("{quem}: a lista antiga dizia que renascia às {exata}.")
-        } else if chefe.hora_ms * TICKS_POR_MS > agora {
+        } else if chefe.hora_ms.saturating_mul(TICKS_POR_MS) > agora {
             // Nasceu antes da hora marcada (visto uma vez, 136 s antes): a lista continua com ela.
             trecho(&mut direita, "vivo, antes da hora", 10.0, false, branco(0x99));
             format!("{quem}: nasceu antes da hora marcada ({exata}).")
@@ -278,6 +279,14 @@ mod testes {
         let v = chefes_vistos(&l, chegou, None, chegou + 31 * S);
         assert!(!v.chefes[0].vivo);
         assert_eq!(falta_para_renascer(&v.chefes[0], chegou + 31 * S), 69);
+    }
+
+    #[test]
+    fn hora_absurda_no_pacote_nao_estoura() {
+        let l = lista(&[(111_001, false, i64::MAX), (111_002, true, i64::MAX)]);
+        let v = chefes_vistos(&l, 0, None, 0);
+        assert_eq!(falta_para_renascer(&v.chefes[0], 0), i64::MAX / S);
+        assert!(v.chefes[1].vivo);
     }
 
     #[test]
