@@ -7,6 +7,7 @@
 
 mod chefes;
 mod configuracoes;
+mod drops;
 mod lutas;
 mod recolher;
 mod visual;
@@ -141,6 +142,12 @@ pub struct Overlay {
     regioes: HashMap<u32, InfoRegiao>,
     /// Aba aberta na tela de chefes: Mortos (true) ou Vivos.
     chefes_mortos: bool,
+    /// Drops de um chefe de campo, num painel ao lado da janela.
+    painel: Option<drops::PainelDrops>,
+    /// Largura (em pontos) com que o tamanho da janela foi pedido por último.
+    largura_aplicada: f32,
+    /// Só no debug (--drops <código do NPC>): abre o painel no primeiro quadro.
+    drops_inicial: Option<u32>,
     logo: Option<Option<TextureHandle>>,
     /// Altura do conteúdo (em pontos) e escala (pixels por ponto) com que o tamanho da janela foi
     /// pedido por último. A escala e não o zoom da config: ela muda também com o DPI do monitor.
@@ -238,6 +245,9 @@ impl Overlay {
             chefes: None,
             regioes: HashMap::new(),
             chefes_mortos: true,
+            painel: None,
+            largura_aplicada: LARGURA,
+            drops_inicial: opcoes_debug.iter().skip_while(|a| *a != "--drops").nth(1).and_then(|c| c.parse().ok()),
             logo: None,
             altura: 0.0,
             escala_aplicada: 0.0,
@@ -363,8 +373,40 @@ impl Overlay {
     }
 
     fn alternar_compacta(&mut self) {
+        self.fechar_drops();
         self.config.compacta = !self.config.compacta;
         self.aplicar_config();
+    }
+
+    fn largura_janela(&self) -> f32 {
+        if self.painel.is_some() { LARGURA + drops::VAO + drops::LARGURA_PAINEL } else { LARGURA }
+    }
+
+    /// Abre os drops do chefe ao lado da janela, do lado com espaço (abrindo à esquerda, a janela anda
+    /// para a esquerda e o medidor fica onde está); fecha, se já são os dele.
+    fn alternar_drops(&mut self, codigo: u32, ppp: f32) {
+        match self.painel.as_ref().map(|p| (p.codigo, p.lado)) {
+            Some((aberto, _)) if aberto == codigo => return self.fechar_drops(),
+            Some((_, lado)) => self.painel = Some(drops::PainelDrops::novo(codigo, lado)),
+            None => {
+                let painel = ((drops::VAO + drops::LARGURA_PAINEL) * ppp).round() as i32;
+                let total = (self.largura_janela() * ppp).round() as i32 + painel;
+                let (lado, dx) = recolher::lugar_do_painel(self.janela, painel, total);
+                recolher::ajustar_largura(self.janela, total, dx);
+                self.painel = Some(drops::PainelDrops::novo(codigo, lado));
+            }
+        }
+        // Uma falha antes (sem internet) não impede de tentar de novo ao abrir.
+        dados_jogo::repetir_drops(codigo);
+    }
+
+    /// Fecha o painel de drops: a janela volta à largura do medidor, que fica onde está.
+    fn fechar_drops(&mut self) {
+        let Some(painel) = self.painel.take() else { return };
+        let ppp = if self.escala_aplicada > 0.0 { self.escala_aplicada } else { 1.0 };
+        let painel_px = ((drops::VAO + drops::LARGURA_PAINEL) * ppp).round() as i32;
+        let dx = if painel.lado == Lado::Esquerda { painel_px } else { 0 };
+        recolher::ajustar_largura(self.janela, (LARGURA * ppp).round() as i32, dx);
     }
 
     fn zerar(&mut self) {
@@ -459,6 +501,8 @@ impl Overlay {
                     Lado::Direita => "›",
                 };
                 if visual::botao_icone(ui, seta, 17.0).on_hover_text("Recolher para a borda da tela").clicked() {
+                    // O painel de drops fecha antes: o recolher mede a janela só com o medidor.
+                    self.fechar_drops();
                     self.dobra.recolher(self.janela);
                 }
                 if visual::botao_icone(ui, "⚙", 15.0).on_hover_text("Configurações").clicked() {
@@ -1551,6 +1595,10 @@ impl eframe::App for Overlay {
             ctx.request_repaint_after(self.intervalo());
         }
 
+        if let Some(codigo) = self.drops_inicial.take() {
+            self.alternar_drops(codigo, ctx.pixels_per_point());
+        }
+
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
             if let Dobra::Recolhido { lado, .. } = self.dobra {
                 self.aba_recolhida(ui, lado);
@@ -1568,26 +1616,54 @@ impl eframe::App for Overlay {
                 _ => self.arraste = None,
             }
 
-            let quadro = egui::Frame::new()
+            // O medidor numa folha de LARGURA e, com os drops abertos, o painel em outra ao lado, com um
+            // vão transparente entre as duas.
+            let folha = egui::Frame::new()
                 .fill(Color32::from_rgba_unmultiplied(0x0D, 0x10, 0x15, self.config.alfa_do_fundo()))
                 .stroke(Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0xE6, 0xC0, 0x6A, 0x55)))
                 .corner_radius(8)
-                .inner_margin(8)
-                .show(ui, |ui| {
+                .inner_margin(8);
+            let lado_do_painel = self.painel.as_ref().map(|p| p.lado);
+            let inicio = ui.max_rect().min;
+            let x_medidor =
+                if lado_do_painel == Some(Lado::Esquerda) { drops::LARGURA_PAINEL + drops::VAO } else { 0.0 };
+            let medidor = Rect::from_min_size(inicio + vec2(x_medidor, 0.0), vec2(LARGURA, ui.max_rect().height()));
+            let quadro = ui.scope_builder(egui::UiBuilder::new().max_rect(medidor), |ui| {
+                folha.show(ui, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::ZERO;
                     ui.set_width(ui.available_width());
                     self.conteudo(ui);
+                })
+            });
+            let mut altura = quadro.inner.response.rect.height().ceil();
+            if let Some(lado) = lado_do_painel {
+                // A folha do painel pode crescer até a altura da área (do jogo); passando disso, rola.
+                let ppp = ctx.pixels_per_point();
+                let limite = recolher::altura_da_area(self.janela).map_or(900.0, |h| h as f32 / ppp) - 16.0;
+                let x = if lado == Lado::Esquerda { 0.0 } else { LARGURA + drops::VAO };
+                let area = Rect::from_min_size(inicio + vec2(x, 0.0), vec2(drops::LARGURA_PAINEL, limite));
+                let painel = ui.scope_builder(egui::UiBuilder::new().max_rect(area), |ui| {
+                    folha.show(ui, |ui| {
+                        ui.spacing_mut().item_spacing = Vec2::ZERO;
+                        ui.set_width(ui.available_width());
+                        self.painel_drops(ui, limite - 16.0);
+                    })
                 });
+                altura = altura.max(painel.inner.response.rect.height().ceil());
+            }
 
-            // Altura pelo conteúdo (o SizeToContent do WPF): só manda o comando quando a altura ou a
-            // escala mudam. Recolhendo ou voltando, quem manda no tamanho é a animação.
-            let altura = quadro.response.rect.height().ceil();
+            // Tamanho pelo conteúdo (o SizeToContent do WPF): só manda o comando quando a altura, a
+            // largura (painel de drops) ou a escala mudam. Recolhendo ou voltando, quem manda no
+            // tamanho é a animação.
+            let largura = self.largura_janela();
             let escala = ctx.pixels_per_point();
             let escala_mudou = (self.escala_aplicada - escala).abs() > 0.001;
-            if self.dobra.aberto() && ((altura - self.altura).abs() >= 1.0 || escala_mudou) {
+            let mudou = (altura - self.altura).abs() >= 1.0 || (largura - self.largura_aplicada).abs() >= 1.0;
+            if self.dobra.aberto() && (mudou || escala_mudou) {
                 self.altura = altura;
+                self.largura_aplicada = largura;
                 self.escala_aplicada = escala;
-                ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(LARGURA, altura)));
+                ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(largura, altura)));
             }
         });
     }

@@ -85,3 +85,27 @@ fn regiao_do_questlog_traz_os_chefes_em_ordem_de_codigo() {
     assert_eq!(info.chefes[2].retrato.as_deref(), Some("UT_256_MOB_Gartua_01_V02"));
     assert_eq!(info.chefes[0].retrato, None);
 }
+
+#[test]
+fn itens_do_questlog_sem_repetir_e_com_a_chance_quando_vem() {
+    // Trecho real do itemContainsItems do Baú de Saque de Newbold (2026-10-06): a lasca vem duas vezes,
+    // sem chance e com 100%.
+    let bau: serde_json::Value = serde_json::from_str(
+        r#"[{"id":"632520098","icon":"/assets/Game/UI/Resource/Texture/Item/ETC/Icon_Item_AD_Pic_A_c_002.Icon_Item_AD_Pic_A_c_002","name":"Lasca da Obra-prima: Chefe de Campo I (Elyseano) (Vinculado)","grade":11,"chance":null,"mainCategory":"misc","subCategory":"conversionresource"},{"id":"210540129","icon":"/assets/Game/UI/Resource/Texture/Item/Armor/Icon_Equip_AR_L_0013_T03_Gloves.Icon_Equip_AR_L_0013_T03_Gloves","name":"Luvas de Newbold","grade":31,"chance":0.035714285,"mainCategory":"armor","subCategory":"gloves"},{"id":"632520098","icon":"/assets/Game/UI/Resource/Texture/Item/ETC/Icon_Item_AD_Pic_A_c_002.Icon_Item_AD_Pic_A_c_002","name":"Lasca da Obra-prima: Chefe de Campo I (Elyseano) (Vinculado)","grade":11,"chance":1,"mainCategory":"misc","subCategory":"conversionresource"}]"#,
+    )
+    .unwrap();
+    let itens = catalogo::ler_itens(Some(&bau));
+    let resumo: Vec<_> = itens.iter().map(|i| (i.codigo, i.chance, i.raridade)).collect();
+    assert_eq!(resumo, [(632520098, Some(1.0), 11), (210540129, Some(0.035714285), 31)]);
+    assert_eq!(itens[1].icone.as_deref(), Some("Icon_Equip_AR_L_0013_T03_Gloves"));
+    assert_eq!(itens[1].quantidade, None);
+
+    // npcDropsItems: com a quantidade; a Pedra de Mana vem sem chance.
+    let npc: serde_json::Value = serde_json::from_str(
+        r#"[{"id":"511360001","icon":"/assets/Game/UI/Resource/Texture/Item/ETC/Icon_Usable_MagicStone_a_001.Icon_Usable_MagicStone_a_001","name":"Pedra de Mana Inferior","grade":11,"chance":null,"countMin":1,"countMax":1,"mainCategory":"usable","subCategory":"magicstone"}]"#,
+    )
+    .unwrap();
+    let itens = catalogo::ler_itens(Some(&npc));
+    assert_eq!((itens[0].chance, itens[0].quantidade, itens[0].tipo.as_str()), (None, Some((1, 1)), "magicstone"));
+    assert!(catalogo::ler_itens(None).is_empty());
+}

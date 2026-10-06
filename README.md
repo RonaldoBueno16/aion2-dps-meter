@@ -161,6 +161,19 @@ cargo build --release -p overlay
   em ordem de código, conferido em 3 dos 24 de Altgard (Gartua Imortal, Profanador Newbold e
   Arconte da Alma Perdida Axios); se a contagem não bater, aparece "Chefe 21". A posição dos
   vivos vem no pacote e não aparece.
+- **Drops** (desde a 0.11.0): clicar num chefe na tela Bosses abre, ao lado da janela, o que ele
+  deixa cair segundo o questlog (`getNpc`, e `getItem` para o que vem no baú). O painel abre do
+  lado com espaço na área do jogo; à esquerda, a janela anda e o medidor fica no lugar. O ✕, o
+  mesmo chefe de novo, recolher ou a barra compacta fecham. Em cima, o retrato, o nível e quando
+  renasce; embaixo, nesta ordem: o conjunto do chefe (as peças com o nome dele, lado a lado na
+  cor da raridade, com a % de cada uma), o que cai sempre (o baú de saque, que abre e mostra o
+  que vem dentro), o que mais cai sem ser equipamento (materiais, a obra-prima do chefe) e os
+  outros equipamentos por raridade ("Lendário   32 itens   0,036% a 0,16% cada", que abre a
+  lista). As peças do conjunto somam 100% no questlog nos 24 chefes de Altgard (7 peças Raras
+  ou Épicas nos de nível 45; 9 Lendárias, com acessórios, nos de 48 e 51): o painel diz "deve
+  cair uma por morte", o que ainda não foi conferido no jogo. Raridade com a cor do questlog;
+  os nomes (Comum, Raro, Épico, Lendário, Mítico, Único, Especial) são tradução nossa dos dele,
+  que só existem em inglês. A % é a do questlog, sem conta nossa por cima.
 - ⚙ abre as configurações, que valem na hora e ficam em
   `%LOCALAPPDATA%\Aion2Meter\config.json`:
   - **Números de cada jogador**: clique no total, no por segundo ou na % da linha de
@@ -239,7 +252,7 @@ cargo build --release -p overlay
 - Skills aparecem em português e com ícone. Nomes: questlog.gg (base comunitária montada
   do cliente Global, API não documentada); ícones: CDN oficial da NCSoft. Nome, level e
   retrato dos mobs vêm do mesmo jeito (`getNpc` do questlog). Tudo fica em
-  `%LOCALAPPDATA%\Aion2Meter` (`skills-pt.json`, `npcs-pt.json`, `regioes-pt.json` e `icones/`); apague a pasta
+  `%LOCALAPPDATA%\Aion2Meter` (`skills-pt.json`, `npcs-pt.json`, `regioes-pt.json`, `drops-pt.json` e `icones/`); apague a pasta
   para rebaixar. A consulta é uma a cada 400 ms, e nome e retrato de mob passam na frente das
   skills: num world boss, centenas de skills entram na fila antes do chefe.
 - Clicar no overlay não tira o foco do teclado do jogo (`WS_EX_NOACTIVATE`, reaplicado a
@@ -289,8 +302,8 @@ pessoal)`:
 
 | Para onde | Quando | O que vai no pedido |
 |---|---|---|
-| `questlog.gg` | Com o cache vazio, uma listagem por classe; depois, uma vez por skill, mob ou região (chefes de campo) que ainda não está no cache | Nome da classe, código da skill, do NPC ou da região |
-| `assets.playnccdn.com` (CDN da NCSoft) | Uma vez por ícone (skill, emblema de classe, Odyle, evento) ou retrato de mob ou de chefe de campo que ainda não foi baixado | Nome do arquivo do ícone |
+| `questlog.gg` | Com o cache vazio, uma listagem por classe; depois, uma vez por skill, mob ou região (chefes de campo) que ainda não está no cache, e ao abrir os drops de um chefe que ainda não estão no cache | Nome da classe, código da skill, do NPC, da região ou do baú de saque |
+| `assets.playnccdn.com` (CDN da NCSoft) | Uma vez por ícone (skill, emblema de classe, Odyle, evento, item dos drops) ou retrato de mob ou de chefe de campo que ainda não foi baixado | Nome do arquivo do ícone |
 | `api.github.com` | A cada abertura | Pedido da última release deste repositório |
 | `github.com` e o servidor de arquivos do GitHub | Só ao clicar em Atualizar | Pedido do `Axon.exe` da release |
 
@@ -313,7 +326,7 @@ código foi escrito do zero.
 |---|---|
 | `crates/nucleo` | Protocolo (varint, LZ4, framing, parsers), captura (raw socket, pcapng, remontagem TCP), medição (placar, catálogo de skills) e formatação pt-BR |
 | `crates/nucleo/tests` | LZ4 contra o `lz4_flex`, framing, remontagem TCP, parsers com bytes reais, placar e troca de servidor (`cargo test`). O teste de rede do catálogo é opcional: `cargo test -p nucleo --test catalogo -- --ignored` |
-| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y] [--limite N] [--nova-versao] [--pedir-firewall] [--lutas] [--chefes] [--ate S]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada; `--lutas` separa as lutas como ao vivo e abre a tela Lutas; `--chefes` abre a tela Bosses; `--ate 90` lê só os 90 primeiros segundos da captura, para ver a janela no meio de uma luta) |
+| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y] [--limite N] [--nova-versao] [--pedir-firewall] [--lutas] [--chefes] [--drops N] [--ate S]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada; `--lutas` separa as lutas como ao vivo e abre a tela Lutas; `--chefes` abre a tela Bosses; `--drops 2400424` abre o painel de drops do NPC dado; `--ate 90` lê só os 90 primeiros segundos da captura, para ver a janela no meio de uma luta) |
 | `crates/overlay/assets` | `logo-axon.jpg` (a logo original) e `axon.ico`, o hexágono recortado dela com fundo transparente, de 16 a 256 px |
 | `crates/replay` | Replay de `.pcapng` com diagnóstico e modo `ao-vivo` no console; `--lutas` lista as lutas como o overlay ao vivo as separa |
 | `dados/skills.json` | Opcional, fora do repositório e das releases: nomes em inglês do RATmeter (GPL-3.0, ver PROTOCOLO.md §9), só reserva quando o questlog não tem a skill |
@@ -386,6 +399,8 @@ testes → release) fica para quando o Actions voltar; aí a tag sozinha publica
   comparar ao vivo com o número do jogo.
 - **Chefes de campo**: só Altgard (região 1110) foi capturada, e a ordem dos nomes foi conferida
   em 3 dos 24 chefes. Outras regiões usam a mesma regra sem conferência.
+- **Drops**: as % são as do questlog e não foram conferidas no jogo. Que cai uma peça do conjunto
+  por morte é leitura nossa da soma de 100%; falta conferir matando o chefe algumas vezes.
 
 ## Conferido
 

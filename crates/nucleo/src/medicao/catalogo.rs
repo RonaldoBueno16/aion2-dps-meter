@@ -1,10 +1,10 @@
-//! Nome em português e ícone de cada skill, nome, level e retrato de cada NPC (o alvo da luta) e os
-//! chefes de campo de cada região, buscados sob demanda e guardados em disco.
+//! Nome em português e ícone de cada skill, nome, level e retrato de cada NPC (o alvo da luta), os
+//! chefes de campo de cada região e os drops de um chefe, buscados sob demanda e guardados em disco.
 //! Nomes: questlog.gg, base comunitária montada a partir do cliente Global (idioma "pt"),
 //! API não documentada: pode mudar sem aviso. Ícones: CDN oficial da NCSoft.
 //! Uma requisição por vez, com intervalo, para não sobrecarregar ninguém.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex};
@@ -77,6 +77,51 @@ pub struct InfoRegiao {
     pub chefes: Vec<ChefeRegiao>,
 }
 
+/// Item que um NPC deixa cair, ou que vem num baú de saque, como o questlog dá.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ItemDrop {
+    #[serde(rename = "Codigo")]
+    pub codigo: u32,
+    #[serde(rename = "Nome")]
+    pub nome: String,
+    #[serde(rename = "Icone", default)]
+    pub icone: Option<String>,
+    /// "grade" do questlog: 11 comum, 21 raro, 31 épico, 41 lendário, 51 mítico, 61 único, 71 especial.
+    #[serde(rename = "Raridade", default)]
+    pub raridade: u8,
+    /// mainCategory do questlog (armor, weapon, accessory, misc, usable, pantheon...).
+    #[serde(rename = "Categoria", default)]
+    pub categoria: String,
+    /// subCategory do questlog (gloves, sword, rewardbox...).
+    #[serde(rename = "Tipo", default)]
+    pub tipo: String,
+    /// De 0 a 1; None quando o questlog não dá.
+    #[serde(rename = "Chance", default)]
+    pub chance: Option<f64>,
+    /// Mínimo e máximo por vez; None quando o questlog não dá (os itens de baú).
+    #[serde(rename = "Quantidade", default)]
+    pub quantidade: Option<(u32, u32)>,
+}
+
+/// Drops de um NPC pelo questlog: os itens (npcDropsItems do getNpc) e o que vem em cada baú de saque
+/// entre eles (itemContainsItems do getItem), pelo código do baú.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DropsNpc {
+    #[serde(rename = "Itens")]
+    pub itens: Vec<ItemDrop>,
+    #[serde(rename = "Baus", default)]
+    pub baus: BTreeMap<u32, Vec<ItemDrop>>,
+}
+
+/// Resposta do questlog que pode demorar ou não vir.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Busca<T> {
+    Pronto(T),
+    Buscando,
+    /// Sem resposta (rede ou formato): só pede de novo depois de `repetir_drops`.
+    Falhou,
+}
+
 const API: &str = "https://questlog.gg/aion-2/api/trpc/database.";
 const CDN: &str = "https://assets.playnccdn.com/static-aion2-gamedata/resources/";
 const IDIOMA: &str = "pt";
@@ -92,6 +137,10 @@ struct Estado {
     npcs: Mutex<HashMap<u32, InfoNpc>>,
     arquivo_regioes: PathBuf,
     regioes: Mutex<HashMap<u32, InfoRegiao>>,
+    arquivo_drops: PathBuf,
+    drops: Mutex<HashMap<u32, DropsNpc>>,
+    /// Pedidos de drops que falharam nesta execução.
+    falhas: Mutex<HashSet<String>>,
     ja_pedido: Mutex<HashSet<String>>,
     /// Vira true quando o cache foi lido ou a listagem inicial terminou (com ou sem rede).
     pronto: (Mutex<bool>, Condvar),
@@ -134,6 +183,12 @@ impl CatalogoSkills {
             .and_then(|texto| serde_json::from_str(&texto).ok())
             .unwrap_or_default();
 
+        let arquivo_drops = pasta.join(format!("drops-{IDIOMA}.json"));
+        let drops: HashMap<u32, DropsNpc> = std::fs::read_to_string(&arquivo_drops)
+            .ok()
+            .and_then(|texto| serde_json::from_str(&texto).ok())
+            .unwrap_or_default();
+
         let estado = Arc::new(Estado {
             pasta,
             arquivo_nomes,
@@ -142,6 +197,9 @@ impl CatalogoSkills {
             npcs: Mutex::new(npcs),
             arquivo_regioes,
             regioes: Mutex::new(regioes),
+            arquivo_drops,
+            drops: Mutex::new(drops),
+            falhas: Mutex::new(HashSet::new()),
             ja_pedido: Mutex::new(HashSet::new()),
             pronto: (Mutex::new(false), Condvar::new()),
         });
@@ -202,6 +260,27 @@ impl CatalogoSkills {
         None
     }
 
+    /// Drops do NPC e o que vem nos baús dele (pede uma vez; com falha, só depois de `repetir_drops`).
+    pub fn drops(&self, codigo: u32) -> Busca<DropsNpc> {
+        if let Some(drops) = self.estado.drops().get(&codigo) {
+            return Busca::Pronto(drops.clone());
+        }
+        let item = format!("drops:{codigo}");
+        if self.estado.falhas().contains(&item) {
+            return Busca::Falhou;
+        }
+        self.pedir(item);
+        Busca::Buscando
+    }
+
+    /// Depois de uma falha, deixa o próximo `drops` pedir de novo.
+    pub fn repetir_drops(&self, codigo: u32) {
+        let item = format!("drops:{codigo}");
+        if self.estado.falhas().remove(&item) {
+            self.estado.ja_pedido.lock().unwrap_or_else(|e| e.into_inner()).remove(&item);
+        }
+    }
+
     /// Caminho local do PNG do ícone; None enquanto não baixou (pede o download uma vez).
     pub fn caminho_icone(&self, icone: Option<&str>) -> Option<PathBuf> {
         let icone = icone.filter(|i| !i.is_empty())?;
@@ -216,9 +295,11 @@ impl CatalogoSkills {
     fn pedir(&self, item: String) {
         let novo = self.estado.ja_pedido.lock().unwrap_or_else(|e| e.into_inner()).insert(item.clone());
         if novo {
-            // Retrato de mob e emblema de classe (UT_), ícone de item (a Odyle) e os chefes da região não
-            // esperam as skills.
-            let urgente = ["npc:", "regiao:", "icone:UT_", "icone:Icon_Item_"].iter().any(|p| item.starts_with(p));
+            // Retrato de mob e emblema de classe (UT_), ícone de item (Icon_ e icon_; os das skills são
+            // ICON_), os chefes da região e os drops de um chefe não esperam as skills.
+            let urgente = ["npc:", "regiao:", "drops:", "icone:UT_", "icone:Icon_", "icone:icon_"]
+                .iter()
+                .any(|p| item.starts_with(p));
             let _ = if urgente { self.urgente.send(item) } else { self.fila.send(item) };
         }
     }
@@ -235,6 +316,14 @@ impl Estado {
 
     fn regioes(&self) -> std::sync::MutexGuard<'_, HashMap<u32, InfoRegiao>> {
         self.regioes.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn drops(&self) -> std::sync::MutexGuard<'_, HashMap<u32, DropsNpc>> {
+        self.drops.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn falhas(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
+        self.falhas.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn marcar_pronto(&self) {
@@ -285,6 +374,16 @@ fn trabalhar(estado: &Estado, urgentes: &Receiver<String>, fila: &Receiver<Strin
                 && baixar_regiao(estado, &http, id).is_ok()
             {
                 let _ = salvar_regioes(estado);
+            }
+        } else if let Some(codigo) = item.strip_prefix("drops:") {
+            // Falha fica marcada: o painel avisa e só pede de novo quando o usuário reabre.
+            match codigo.parse::<u32>() {
+                Ok(id) if baixar_drops(estado, &http, id).is_ok() => {
+                    let _ = salvar_drops(estado);
+                }
+                _ => {
+                    estado.falhas().insert(item.clone());
+                }
             }
         } else if let Some(icone) = item.strip_prefix("icone:") {
             let _ = baixar_icone(estado, &http, icone);
@@ -375,6 +474,54 @@ pub fn ler_regiao(r: &Value) -> Option<(u32, InfoRegiao)> {
     Some((codigo, InfoRegiao { nome: nome.to_string(), chefes }))
 }
 
+fn baixar_drops(estado: &Estado, http: &ureq::Agent, id: u32) -> Result<(), Falha> {
+    let npc = trpc(http, "getNpc", &format!(r#"{{"id":"{id}","language":"{IDIOMA}"}}"#))?;
+    let itens = ler_itens(npc.get("npcDropsItems"));
+    let mut baus = BTreeMap::new();
+    for bau in itens.iter().filter(|i| i.tipo == "rewardbox") {
+        std::thread::sleep(INTERVALO_ENTRE_REQUISICOES);
+        let dados = trpc(http, "getItem", &format!(r#"{{"id":"{}","language":"{IDIOMA}"}}"#, bau.codigo))?;
+        baus.insert(bau.codigo, ler_itens(dados.get("itemContainsItems")));
+    }
+    estado.drops().insert(id, DropsNpc { itens, baus });
+    Ok(())
+}
+
+/// Lista de itens do questlog (npcDropsItems do getNpc ou itemContainsItems do getItem). O baú repete
+/// cada lasca sem a chance e com ela: fica uma por código, a com chance. Ícone como no `ler_npc`.
+pub fn ler_itens(lista: Option<&Value>) -> Vec<ItemDrop> {
+    let mut itens: Vec<ItemDrop> = Vec::new();
+    for item in lista.and_then(Value::as_array).into_iter().flatten().filter_map(ler_item) {
+        match itens.iter_mut().find(|i| i.codigo == item.codigo) {
+            Some(repetido) if repetido.chance.is_none() => *repetido = item,
+            Some(_) => {}
+            None => itens.push(item),
+        }
+    }
+    itens
+}
+
+fn ler_item(n: &Value) -> Option<ItemDrop> {
+    // O questlog manda número ou texto conforme a lista ("grade": 41 ou "41").
+    let numero = |campo: &str| n.get(campo).and_then(|v| v.as_u64().or_else(|| v.as_str()?.parse().ok()));
+    let texto = |campo: &str| n.get(campo).and_then(Value::as_str).unwrap_or_default().to_string();
+    let limitar = |v: u64| v.min(u64::from(u32::MAX)) as u32;
+    let quantidade = match (numero("countMin"), numero("countMax")) {
+        (Some(minimo), Some(maximo)) => Some((limitar(minimo), limitar(maximo))),
+        _ => None,
+    };
+    Some(ItemDrop {
+        codigo: n.get("id").and_then(Value::as_str)?.parse().ok()?,
+        nome: n.get("name").and_then(Value::as_str).filter(|nome| !nome.trim().is_empty())?.to_string(),
+        icone: n.get("icon").and_then(Value::as_str).and_then(|i| i.rsplit('.').next()).map(str::to_string),
+        raridade: numero("grade").map_or(0, |g| g.min(255) as u8),
+        categoria: texto("mainCategory"),
+        tipo: texto("subCategory"),
+        chance: n.get("chance").and_then(Value::as_f64).filter(|c| (0.0..=1.0).contains(c)),
+        quantidade,
+    })
+}
+
 fn guardar(estado: &Estado, s: &Value) {
     let Some(codigo) = s.get("id").and_then(Value::as_str).and_then(|t| t.parse::<u32>().ok()) else { return };
     let Some(nome) = s.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()) else { return };
@@ -433,6 +580,11 @@ fn salvar_npcs(estado: &Estado) -> std::io::Result<()> {
 fn salvar_regioes(estado: &Estado) -> std::io::Result<()> {
     let json = serde_json::to_string(&*estado.regioes()).map_err(std::io::Error::other)?;
     escrever_trocando(&estado.arquivo_regioes, json.as_bytes())
+}
+
+fn salvar_drops(estado: &Estado) -> std::io::Result<()> {
+    let json = serde_json::to_string(&*estado.drops()).map_err(std::io::Error::other)?;
+    escrever_trocando(&estado.arquivo_drops, json.as_bytes())
 }
 
 /// Grava num .tmp e troca, para um arquivo pela metade nunca substituir o bom.

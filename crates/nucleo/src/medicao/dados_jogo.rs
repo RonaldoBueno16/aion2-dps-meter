@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use super::catalogo::{CatalogoSkills, InfoRegiao};
+use super::catalogo::{Busca, CatalogoSkills, DropsNpc, InfoRegiao};
 
 // Curas que chegam pelo mesmo opcode do dano e não podem entrar na soma.
 const CURAS: [u32; 8] = [18120000, 18170000, 16770000, 16190000, 17120000, 17800000, 17100000, 17410000];
@@ -122,6 +122,18 @@ pub fn icone_odyle() -> Option<PathBuf> {
 /// Nome e chefes de campo da região do 0x9101. None enquanto não chegou do questlog.
 pub fn regiao(codigo: u32) -> Option<InfoRegiao> {
     catalogo()?.regiao(codigo)
+}
+
+/// Drops do chefe de campo e o que vem nos baús dele, pelo questlog.
+pub fn drops(codigo: u32) -> Busca<DropsNpc> {
+    catalogo().map_or(Busca::Falhou, |c| c.drops(codigo))
+}
+
+/// Deixa pedir de novo os drops que falharam.
+pub fn repetir_drops(codigo: u32) {
+    if let Some(c) = catalogo() {
+        c.repetir_drops(codigo);
+    }
 }
 
 /// Ícone da CDN do jogo pelo nome (os dos eventos do overlay). None enquanto não baixou.

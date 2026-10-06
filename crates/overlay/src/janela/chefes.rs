@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use eframe::egui::{Align, Layout, Rect, RichText, Sense, Ui, Vec2, pos2, vec2};
+use eframe::egui::{Align, CursorIcon, Layout, Rect, RichText, Sense, Ui, Vec2, pos2, vec2};
 use eframe::egui::text::LayoutJob;
 use nucleo::medicao::catalogo::InfoRegiao;
 use nucleo::medicao::dados_jogo;
@@ -29,6 +29,8 @@ pub(super) const ORIGEM_CHEFES: &str = "Hora que o servidor manda na lista dos c
 
 /// Um chefe como a tela mostra.
 pub(super) struct ChefeVisto {
+    /// Código do NPC no questlog, só com o nome confiável (a mesma contagem da região): abre os drops.
+    pub codigo: Option<u32>,
     pub nome: String,
     pub nivel: i32,
     pub retrato: Option<String>,
@@ -65,6 +67,7 @@ pub(super) fn chefes_vistos(
             let info = numero.and_then(|n| questlog?.chefes.get((n as usize).checked_sub(1)?));
             let renasceu = !c.vivo && c.hora_ms <= agora_ms;
             ChefeVisto {
+                codigo: info.map(|i| i.codigo),
                 nome: info.map_or_else(|| format!("Chefe {}", numero.unwrap_or(c.id)), |i| i.nome.clone()),
                 nivel: info.map_or(0, |i| i.nivel),
                 retrato: info.and_then(|i| i.retrato.clone()),
@@ -112,7 +115,8 @@ impl Overlay {
         });
         ui.add_space(4.0);
         let explicacao = "Os chefes de campo da região em que você está, como o servidor manda a cada poucos \
-                          segundos, com o mapa aberto ou não. O nome vem do questlog.";
+                          segundos, com o mapa aberto ou não. O nome vem do questlog. Clique num chefe para ver \
+                          os drops dele ao lado.";
         ui.add(eframe::egui::Label::new(RichText::new(explicacao).font(fonte(10.0, false)).color(branco(0x88))).wrap());
         let Some(vistos) = vistos else {
             ui.add_space(6.0);
@@ -158,7 +162,12 @@ impl Overlay {
     /// Retrato, nome e nível e, à direita: morto, a hora e a contagem para renascer; vivo, desde quando.
     fn linha_chefe(&mut self, ui: &mut Ui, chefe: &ChefeVisto, agora: Hora) {
         let largura = ui.available_width();
-        let (linha, resposta) = ui.allocate_exact_size(vec2(largura, 22.0), Sense::hover());
+        let sentido = if chefe.codigo.is_some() { Sense::click() } else { Sense::hover() };
+        let (linha, resposta) = ui.allocate_exact_size(vec2(largura, 22.0), sentido);
+        let aberto = chefe.codigo.is_some() && self.painel.as_ref().map(|p| p.codigo) == chefe.codigo;
+        if aberto || (resposta.hovered() && chefe.codigo.is_some()) {
+            ui.painter().rect_filled(linha, 3, branco(if aberto { 0x22 } else { 0x14 }));
+        }
         let meio = linha.center().y;
         let quadrado = Rect::from_center_size(pos2(linha.min.x + 12.0, meio), Vec2::splat(18.0));
         match &chefe.retrato {
@@ -202,7 +211,13 @@ impl Overlay {
         };
         let direita = montar(ui, direita);
         pintor.galley(pos2(fim - direita.size().x, meio - direita.size().y / 2.0), direita, texto());
-        resposta.on_hover_text(format!("{dica}\n\n{ORIGEM_CHEFES}"));
+        let clique = if chefe.codigo.is_some() { "\n\nClique para ver os drops ao lado." } else { "" };
+        let resposta = resposta.on_hover_text(format!("{dica}\n\n{ORIGEM_CHEFES}{clique}"));
+        if let Some(codigo) = chefe.codigo
+            && resposta.on_hover_cursor(CursorIcon::PointingHand).clicked()
+        {
+            self.alternar_drops(codigo, ui.ctx().pixels_per_point());
+        }
     }
 }
 
