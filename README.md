@@ -168,12 +168,14 @@ cargo build --release -p overlay
   renasce; embaixo, nesta ordem: o conjunto do chefe (as peças com o nome dele, lado a lado na
   cor da raridade, com a % de cada uma), o que cai sempre (o baú de saque, que abre e mostra o
   que vem dentro), o que mais cai sem ser equipamento (materiais, a obra-prima do chefe) e os
-  outros equipamentos por raridade ("Lendário   32 itens   0,036% a 0,16% cada", que abre a
-  lista). As peças do conjunto somam 100% no questlog nos 24 chefes de Altgard (7 peças Raras
-  ou Épicas nos de nível 45; 9 Lendárias, com acessórios, nos de 48 e 51): o painel diz "deve
-  cair uma por morte", o que ainda não foi conferido no jogo. Raridade com a cor do questlog;
-  os nomes (Comum, Raro, Épico, Lendário, Mítico, Único, Especial) são tradução nossa dos dele,
-  que só existem em inglês. A % é a do questlog, sem conta nossa por cima.
+  outros equipamentos por raridade ("Único   32 itens   0,036% a 0,16% cada", que abre a lista).
+  As peças do conjunto somam 100% no questlog nos 24 chefes de Altgard (7 peças verdes ou azuis
+  nos de nível 45; 9 douradas, com acessórios, nos de 48 e 51): o painel diz "deve cair uma por
+  morte", o que ainda não foi conferido no jogo. A raridade aparece na cor do questlog (a mesma
+  do jogo); o nome só onde foi conferido num item do jogo: Único (dourado, 41) e Especial
+  (ciano, 71). Nas outras, um quadrado na cor. A % é a do questlog, sem conta nossa por cima.
+  Nada disso vai para o disco: drops, região, retratos e ícones ficam na memória enquanto o
+  Axon está aberto (4 imagens baixando por vez, com um cinza pulsando no lugar até chegar).
 - ⚙ abre as configurações, que valem na hora e ficam em
   `%LOCALAPPDATA%\Aion2Meter\config.json`:
   - **Números de cada jogador**: clique no total, no por segundo ou na % da linha de
@@ -252,7 +254,7 @@ cargo build --release -p overlay
 - Skills aparecem em português e com ícone. Nomes: questlog.gg (base comunitária montada
   do cliente Global, API não documentada); ícones: CDN oficial da NCSoft. Nome, level e
   retrato dos mobs vêm do mesmo jeito (`getNpc` do questlog). Tudo fica em
-  `%LOCALAPPDATA%\Aion2Meter` (`skills-pt.json`, `npcs-pt.json`, `regioes-pt.json`, `drops-pt.json` e `icones/`); apague a pasta
+  `%LOCALAPPDATA%\Aion2Meter` (`skills-pt.json`, `npcs-pt.json` e `icones/`); apague a pasta
   para rebaixar. A consulta é uma a cada 400 ms, e nome e retrato de mob passam na frente das
   skills: num world boss, centenas de skills entram na fila antes do chefe.
 - Clicar no overlay não tira o foco do teclado do jogo (`WS_EX_NOACTIVATE`, reaplicado a
@@ -302,12 +304,13 @@ pessoal)`:
 
 | Para onde | Quando | O que vai no pedido |
 |---|---|---|
-| `questlog.gg` | Com o cache vazio, uma listagem por classe; depois, uma vez por skill, mob ou região (chefes de campo) que ainda não está no cache, e ao abrir os drops de um chefe que ainda não estão no cache | Nome da classe, código da skill, do NPC, da região ou do baú de saque |
-| `assets.playnccdn.com` (CDN da NCSoft) | Uma vez por ícone (skill, emblema de classe, Odyle, evento, item dos drops) ou retrato de mob ou de chefe de campo que ainda não foi baixado | Nome do arquivo do ícone |
+| `questlog.gg` | Com o cache vazio, uma listagem por classe; depois, uma vez por skill ou mob que ainda não está no cache; a cada execução, uma vez por região (chefes de campo) e ao abrir os drops de um chefe | Nome da classe, código da skill, do NPC, da região ou do baú de saque |
+| `assets.playnccdn.com` (CDN da NCSoft) | Uma vez por ícone (skill, emblema de classe, Odyle, evento) ou retrato de mob que ainda não foi baixado; a cada execução, uma vez por retrato de chefe de campo e ícone de item dos drops | Nome do arquivo do ícone |
 | `api.github.com` | A cada abertura | Pedido da última release deste repositório |
 | `github.com` e o servidor de arquivos do GitHub | Só ao clicar em Atualizar | Pedido do `Axon.exe` da release |
 
-O que é baixado fica em `%LOCALAPPDATA%\Aion2Meter`.
+O cache das skills, dos mobs e dos ícones fica em `%LOCALAPPDATA%\Aion2Meter`. Os chefes de
+campo, os drops e as imagens deles ficam só na memória e somem ao fechar o Axon.
 
 ## Licença
 

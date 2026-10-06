@@ -2,8 +2,6 @@
 //! poucos segundos, com o mapa aberto ou não (vivo, ou a hora de renascer). Nome, nível e retrato vêm
 //! do questlog, pela ordem dos NPCs nomeados da região (conferida em 3 dos 24 de Altgard).
 
-use std::time::Duration;
-
 use eframe::egui::{Align, CursorIcon, Layout, Rect, RichText, Sense, Ui, Vec2, pos2, vec2};
 use eframe::egui::text::LayoutJob;
 use nucleo::medicao::catalogo::InfoRegiao;
@@ -91,9 +89,7 @@ impl Overlay {
     /// A lista do último 0x9101 com os nomes do questlog; None antes de chegar a primeira.
     pub(super) fn chefes_da_regiao(&mut self) -> Option<ChefesDaRegiao> {
         let codigo = self.chefes.as_ref()?.0.regiao;
-        // Como no emblema: só pergunta ao catálogo logo depois de ler o placar (cada pergunta olha o disco).
         if !self.regioes.contains_key(&codigo)
-            && self.lido_em.elapsed() <= Duration::from_millis(100)
             && let Some(info) = dados_jogo::regiao(codigo)
         {
             self.regioes.insert(codigo, info);
@@ -171,7 +167,7 @@ impl Overlay {
         let meio = linha.center().y;
         let quadrado = Rect::from_center_size(pos2(linha.min.x + 12.0, meio), Vec2::splat(18.0));
         match &chefe.retrato {
-            Some(retrato) => self.icone_do_evento(ui, retrato, eventos::ROSTO, quadrado),
+            Some(retrato) => self.imagem_web(ui, retrato, eventos::ROSTO, quadrado),
             None => {
                 ui.painter().rect_filled(quadrado, 3, branco(0x22));
             }
@@ -231,7 +227,7 @@ pub(super) fn hora_com_segundos(ms: i64) -> String {
 pub(super) fn linha_do_chefe(chefe: &ChefeVisto, agora: Hora) -> LinhaEvento {
     LinhaEvento {
         nome: chefe.nome.clone(),
-        icone: chefe.retrato.clone().map_or(IconeDaLinha::Moldura, |r| IconeDaLinha::Jogo(r, eventos::ROSTO)),
+        icone: chefe.retrato.clone().map_or(IconeDaLinha::Moldura, |r| IconeDaLinha::Web(r, eventos::ROSTO)),
         estado: eventos::Estado::Fechado(falta_para_renascer(chefe, agora)),
         horario: eventos::horario_unix(chefe.hora_ms / 1000, agora),
         dica: format!("{}: renasce às {}.\n\n{ORIGEM_CHEFES}", chefe.nome, hora_com_segundos(chefe.hora_ms)),

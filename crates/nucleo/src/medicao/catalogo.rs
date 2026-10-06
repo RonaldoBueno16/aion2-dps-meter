@@ -1,5 +1,6 @@
-//! Nome em português e ícone de cada skill, nome, level e retrato de cada NPC (o alvo da luta), os
-//! chefes de campo de cada região e os drops de um chefe, buscados sob demanda e guardados em disco.
+//! Nome em português e ícone de cada skill e nome, level e retrato de cada NPC (o alvo da luta),
+//! buscados sob demanda e guardados em disco. Os chefes de campo de cada região, os drops de um chefe
+//! e as imagens deles ficam só na memória: nada disso vai para o disco.
 //! Nomes: questlog.gg, base comunitária montada a partir do cliente Global (idioma "pt"),
 //! API não documentada: pode mudar sem aviso. Ícones: CDN oficial da NCSoft.
 //! Uma requisição por vez, com intervalo, para não sobrecarregar ninguém.
@@ -118,7 +119,7 @@ pub struct DropsNpc {
 pub enum Busca<T> {
     Pronto(T),
     Buscando,
-    /// Sem resposta (rede ou formato): só pede de novo depois de `repetir_drops`.
+    /// Sem resposta (rede ou formato): só pede de novo depois de `repetir_falhas`.
     Falhou,
 }
 
@@ -128,6 +129,8 @@ const IDIOMA: &str = "pt";
 const CLASSES: [&str; 9] =
     ["gladiator", "templar", "assassin", "ranger", "sorcerer", "elementalist", "cleric", "chanter", "brawler"];
 const INTERVALO_ENTRE_REQUISICOES: Duration = Duration::from_millis(400);
+/// Imagens da CDN baixando ao mesmo tempo.
+const BAIXANDO_JUNTAS: usize = 4;
 
 struct Estado {
     pasta: PathBuf,
@@ -135,11 +138,11 @@ struct Estado {
     infos: Mutex<HashMap<u32, Info>>,
     arquivo_npcs: PathBuf,
     npcs: Mutex<HashMap<u32, InfoNpc>>,
-    arquivo_regioes: PathBuf,
     regioes: Mutex<HashMap<u32, InfoRegiao>>,
-    arquivo_drops: PathBuf,
     drops: Mutex<HashMap<u32, DropsNpc>>,
-    /// Pedidos de drops que falharam nesta execução.
+    /// PNG da CDN pelo nome, só na memória (retratos dos chefes de campo e ícones dos drops).
+    imagens: Mutex<HashMap<String, Arc<Vec<u8>>>>,
+    /// Pedidos de drops e de imagens que falharam nesta execução.
     falhas: Mutex<HashSet<String>>,
     ja_pedido: Mutex<HashSet<String>>,
     /// Vira true quando o cache foi lido ou a listagem inicial terminou (com ou sem rede).
@@ -152,6 +155,7 @@ pub struct CatalogoSkills {
     /// Nome de NPC e retrato passam na frente: num world boss, centenas de skills e ícones entram na
     /// fila antes, a 400 ms cada, e o nome do boss esperaria minutos.
     urgente: Sender<String>,
+    imagens: Sender<String>,
 }
 
 /// %LOCALAPPDATA%\Aion2Meter, onde ficam o cache das skills, os ícones e a memória dos jogadores.
@@ -177,28 +181,15 @@ impl CatalogoSkills {
             .and_then(|texto| serde_json::from_str(&texto).ok())
             .unwrap_or_default();
 
-        let arquivo_regioes = pasta.join(format!("regioes-{IDIOMA}.json"));
-        let regioes: HashMap<u32, InfoRegiao> = std::fs::read_to_string(&arquivo_regioes)
-            .ok()
-            .and_then(|texto| serde_json::from_str(&texto).ok())
-            .unwrap_or_default();
-
-        let arquivo_drops = pasta.join(format!("drops-{IDIOMA}.json"));
-        let drops: HashMap<u32, DropsNpc> = std::fs::read_to_string(&arquivo_drops)
-            .ok()
-            .and_then(|texto| serde_json::from_str(&texto).ok())
-            .unwrap_or_default();
-
         let estado = Arc::new(Estado {
             pasta,
             arquivo_nomes,
             infos: Mutex::new(infos),
             arquivo_npcs,
             npcs: Mutex::new(npcs),
-            arquivo_regioes,
-            regioes: Mutex::new(regioes),
-            arquivo_drops,
-            drops: Mutex::new(drops),
+            regioes: Mutex::new(HashMap::new()),
+            drops: Mutex::new(HashMap::new()),
+            imagens: Mutex::new(HashMap::new()),
             falhas: Mutex::new(HashSet::new()),
             ja_pedido: Mutex::new(HashSet::new()),
             pronto: (Mutex::new(false), Condvar::new()),
@@ -209,7 +200,16 @@ impl CatalogoSkills {
         let _ = std::thread::Builder::new()
             .name("catalogo".into())
             .spawn(move || trabalhar(&trabalhador, &urgentes, &recebidos));
-        Self { estado, fila, urgente }
+        // Imagens da CDN: várias de uma vez e sem o intervalo do questlog (cada uma leva ~1 s).
+        let (imagens, pedidas) = mpsc::channel();
+        let pedidas = Arc::new(Mutex::new(pedidas));
+        for i in 0..BAIXANDO_JUNTAS {
+            let (estado, pedidas) = (estado.clone(), pedidas.clone());
+            let _ = std::thread::Builder::new()
+                .name(format!("imagens-{i}"))
+                .spawn(move || baixar_imagens(&estado, &pedidas));
+        }
+        Self { estado, fila, urgente, imagens }
     }
 
     /// Espera o cache ou a listagem inicial, no máximo `limite`.
@@ -260,7 +260,7 @@ impl CatalogoSkills {
         None
     }
 
-    /// Drops do NPC e o que vem nos baús dele (pede uma vez; com falha, só depois de `repetir_drops`).
+    /// Drops do NPC e o que vem nos baús dele (pede uma vez; com falha, só depois de `repetir_falhas`).
     pub fn drops(&self, codigo: u32) -> Busca<DropsNpc> {
         if let Some(drops) = self.estado.drops().get(&codigo) {
             return Busca::Pronto(drops.clone());
@@ -273,11 +273,25 @@ impl CatalogoSkills {
         Busca::Buscando
     }
 
-    /// Depois de uma falha, deixa o próximo `drops` pedir de novo.
-    pub fn repetir_drops(&self, codigo: u32) {
-        let item = format!("drops:{codigo}");
-        if self.estado.falhas().remove(&item) {
-            self.estado.ja_pedido.lock().unwrap_or_else(|e| e.into_inner()).remove(&item);
+    /// PNG da CDN pelo nome, só na memória (pede uma vez; com falha, só depois de `repetir_falhas`).
+    pub fn imagem(&self, nome: &str) -> Busca<Arc<Vec<u8>>> {
+        if let Some(png) = self.estado.imagens().get(nome) {
+            return Busca::Pronto(png.clone());
+        }
+        let item = format!("imagem:{nome}");
+        if self.estado.falhas().contains(&item) {
+            return Busca::Falhou;
+        }
+        self.pedir(item);
+        Busca::Buscando
+    }
+
+    /// Deixa pedir de novo os drops e as imagens que falharam (sem internet, por exemplo).
+    pub fn repetir_falhas(&self) {
+        let falhas: Vec<String> = self.estado.falhas().drain().collect();
+        let mut ja_pedido = self.estado.ja_pedido.lock().unwrap_or_else(|e| e.into_inner());
+        for item in falhas {
+            ja_pedido.remove(&item);
         }
     }
 
@@ -294,7 +308,9 @@ impl CatalogoSkills {
 
     fn pedir(&self, item: String) {
         let novo = self.estado.ja_pedido.lock().unwrap_or_else(|e| e.into_inner()).insert(item.clone());
-        if novo {
+        if novo && let Some(nome) = item.strip_prefix("imagem:") {
+            let _ = self.imagens.send(nome.to_string());
+        } else if novo {
             // Retrato de mob e emblema de classe (UT_), ícone de item (Icon_ e icon_; os das skills são
             // ICON_), os chefes da região e os drops de um chefe não esperam as skills.
             let urgente = ["npc:", "regiao:", "drops:", "icone:UT_", "icone:Icon_", "icone:icon_"]
@@ -320,6 +336,10 @@ impl Estado {
 
     fn drops(&self) -> std::sync::MutexGuard<'_, HashMap<u32, DropsNpc>> {
         self.drops.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn imagens(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Vec<u8>>>> {
+        self.imagens.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn falhas(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
@@ -370,20 +390,14 @@ fn trabalhar(estado: &Estado, urgentes: &Receiver<String>, fila: &Receiver<Strin
                 let _ = salvar_npcs(estado);
             }
         } else if let Some(codigo) = item.strip_prefix("regiao:") {
-            if let Ok(id) = codigo.parse::<u32>()
-                && baixar_regiao(estado, &http, id).is_ok()
-            {
-                let _ = salvar_regioes(estado);
+            if let Ok(id) = codigo.parse::<u32>() {
+                let _ = baixar_regiao(estado, &http, id);
             }
         } else if let Some(codigo) = item.strip_prefix("drops:") {
             // Falha fica marcada: o painel avisa e só pede de novo quando o usuário reabre.
-            match codigo.parse::<u32>() {
-                Ok(id) if baixar_drops(estado, &http, id).is_ok() => {
-                    let _ = salvar_drops(estado);
-                }
-                _ => {
-                    estado.falhas().insert(item.clone());
-                }
+            let baixou = codigo.parse::<u32>().is_ok_and(|id| baixar_drops(estado, &http, id).is_ok());
+            if !baixou {
+                estado.falhas().insert(item.clone());
             }
         } else if let Some(icone) = item.strip_prefix("icone:") {
             let _ = baixar_icone(estado, &http, icone);
@@ -545,6 +559,26 @@ fn baixar_icone(estado: &Estado, http: &ureq::Agent, icone: &str) -> Result<(), 
     Ok(())
 }
 
+fn baixar_imagens(estado: &Estado, pedidas: &Mutex<Receiver<String>>) {
+    let http = cliente_http();
+    loop {
+        let Ok(nome) = pedidas.lock().unwrap_or_else(|e| e.into_inner()).recv() else { break };
+        let png = if nome.chars().any(|c| c < ' ' || "\"<>|:*?\\/".contains(c)) {
+            Err("nome de imagem inválido".into())
+        } else {
+            http.get(format!("{CDN}{nome}.png")).call().and_then(|mut r| r.body_mut().read_to_vec()).map_err(Falha::from)
+        };
+        match png {
+            Ok(png) => {
+                estado.imagens().insert(nome, Arc::new(png));
+            }
+            Err(_) => {
+                estado.falhas().insert(format!("imagem:{nome}"));
+            }
+        }
+    }
+}
+
 fn trpc(http: &ureq::Agent, procedimento: &str, entrada: &str) -> Result<Value, Falha> {
     let url = format!("{API}{procedimento}?input={}", escapar(entrada));
     let texto = http.get(url).call()?.body_mut().read_to_string()?;
@@ -575,16 +609,6 @@ fn salvar(estado: &Estado) -> std::io::Result<()> {
 fn salvar_npcs(estado: &Estado) -> std::io::Result<()> {
     let json = serde_json::to_string(&*estado.npcs()).map_err(std::io::Error::other)?;
     escrever_trocando(&estado.arquivo_npcs, json.as_bytes())
-}
-
-fn salvar_regioes(estado: &Estado) -> std::io::Result<()> {
-    let json = serde_json::to_string(&*estado.regioes()).map_err(std::io::Error::other)?;
-    escrever_trocando(&estado.arquivo_regioes, json.as_bytes())
-}
-
-fn salvar_drops(estado: &Estado) -> std::io::Result<()> {
-    let json = serde_json::to_string(&*estado.drops()).map_err(std::io::Error::other)?;
-    escrever_trocando(&estado.arquivo_drops, json.as_bytes())
 }
 
 /// Grava num .tmp e troca, para um arquivo pela metade nunca substituir o bom.

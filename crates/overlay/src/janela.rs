@@ -28,7 +28,7 @@ use indexmap::IndexMap;
 use lutas::ResumoLuta;
 use nucleo::captura::socket_bruto::CapturaSocketBruto;
 use nucleo::formato::{f, n, p};
-use nucleo::medicao::catalogo::{self, CatalogoSkills, InfoRegiao};
+use nucleo::medicao::catalogo::{self, Busca, CatalogoSkills, InfoRegiao};
 use nucleo::medicao::dados_jogo;
 use nucleo::medicao::medidor::{Alvo, LinhaBuff, LinhaJogador, LinhaSkill, Medidor, PerfilJogador, Placar, Tabela};
 use nucleo::medicao::sessao::Sessao;
@@ -134,8 +134,14 @@ pub struct Overlay {
     icones: HashMap<PathBuf, Option<TextureHandle>>,
     /// Ícone da primeira skill de cada classe, usado no medalhão, quando já baixou.
     emblemas: HashMap<&'static str, PathBuf>,
-    /// Ícone de cada evento e retrato de cada chefe de campo, pelo nome na CDN, quando já baixou.
+    /// Ícone de cada evento, pelo nome na CDN, quando já baixou.
     icones_eventos: HashMap<String, PathBuf>,
+    /// Retratos dos chefes de campo e ícones dos drops, só na memória (None: o PNG não abriu).
+    imagens: HashMap<String, Option<TextureHandle>>,
+    /// Quando cada imagem foi pedida: o skeleton pulsa por até ESPERA_DA_IMAGEM.
+    imagens_pedidas: HashMap<String, Instant>,
+    /// Algo pulsando neste quadro (skeleton): o próximo vem logo, e não no intervalo do placar.
+    carregando: bool,
     /// Último 0x9101 (os chefes de campo da região) e quando chegou, como o medidor guardou.
     chefes: Option<(ChefesDeCampo, Hora)>,
     /// Nome e chefes de cada região, quando o questlog já mandou.
@@ -242,6 +248,9 @@ impl Overlay {
             icones: HashMap::new(),
             emblemas: HashMap::new(),
             icones_eventos: HashMap::new(),
+            imagens: HashMap::new(),
+            imagens_pedidas: HashMap::new(),
+            carregando: false,
             chefes: None,
             regioes: HashMap::new(),
             chefes_mortos: true,
@@ -397,7 +406,8 @@ impl Overlay {
             }
         }
         // Uma falha antes (sem internet) não impede de tentar de novo ao abrir.
-        dados_jogo::repetir_drops(codigo);
+        dados_jogo::repetir_falhas();
+        self.imagens_pedidas.clear();
     }
 
     /// Fecha o painel de drops: a janela volta à largura do medidor, que fica onde está.
@@ -1126,7 +1136,8 @@ impl Overlay {
                     trecho(&mut job, "   ·   ", 11.0, false, branco(0x99));
                 }
                 let icone = match &linha.icone {
-                    IconeDaLinha::Jogo(nome, recorte) => Some((nome.as_str(), *recorte)),
+                    IconeDaLinha::Jogo(nome, recorte) => Some((nome.as_str(), *recorte, false)),
+                    IconeDaLinha::Web(nome, recorte) => Some((nome.as_str(), *recorte, true)),
                     IconeDaLinha::Recomecar | IconeDaLinha::Moldura => {
                         trecho(&mut job, &format!("{} ", linha.nome), 11.0, false, branco(0x99));
                         None
@@ -1143,9 +1154,13 @@ impl Overlay {
                 }
                 pintor.galley(pos2(x, meio - antes.size().y / 2.0), antes, texto());
                 x += largura_antes;
-                if let Some((nome, recorte)) = icone {
+                if let Some((nome, recorte, web)) = icone {
                     let quadrado = Rect::from_center_size(pos2(x + 8.0, meio), Vec2::splat(16.0));
-                    self.icone_do_evento(ui, nome, recorte, quadrado);
+                    if web {
+                        self.imagem_web(ui, nome, recorte, quadrado);
+                    } else {
+                        self.icone_do_evento(ui, nome, recorte, quadrado);
+                    }
                     x += largura_icone;
                 }
                 pintor.galley(pos2(x, meio - contagem.size().y / 2.0), contagem, texto());
@@ -1201,6 +1216,7 @@ impl Overlay {
         let quadrado = Rect::from_center_size(pos2(inicio + 8.0, meio), Vec2::splat(16.0));
         match &linha.icone {
             IconeDaLinha::Jogo(nome, recorte) => self.icone_do_evento(ui, nome, *recorte, quadrado),
+            IconeDaLinha::Web(nome, recorte) => self.imagem_web(ui, nome, *recorte, quadrado),
             IconeDaLinha::Recomecar => {
                 let formato = TextFormat::simple(fonte(13.0, false), branco(0x99));
                 let seta = montar(ui, LayoutJob::single_section("↻".into(), formato));
@@ -1256,8 +1272,42 @@ impl Overlay {
         }
     }
 
-    /// Ícone da CDN do jogo (de um evento ou o retrato de um chefe) com o recorte dado; enquanto não
-    /// baixou, a moldura.
+    /// Imagem da CDN só na memória (retrato de chefe, ícone de drop) com o recorte dado. Enquanto
+    /// chega, o skeleton pulsando (até ESPERA_DA_IMAGEM); sem ela (falha ou demora), a moldura parada.
+    fn imagem_web(&mut self, ui: &Ui, nome: &str, recorte: [f32; 4], quadrado: Rect) {
+        if !self.imagens.contains_key(nome) {
+            match dados_jogo::imagem(nome) {
+                Busca::Pronto(png) => {
+                    let textura = decodificar(std::io::Cursor::new(png.as_slice()))
+                        .map(|imagem| ui.ctx().load_texture(nome, imagem, opcoes_de_textura()));
+                    self.imagens.insert(nome.to_string(), textura);
+                }
+                Busca::Buscando => {
+                    let desde = *self.imagens_pedidas.entry(nome.to_string()).or_insert_with(Instant::now);
+                    let esperando = desde.elapsed() < ESPERA_DA_IMAGEM;
+                    self.carregando |= esperando;
+                    ui.painter().rect_filled(quadrado, 3, if esperando { pulso(ui) } else { branco(0x22) });
+                    return;
+                }
+                Busca::Falhou => {
+                    ui.painter().rect_filled(quadrado, 3, branco(0x22));
+                    return;
+                }
+            }
+        }
+        let Some(Some(textura)) = self.imagens.get(nome) else {
+            ui.painter().rect_filled(quadrado, 3, branco(0x22));
+            return;
+        };
+        let [x0, y0, x1, y1] = recorte;
+        egui::Image::new(SizedTexture::new(textura.id(), quadrado.size()))
+            .uv(Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)))
+            .corner_radius(3)
+            .paint_at(ui, quadrado);
+    }
+
+    /// Ícone de evento da CDN do jogo (cache em disco) com o recorte dado; enquanto não baixou, a
+    /// moldura.
     fn icone_do_evento(&mut self, ui: &Ui, nome: &str, recorte: [f32; 4], quadrado: Rect) {
         ui.painter().rect_filled(quadrado, 3, branco(0x22));
         if !self.icones_eventos.contains_key(nome) {
@@ -1553,6 +1603,7 @@ impl Overlay {
 impl eframe::App for Overlay {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.janela = manter_sem_ativar(frame);
+        self.carregando = false;
         // Pelo winit (WS_EX_TRANSPARENT): ele guarda o estado e não apaga o bit ao recalcular o estilo.
         if bandeja::atravessando() != self.atravessando {
             self.atravessando = !self.atravessando;
@@ -1666,6 +1717,10 @@ impl eframe::App for Overlay {
                 ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(largura, altura)));
             }
         });
+        // Skeleton pulsando: quadros seguidos só enquanto algo carrega.
+        if self.carregando {
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -2177,12 +2232,23 @@ struct LinhaEvento {
 }
 
 enum IconeDaLinha {
-    /// Nome do ícone na CDN do jogo e o recorte dele.
+    /// Nome do ícone na CDN do jogo e o recorte dele (cache em disco, os eventos).
     Jogo(String, [f32; 4]),
+    /// O mesmo, só na memória (retrato de chefe de campo).
+    Web(String, [f32; 4]),
     /// Os resets: a seta de recomeçar e, na linha recolhida, o nome.
     Recomecar,
     /// Chefe sem retrato no questlog: a moldura vazia e, na linha recolhida, o nome.
     Moldura,
+}
+
+/// Quanto o skeleton de uma imagem pulsa antes de virar a moldura parada.
+const ESPERA_DA_IMAGEM: Duration = Duration::from_secs(10);
+
+/// Cinza do skeleton, pulsando devagar.
+fn pulso(ui: &Ui) -> Color32 {
+    let t = ui.input(|i| i.time) as f32;
+    branco((22.0 + 20.0 * (0.5 + 0.5 * (t * 3.0).sin())) as u8)
 }
 
 /// "fecha em 02:41" com o evento aberto; fechado, só o que falta.

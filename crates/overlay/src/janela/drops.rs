@@ -5,7 +5,6 @@
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::time::Duration;
 
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{Color32, CursorIcon, Rect, ScrollArea, Sense, Stroke, Ui, Vec2, pos2, vec2};
@@ -43,18 +42,18 @@ impl PainelDrops {
     }
 }
 
-/// Nome da raridade ("grade" do questlog; o site só tem os nomes em inglês, estes são tradução nossa)
-/// e a cor que o questlog usa para ela.
-pub(super) fn raridade(grade: u8) -> (&'static str, Color32) {
+/// Cor da raridade ("grade" do questlog), a que o questlog usa, e o nome que o jogo em português dá
+/// a ela, só onde foi conferido num item do jogo (41 Único, 71 Especial); nas outras, só a cor.
+pub(super) fn raridade(grade: u8) -> (Option<&'static str>, Color32) {
     match grade {
-        11 => ("Comum", Color32::from_rgb(128, 128, 128)),
-        21 => ("Raro", Color32::from_rgb(73, 139, 53)),
-        31 => ("Épico", Color32::from_rgb(19, 131, 182)),
-        41 => ("Lendário", Color32::from_rgb(211, 173, 15)),
-        51 => ("Mítico", Color32::from_rgb(206, 86, 10)),
-        61 => ("Único", Color32::from_rgb(210, 16, 70)),
-        71 => ("Especial", Color32::from_rgb(4, 221, 217)),
-        _ => ("Sem raridade", Color32::from_rgb(183, 183, 183)),
+        11 => (None, Color32::from_rgb(128, 128, 128)),
+        21 => (None, Color32::from_rgb(73, 139, 53)),
+        31 => (None, Color32::from_rgb(19, 131, 182)),
+        41 => (Some("Único"), Color32::from_rgb(211, 173, 15)),
+        51 => (None, Color32::from_rgb(206, 86, 10)),
+        61 => (None, Color32::from_rgb(210, 16, 70)),
+        71 => (Some("Especial"), Color32::from_rgb(4, 221, 217)),
+        _ => (None, Color32::from_rgb(183, 183, 183)),
     }
 }
 
@@ -152,8 +151,7 @@ impl Overlay {
     pub(super) fn painel_drops(&mut self, ui: &mut Ui, limite: f32) {
         let Some(painel) = &self.painel else { return };
         let codigo = painel.codigo;
-        // Como no emblema: só pergunta ao catálogo logo depois de ler o placar (cada pergunta olha o disco).
-        if painel.drops.is_none() && !painel.falhou && self.lido_em.elapsed() <= Duration::from_millis(100) {
+        if painel.drops.is_none() && !painel.falhou {
             let resposta = dados_jogo::drops(codigo);
             if let Some(painel) = &mut self.painel {
                 match resposta {
@@ -171,12 +169,11 @@ impl Overlay {
 
         let Some(painel) = &self.painel else { return };
         let Some(drops) = painel.drops.clone() else {
-            let aviso = if painel.falhou {
-                "O questlog não respondeu. Feche e abra o painel para tentar de novo."
+            if painel.falhou {
+                nota(ui, "O questlog não respondeu. Feche e abra o painel para tentar de novo.", branco(0x99));
             } else {
-                "Buscando os drops no questlog..."
-            };
-            nota(ui, aviso, branco(0x99));
+                self.esqueleto_drops(ui);
+            }
             return;
         };
         if drops.itens.is_empty() {
@@ -221,7 +218,7 @@ impl Overlay {
         let (rect, _) = ui.allocate_exact_size(vec2(largura, 40.0), Sense::hover());
         let quadrado = Rect::from_min_size(rect.min + vec2(0.0, 2.0), Vec2::splat(36.0));
         match info.as_ref().and_then(|i| i.retrato.as_deref()) {
-            Some(retrato) => self.icone_do_evento(ui, retrato, eventos::ROSTO, quadrado),
+            Some(retrato) => self.imagem_web(ui, retrato, eventos::ROSTO, quadrado),
             None => {
                 ui.painter().rect_filled(quadrado, 4, branco(0x22));
             }
@@ -269,7 +266,11 @@ impl Overlay {
     /// As peças do conjunto lado a lado, na cor da raridade, com a % embaixo de cada uma.
     fn fileira_do_conjunto(&mut self, ui: &mut Ui, conjunto: &Conjunto<'_>) {
         let (nome_raridade, cor) = raridade(conjunto.raridade);
-        titulo(ui, &format!("Conjunto {nome_raridade} {}", conjunto.nome), cor);
+        let nome = match nome_raridade {
+            Some(r) => format!("Conjunto {r} {}", conjunto.nome),
+            None => format!("Conjunto {}", conjunto.nome),
+        };
+        titulo(ui, &nome, cor);
         let largura = ui.available_width();
         let n = conjunto.pecas.len().max(1) as f32;
         let passo = (largura / n).min(40.0);
@@ -279,7 +280,7 @@ impl Overlay {
             let centro_x = rect.min.x + passo * (i as f32 + 0.5);
             let quadrado = Rect::from_center_size(pos2(centro_x, rect.min.y + lado / 2.0 + 1.0), Vec2::splat(lado));
             match peca.icone.as_deref() {
-                Some(icone) => self.icone_do_evento(ui, icone, ICONE_INTEIRO, quadrado),
+                Some(icone) => self.imagem_web(ui, icone, ICONE_INTEIRO, quadrado),
                 None => {
                     ui.painter().rect_filled(quadrado, 3, branco(0x22));
                 }
@@ -331,7 +332,8 @@ impl Overlay {
         }
     }
 
-    /// "Lendário   32 itens   0,036% a 0,16% cada": o clique abre a lista daquela raridade.
+    /// "Único   32 itens   0,036% a 0,16% cada" (sem o nome conferido, um quadrado na cor dela): o
+    /// clique abre a lista daquela raridade.
     fn raridade_dos_outros(&mut self, ui: &mut Ui, grade: u8, lista: &[&ItemDrop]) {
         let aberta = self.painel.as_ref().is_some_and(|p| p.raridades_abertas.contains(&grade));
         let (nome, cor) = raridade(grade);
@@ -343,7 +345,7 @@ impl Overlay {
         let meio = rect.center().y;
         let mut job = LayoutJob::default();
         trecho(&mut job, if aberta { "▾ " } else { "▸ " }, 11.0, false, branco(0x99));
-        trecho(&mut job, nome, 11.0, true, cor);
+        trecho(&mut job, nome.unwrap_or("■"), 11.0, true, cor);
         let itens = if lista.len() == 1 { "1 item".to_string() } else { format!("{} itens", lista.len()) };
         trecho(&mut job, &format!("   {itens}"), 10.0, false, branco(0x88));
         let esquerda = montar(ui, job);
@@ -386,7 +388,7 @@ impl Overlay {
         let meio = rect.center().y;
         let quadrado = Rect::from_center_size(pos2(rect.min.x + recuo + 10.0, meio), Vec2::splat(18.0));
         match item.icone.as_deref() {
-            Some(icone) => self.icone_do_evento(ui, icone, ICONE_INTEIRO, quadrado),
+            Some(icone) => self.imagem_web(ui, icone, ICONE_INTEIRO, quadrado),
             None => {
                 ui.painter().rect_filled(quadrado, 3, branco(0x22));
             }
@@ -408,9 +410,33 @@ impl Overlay {
         let pintor = ui.painter();
         pintor.galley(pos2(x, meio - nome.size().y / 2.0), nome, texto());
         pintor.galley(pos2(rect.max.x - 4.0 - direita.size().x, meio - direita.size().y / 2.0), direita, texto());
-        let (nome_raridade, _) = raridade(item.raridade);
+        let raridade = raridade(item.raridade).0.map_or_else(String::new, |r| format!("{r}, "));
         let sem_chance = if item.chance.is_none() { "\nO questlog não dá a chance deste." } else { "" };
-        resposta.on_hover_text(format!("{}\n{nome_raridade}, {chance} no questlog{sem_chance}", item.nome))
+        resposta.on_hover_text(format!("{}\n{raridade}{chance} no questlog{sem_chance}", item.nome))
+    }
+}
+
+impl Overlay {
+    /// Enquanto os drops não chegam: a fileira do conjunto e algumas linhas, pulsando.
+    fn esqueleto_drops(&mut self, ui: &mut Ui) {
+        self.carregando = true;
+        let cor = super::pulso(ui);
+        let largura = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(vec2(largura, 70.0), Sense::hover());
+        let pintor = ui.painter();
+        pintor.rect_filled(Rect::from_min_size(rect.min + vec2(0.0, 6.0), vec2(150.0, 10.0)), 3, cor);
+        for i in 0..7 {
+            let canto = rect.min + vec2(5.0 + 40.0 * i as f32, 26.0);
+            pintor.rect_filled(Rect::from_min_size(canto, Vec2::splat(30.0)), 3, cor);
+        }
+        for i in 0..4 {
+            let (rect, _) = ui.allocate_exact_size(vec2(largura, 22.0), Sense::hover());
+            let pintor = ui.painter();
+            let meio = rect.center().y;
+            pintor.rect_filled(Rect::from_center_size(pos2(rect.min.x + 10.0, meio), Vec2::splat(18.0)), 3, cor);
+            let barra = Rect::from_min_size(pos2(rect.min.x + 28.0, meio - 4.0), vec2(120.0 + 25.0 * i as f32, 8.0));
+            pintor.rect_filled(barra, 3, cor);
+        }
     }
 }
 
@@ -471,7 +497,7 @@ mod testes {
         let conjunto = separar(&itens).conjunto.expect("Danar tem conjunto");
         assert_eq!((conjunto.nome, conjunto.raridade, conjunto.pecas.len()), ("de Danar", 21, 7));
 
-        // Lendário, com os acessórios.
+        // Dourado (Único), com os acessórios.
         let itens = drops("gartua");
         let s = separar(&itens);
         let conjunto = s.conjunto.expect("Gartua tem conjunto");

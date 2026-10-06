@@ -129,10 +129,15 @@ pub fn drops(codigo: u32) -> Busca<DropsNpc> {
     catalogo().map_or(Busca::Falhou, |c| c.drops(codigo))
 }
 
-/// Deixa pedir de novo os drops que falharam.
-pub fn repetir_drops(codigo: u32) {
+/// PNG da CDN pelo nome, só na memória (retratos dos chefes de campo e ícones dos drops).
+pub fn imagem(nome: &str) -> Busca<std::sync::Arc<Vec<u8>>> {
+    catalogo().map_or(Busca::Falhou, |c| c.imagem(nome))
+}
+
+/// Deixa pedir de novo os drops e as imagens que falharam.
+pub fn repetir_falhas() {
     if let Some(c) = catalogo() {
-        c.repetir_drops(codigo);
+        c.repetir_falhas();
     }
 }
 
