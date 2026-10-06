@@ -143,6 +143,7 @@ impl Overlay {
         }
         if !ficha.alma.is_empty() {
             let titulo = match ficha.alma_sorteia {
+                Some(1) => "Ao vincular a alma: 1 sorteado destes".to_string(),
                 Some(k) => format!("Ao vincular a alma: {k} sorteados destes"),
                 None => "Ao vincular a alma".to_string(),
             };
