@@ -62,3 +62,26 @@ fn npc_do_questlog_traz_nome_level_chefe_e_retrato() {
     .unwrap();
     assert!(!catalogo::ler_npc(&totem).unwrap().1.chefe());
 }
+
+#[test]
+fn regiao_do_questlog_traz_os_chefes_em_ordem_de_codigo() {
+    // Trecho do getRegion de Altgard (2026-10-06), fora de ordem como veio, com 3 dos 24 NPCs; o
+    // "icon" do Newbold foi trocado por null para testar o chefe sem retrato.
+    let regiao: serde_json::Value = serde_json::from_str(
+        r#"{"id":"1110","name":"Altgard","mainCategory":"dark","regionHasNpcs":[{"id":"2400800","icon":"/assets/Game/UI/Resource/Texture/Portrait/Portrait_256/UT_256_MOB_Gartua_01_V02.UT_256_MOB_Gartua_01_V02","name":"Gartua Imortal","count":1,"level":51,"dbType":"npc"},{"id":"2400425","icon":"/assets/Game/UI/Resource/Texture/Portrait/Portrait_256/UT_256_MOB_DstrArchonE_01.UT_256_MOB_DstrArchonE_01","name":"Arconte da Alma Perdida Axios","count":1,"level":45,"dbType":"npc"},{"id":"2400424","icon":null,"name":"Profanador Newbold","count":1,"level":45,"dbType":"npc"}]}"#,
+    )
+    .unwrap();
+    let (codigo, info) = catalogo::ler_regiao(&regiao).unwrap();
+    assert_eq!((codigo, info.nome.as_str()), (1110, "Altgard"));
+    let nomes: Vec<_> = info.chefes.iter().map(|c| (c.codigo, c.nome.as_str(), c.nivel)).collect();
+    assert_eq!(
+        nomes,
+        [
+            (2400424, "Profanador Newbold", 45),
+            (2400425, "Arconte da Alma Perdida Axios", 45),
+            (2400800, "Gartua Imortal", 51),
+        ]
+    );
+    assert_eq!(info.chefes[2].retrato.as_deref(), Some("UT_256_MOB_Gartua_01_V02"));
+    assert_eq!(info.chefes[0].retrato, None);
+}

@@ -1,5 +1,5 @@
-//! Nome em português e ícone de cada skill, e nome, level e retrato de cada NPC (o alvo da luta),
-//! buscados sob demanda e guardados em disco.
+//! Nome em português e ícone de cada skill, nome, level e retrato de cada NPC (o alvo da luta) e os
+//! chefes de campo de cada região, buscados sob demanda e guardados em disco.
 //! Nomes: questlog.gg, base comunitária montada a partir do cliente Global (idioma "pt"),
 //! API não documentada: pode mudar sem aviso. Ícones: CDN oficial da NCSoft.
 //! Uma requisição por vez, com intervalo, para não sobrecarregar ninguém.
@@ -52,6 +52,31 @@ impl InfoNpc {
     }
 }
 
+/// Chefe de campo de uma região do questlog.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChefeRegiao {
+    #[serde(rename = "Codigo")]
+    pub codigo: u32,
+    #[serde(rename = "Nome")]
+    pub nome: String,
+    #[serde(rename = "Nivel", default)]
+    pub nivel: i32,
+    #[serde(rename = "Retrato", default)]
+    pub retrato: Option<String>,
+}
+
+/// Região do questlog (getRegion): o nome e os NPCs nomeados dela, em ordem de código. Em Altgard
+/// (1110) são os 24 chefes de campo, na ordem dos ids do 0x9101 (111001 a 111024): conferido no
+/// Gartua Imortal (21º, pelo timer da tela) e no Profanador Newbold e no Arconte Axios (12º e 13º,
+/// pela posição do 0x3641 deles).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InfoRegiao {
+    #[serde(rename = "Nome")]
+    pub nome: String,
+    #[serde(rename = "Chefes")]
+    pub chefes: Vec<ChefeRegiao>,
+}
+
 const API: &str = "https://questlog.gg/aion-2/api/trpc/database.";
 const CDN: &str = "https://assets.playnccdn.com/static-aion2-gamedata/resources/";
 const IDIOMA: &str = "pt";
@@ -65,6 +90,8 @@ struct Estado {
     infos: Mutex<HashMap<u32, Info>>,
     arquivo_npcs: PathBuf,
     npcs: Mutex<HashMap<u32, InfoNpc>>,
+    arquivo_regioes: PathBuf,
+    regioes: Mutex<HashMap<u32, InfoRegiao>>,
     ja_pedido: Mutex<HashSet<String>>,
     /// Vira true quando o cache foi lido ou a listagem inicial terminou (com ou sem rede).
     pronto: (Mutex<bool>, Condvar),
@@ -101,12 +128,20 @@ impl CatalogoSkills {
             .and_then(|texto| serde_json::from_str(&texto).ok())
             .unwrap_or_default();
 
+        let arquivo_regioes = pasta.join(format!("regioes-{IDIOMA}.json"));
+        let regioes: HashMap<u32, InfoRegiao> = std::fs::read_to_string(&arquivo_regioes)
+            .ok()
+            .and_then(|texto| serde_json::from_str(&texto).ok())
+            .unwrap_or_default();
+
         let estado = Arc::new(Estado {
             pasta,
             arquivo_nomes,
             infos: Mutex::new(infos),
             arquivo_npcs,
             npcs: Mutex::new(npcs),
+            arquivo_regioes,
+            regioes: Mutex::new(regioes),
             ja_pedido: Mutex::new(HashSet::new()),
             pronto: (Mutex::new(false), Condvar::new()),
         });
@@ -158,6 +193,15 @@ impl CatalogoSkills {
         None
     }
 
+    /// Nome e chefes de campo da região; None enquanto não chegou ou se o questlog não tem (pede uma vez).
+    pub fn regiao(&self, codigo: u32) -> Option<InfoRegiao> {
+        if let Some(info) = self.estado.regioes().get(&codigo) {
+            return Some(info.clone());
+        }
+        self.pedir(format!("regiao:{codigo}"));
+        None
+    }
+
     /// Caminho local do PNG do ícone; None enquanto não baixou (pede o download uma vez).
     pub fn caminho_icone(&self, icone: Option<&str>) -> Option<PathBuf> {
         let icone = icone.filter(|i| !i.is_empty())?;
@@ -172,8 +216,9 @@ impl CatalogoSkills {
     fn pedir(&self, item: String) {
         let novo = self.estado.ja_pedido.lock().unwrap_or_else(|e| e.into_inner()).insert(item.clone());
         if novo {
-            // Retrato de mob e emblema de classe (UT_) e ícone de item (a Odyle) não esperam as skills.
-            let urgente = ["npc:", "icone:UT_", "icone:Icon_Item_"].iter().any(|p| item.starts_with(p));
+            // Retrato de mob e emblema de classe (UT_), ícone de item (a Odyle) e os chefes da região não
+            // esperam as skills.
+            let urgente = ["npc:", "regiao:", "icone:UT_", "icone:Icon_Item_"].iter().any(|p| item.starts_with(p));
             let _ = if urgente { self.urgente.send(item) } else { self.fila.send(item) };
         }
     }
@@ -186,6 +231,10 @@ impl Estado {
 
     fn npcs(&self) -> std::sync::MutexGuard<'_, HashMap<u32, InfoNpc>> {
         self.npcs.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn regioes(&self) -> std::sync::MutexGuard<'_, HashMap<u32, InfoRegiao>> {
+        self.regioes.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn marcar_pronto(&self) {
@@ -230,6 +279,12 @@ fn trabalhar(estado: &Estado, urgentes: &Receiver<String>, fila: &Receiver<Strin
                 && baixar_npc(estado, &http, id).is_ok()
             {
                 let _ = salvar_npcs(estado);
+            }
+        } else if let Some(codigo) = item.strip_prefix("regiao:") {
+            if let Ok(id) = codigo.parse::<u32>()
+                && baixar_regiao(estado, &http, id).is_ok()
+            {
+                let _ = salvar_regioes(estado);
             }
         } else if let Some(icone) = item.strip_prefix("icone:") {
             let _ = baixar_icone(estado, &http, icone);
@@ -290,6 +345,36 @@ pub fn ler_npc(n: &Value) -> Option<(u32, InfoNpc)> {
     Some((codigo, info))
 }
 
+fn baixar_regiao(estado: &Estado, http: &ureq::Agent, id: u32) -> Result<(), Falha> {
+    let dados = trpc(http, "getRegion", &format!(r#"{{"id":"{id}","language":"{IDIOMA}"}}"#))?;
+    let (codigo, info) = ler_regiao(&dados).ok_or("região sem nome")?;
+    estado.regioes().insert(codigo, info);
+    Ok(())
+}
+
+/// Resposta do getRegion do questlog: o nome e os NPCs de regionHasNpcs em ordem de código (a ordem
+/// em que o 0x9101 numera os chefes). Retrato como no `ler_npc`.
+pub fn ler_regiao(r: &Value) -> Option<(u32, InfoRegiao)> {
+    let codigo = r.get("id").and_then(Value::as_str)?.parse::<u32>().ok()?;
+    let nome = r.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty())?;
+    let mut chefes: Vec<ChefeRegiao> = r
+        .get("regionHasNpcs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|n| {
+            Some(ChefeRegiao {
+                codigo: n.get("id").and_then(Value::as_str)?.parse().ok()?,
+                nome: n.get("name").and_then(Value::as_str)?.to_string(),
+                nivel: n.get("level").and_then(Value::as_i64).map_or(0, |l| l.clamp(0, 999) as i32),
+                retrato: n.get("icon").and_then(Value::as_str).and_then(|i| i.rsplit('.').next()).map(str::to_string),
+            })
+        })
+        .collect();
+    chefes.sort_by_key(|c| c.codigo);
+    Some((codigo, InfoRegiao { nome: nome.to_string(), chefes }))
+}
+
 fn guardar(estado: &Estado, s: &Value) {
     let Some(codigo) = s.get("id").and_then(Value::as_str).and_then(|t| t.parse::<u32>().ok()) else { return };
     let Some(nome) = s.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()) else { return };
@@ -343,6 +428,11 @@ fn salvar(estado: &Estado) -> std::io::Result<()> {
 fn salvar_npcs(estado: &Estado) -> std::io::Result<()> {
     let json = serde_json::to_string(&*estado.npcs()).map_err(std::io::Error::other)?;
     escrever_trocando(&estado.arquivo_npcs, json.as_bytes())
+}
+
+fn salvar_regioes(estado: &Estado) -> std::io::Result<()> {
+    let json = serde_json::to_string(&*estado.regioes()).map_err(std::io::Error::other)?;
+    escrever_trocando(&estado.arquivo_regioes, json.as_bytes())
 }
 
 /// Grava num .tmp e troca, para um arquivo pela metade nunca substituir o bom.

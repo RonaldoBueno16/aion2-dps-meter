@@ -253,6 +253,11 @@ fn ao_pacote(medidor: &mut Medidor, pacote: &[u8], hora: Hora) {
                 medidor.registrar_ticket(ticket);
             }
         }
+        opcodes::CHEFES_DE_CAMPO => {
+            if let Some(lista) = combate::chefes_de_campo(pacote) {
+                medidor.chefes_de_campo = Some((lista, hora));
+            }
+        }
         opcodes::TICKET_MUDOU => {
             if let Some(ticket) = combate::ticket_mudou(pacote) {
                 medidor.registrar_ticket(ticket);

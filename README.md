@@ -148,6 +148,19 @@ cargo build --release -p overlay
   e o "derrota em" do alvo, o nome dele, o seu DPS, o do grupo (dano total da aba DPS dividido
   pelo tempo da luta) e o ping. O ▭ da barra volta ao medidor completo. Fica salva no
   `config.json`.
+- **Bosses** (desde a 0.11.0), ♛ no cabeçalho: os chefes de campo da região em que você está,
+  nas abas Vivos e Mortos (abre em Mortos). O servidor manda a lista a cada poucos segundos,
+  com o mapa aberto ou não (PROTOCOLO.md §7e), e ela traz só vivo ou morto e uma hora. Morto:
+  a hora de renascer (`22:20`, ou `ter 22:20` se não for hoje) e a contagem, dourada faltando
+  até 10 min, do que renasce antes ao que renasce depois. Vivo: desde quando (a hora marcada;
+  em 2026-10-05 um chefe nasceu 2 min antes dela), do level mais alto ao mais baixo. Fora da
+  região o servidor para de mandar: depois de 30 s sem lista aparece "Lista das 17:22", e quem
+  passou da hora de renascer vai para Vivos como provável. Com a lista em dia, o chefe que
+  passou da hora e o servidor ainda diz morto fica em `00:00`. Nome, level e retrato vêm do
+  questlog (`getRegion`): o pacote traz só o número do chefe, e o 21º é o 21º NPC da região
+  em ordem de código, conferido em 3 dos 24 de Altgard (Gartua Imortal, Profanador Newbold e
+  Arconte da Alma Perdida Axios); se a contagem não bater, aparece "Chefe 21". A posição dos
+  vivos vem no pacote e não aparece.
 - ⚙ abre as configurações, que valem na hora e ficam em
   `%LOCALAPPDATA%\Aion2Meter\config.json`:
   - **Números de cada jogador**: clique no total, no por segundo ou na % da linha de
@@ -204,7 +217,10 @@ cargo build --release -p overlay
   21h) e os resets diário (04h) e semanal (quarta às 04h). A NCSoft não publicou os horários do
   SA: a tabela é a do shugo.gg, conferida com metabot.gg e aion2rifttimer.com em 2026-10-06
   (`crates/overlay/src/eventos.rs`). A Arena of Tactics ficou de fora: só o metabot.gg traz o
-  horário dela.
+  horário dela. Desde a 0.11.0 os chefes de campo mortos da região entram também: na linha
+  recolhida, junto com os eventos pela contagem (o retrato e o tempo até renascer); na lista,
+  depois dos eventos, embaixo de "Chefes de Altgard   20 vivos, 4 mortos", que abre a tela
+  Bosses.
 - Nomes e ícones dos eventos: Vigilante Kairah e Senhor Guardião Nahma são os nomes dos NPCs em
   português no questlog; Shugo Festa vem dos itens dela (Chave de Recompensa da Shugo Festa) e a
   Fenda, do Bilhete de Entrada da Fenda Espaço-Temporal. Invasão Dimensional, Cerco de Artefato,
@@ -223,7 +239,7 @@ cargo build --release -p overlay
 - Skills aparecem em português e com ícone. Nomes: questlog.gg (base comunitária montada
   do cliente Global, API não documentada); ícones: CDN oficial da NCSoft. Nome, level e
   retrato dos mobs vêm do mesmo jeito (`getNpc` do questlog). Tudo fica em
-  `%LOCALAPPDATA%\Aion2Meter` (`skills-pt.json`, `npcs-pt.json` e `icones/`); apague a pasta
+  `%LOCALAPPDATA%\Aion2Meter` (`skills-pt.json`, `npcs-pt.json`, `regioes-pt.json` e `icones/`); apague a pasta
   para rebaixar. A consulta é uma a cada 400 ms, e nome e retrato de mob passam na frente das
   skills: num world boss, centenas de skills entram na fila antes do chefe.
 - Clicar no overlay não tira o foco do teclado do jogo (`WS_EX_NOACTIVATE`, reaplicado a
@@ -273,8 +289,8 @@ pessoal)`:
 
 | Para onde | Quando | O que vai no pedido |
 |---|---|---|
-| `questlog.gg` | Com o cache vazio, uma listagem por classe; depois, uma vez por skill ou mob que ainda não está no cache | Nome da classe, código da skill ou código do NPC |
-| `assets.playnccdn.com` (CDN da NCSoft) | Uma vez por ícone (skill, emblema de classe, Odyle) ou retrato de mob que ainda não foi baixado | Nome do arquivo do ícone |
+| `questlog.gg` | Com o cache vazio, uma listagem por classe; depois, uma vez por skill, mob ou região (chefes de campo) que ainda não está no cache | Nome da classe, código da skill, do NPC ou da região |
+| `assets.playnccdn.com` (CDN da NCSoft) | Uma vez por ícone (skill, emblema de classe, Odyle, evento) ou retrato de mob ou de chefe de campo que ainda não foi baixado | Nome do arquivo do ícone |
 | `api.github.com` | A cada abertura | Pedido da última release deste repositório |
 | `github.com` e o servidor de arquivos do GitHub | Só ao clicar em Atualizar | Pedido do `Axon.exe` da release |
 
@@ -297,7 +313,7 @@ código foi escrito do zero.
 |---|---|
 | `crates/nucleo` | Protocolo (varint, LZ4, framing, parsers), captura (raw socket, pcapng, remontagem TCP), medição (placar, catálogo de skills) e formatação pt-BR |
 | `crates/nucleo/tests` | LZ4 contra o `lz4_flex`, framing, remontagem TCP, parsers com bytes reais, placar e troca de servidor (`cargo test`). O teste de rede do catálogo é opcional: `cargo test -p nucleo --test catalogo -- --ignored` |
-| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y] [--limite N] [--nova-versao] [--pedir-firewall] [--lutas] [--ate S]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada; `--lutas` separa as lutas como ao vivo e abre a tela Lutas; `--ate 90` lê só os 90 primeiros segundos da captura, para ver a janela no meio de uma luta) |
+| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y] [--limite N] [--nova-versao] [--pedir-firewall] [--lutas] [--chefes] [--ate S]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada; `--lutas` separa as lutas como ao vivo e abre a tela Lutas; `--chefes` abre a tela Bosses; `--ate 90` lê só os 90 primeiros segundos da captura, para ver a janela no meio de uma luta) |
 | `crates/overlay/assets` | `logo-axon.jpg` (a logo original) e `axon.ico`, o hexágono recortado dela com fundo transparente, de 16 a 256 px |
 | `crates/replay` | Replay de `.pcapng` com diagnóstico e modo `ao-vivo` no console; `--lutas` lista as lutas como o overlay ao vivo as separa |
 | `dados/skills.json` | Opcional, fora do repositório e das releases: nomes em inglês do RATmeter (GPL-3.0, ver PROTOCOLO.md §9), só reserva quando o questlog não tem a skill |
@@ -368,6 +384,8 @@ testes → release) fica para quando o Actions voltar; aí a tag sozinha publica
   (`0x610C`). O gasto em dungeon ainda não foi capturado; deve chegar no mesmo `0x610C`.
 - **Ping**: conferido só contra as capturas (mínimo de 10 a 14 ms por janela de 10 s); falta
   comparar ao vivo com o número do jogo.
+- **Chefes de campo**: só Altgard (região 1110) foi capturada, e a ordem dos nomes foi conferida
+  em 3 dos 24 chefes. Outras regiões usam a mesma regra sem conferência.
 
 ## Conferido
 

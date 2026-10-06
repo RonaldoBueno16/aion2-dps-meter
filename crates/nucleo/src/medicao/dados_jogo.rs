@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use super::catalogo::CatalogoSkills;
+use super::catalogo::{CatalogoSkills, InfoRegiao};
 
 // Curas que chegam pelo mesmo opcode do dano e não podem entrar na soma.
 const CURAS: [u32; 8] = [18120000, 18170000, 16770000, 16190000, 17120000, 17800000, 17100000, 17410000];
@@ -117,6 +117,11 @@ pub fn emblema_classe(classe: &str) -> Option<PathBuf> {
 /// Ícone do item Energia Odyle na CDN do jogo (o mesmo do medidor Abyss). None enquanto não baixou.
 pub fn icone_odyle() -> Option<PathBuf> {
     catalogo()?.caminho_icone(Some("Icon_Item_Odenergy_A_001"))
+}
+
+/// Nome e chefes de campo da região do 0x9101. None enquanto não chegou do questlog.
+pub fn regiao(codigo: u32) -> Option<InfoRegiao> {
+    catalogo()?.regiao(codigo)
 }
 
 /// Ícone da CDN do jogo pelo nome (os dos eventos do overlay). None enquanto não baixou.

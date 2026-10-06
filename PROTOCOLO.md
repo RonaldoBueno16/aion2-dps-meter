@@ -63,6 +63,7 @@ eles são preenchimento). Na captura, o bloco descomprimiu com o tamanho exato d
 | `0x382D` | Ligado a buffs (1.909 de 1.962 no world boss) | não fechou (seção 5c) |
 | `0x610B` | Tickets de conteúdo no login, entre eles a Energia Odyle | confirmado (seção 7d) |
 | `0x610C` | Um ticket de conteúdo mudou (ex.: essência OD usada) | confirmado com a Odyle (seção 7d) |
+| `0x9101` | Chefes de campo da região: vivo ou morto e uma hora (de renascer ou de quando nasceu), a cada poucos segundos | confirmado (seção 7e) |
 | `0x3603` | Hora, a cada 10 s: `[u16 0][u64 relógio][u64 hora do servidor em ms Unix]` | lido nas capturas, não usado |
 | `0x3620`, `0x3649`, `0x3847`, `0x9702` | vínculo de sessão, atributos, cooldown, grupo | não usados |
 
@@ -387,6 +388,43 @@ e o resto. O gasto de Odyle em dungeon ainda não foi capturado.
 
 O `0x3656` (`[u64][u64]`, chega no login junto com o `0x610B`) não é a Odyle: o primeiro número
 sobe até igualar o segundo (15.578 → 19.501; 33.762 → 33.862) e não bate com a tela.
+
+## 7e. Chefes de campo `0x9101` (confirmado)
+
+O servidor manda a lista dos chefes de campo da região a cada poucos segundos (de 1,0 a 6,3 s
+entre um e outro nas capturas), com o mapa aberto ou não:
+
+```
+u16     0
+u32     região (1110 = Altgard)
+u8      n
+n ×     u8      vivo (0 ou 1)
+        varint  id = região × 100 + número do chefe (111001 a 111024)
+        3 × f32 posição (só vivo)
+        u8      máscara (só na 1ª entrada de cada grupo de 8: o vivo das 8, um bit cada, do bit 0)
+        u64     hora em ms Unix
+3 bytes 00 00 00, sem uso
+```
+
+A hora é a de renascer (morto) ou a hora marcada em que nasceu (vivo). Vivo com hora 0
+provavelmente não morreu desde que o servidor reiniciou (hipótese: 111001 a 111004 tinham hora
+em 2026-10-03, vieram com 0 em 2026-10-05 e com hora de novo em 2026-10-06).
+
+- 254 pacotes em 5 capturas (2026-10-03 a 2026-10-06), todos de Altgard com 24 chefes: a
+  leitura fecha nos 3 bytes de sobra em todos, e a máscara confere as 6.096 entradas. O
+  medidor recusa o pacote em que a máscara não bate.
+- Gartua Imortal = 111021. Na captura de 2026-10-06 veio morto com hora 1.791.336.040.627
+  (22:20:40 de Brasília); a tela do jogo às 17:22:36 mostrava 4h 58min 5s (22:20:41).
+- Em 2026-10-05, 111009, 111014 e 111018 estavam mortos às 14:25 (renascer às 14:27:45,
+  14:35:01 e 14:46:39) e vivos às 14:54 com as mesmas horas. O 111009 passou a vivo às
+  14:25:29, 136 s antes da hora.
+- Nomes: o pacote não traz. O NN-ésimo chefe é o NN-ésimo NPC do `getRegion` do questlog
+  (`regionHasNpcs` em ordem de código); Altgard tem lá 24 NPCs nomeados, os 24 chefes.
+  Conferido em 3: Gartua Imortal (21º, pelo timer) e Profanador Newbold e Arconte da Alma
+  Perdida Axios (12º e 13º: a posição do `0x9101` é igual, em float, à do `0x3641` deles). Sem
+  a mesma contagem, o medidor mostra "Chefe 21".
+
+O medidor mostra vivo ou morto e a hora; a posição não aparece. Só Altgard foi capturada.
 
 ## 8. Captura ao vivo (confirmado)
 

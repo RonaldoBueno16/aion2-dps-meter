@@ -2,8 +2,10 @@
 //! ícone, a barra do alvo (o chefe da luta ou o mob que mais apanhou), abas DPS | Tank | Healer,
 //! uma linha por jogador (medalhão da classe, barra em degradê na cor dela, total, por segundo e %),
 //! a ficha e as skills ao expandir, o rodapé com o estado e o tempo da luta e, embaixo dele, os
-//! eventos de horário fixo. Mais: configurações, lutas anteriores e recolher para a borda.
+//! eventos de horário fixo e os chefes de campo mortos. Mais: configurações, lutas anteriores, os
+//! chefes de campo da região e recolher para a borda.
 
+mod chefes;
 mod configuracoes;
 mod lutas;
 mod recolher;
@@ -25,10 +27,11 @@ use indexmap::IndexMap;
 use lutas::ResumoLuta;
 use nucleo::captura::socket_bruto::CapturaSocketBruto;
 use nucleo::formato::{f, n, p};
-use nucleo::medicao::catalogo::{self, CatalogoSkills};
+use nucleo::medicao::catalogo::{self, CatalogoSkills, InfoRegiao};
 use nucleo::medicao::dados_jogo;
 use nucleo::medicao::medidor::{Alvo, LinhaBuff, LinhaJogador, LinhaSkill, Medidor, PerfilJogador, Placar, Tabela};
 use nucleo::medicao::sessao::Sessao;
+use nucleo::protocolo::combate::ChefesDeCampo;
 use nucleo::{Hora, TICKS_POR_SEGUNDO};
 use recolher::{Dobra, Lado};
 use serde::{Deserialize, Serialize};
@@ -76,6 +79,7 @@ enum Tela {
     Medidor,
     Configuracoes,
     Lutas,
+    Chefes,
 }
 
 /// Buffs mostrados embaixo das skills de um jogador expandido.
@@ -129,8 +133,14 @@ pub struct Overlay {
     icones: HashMap<PathBuf, Option<TextureHandle>>,
     /// Ícone da primeira skill de cada classe, usado no medalhão, quando já baixou.
     emblemas: HashMap<&'static str, PathBuf>,
-    /// Ícone de cada evento, pelo nome na CDN, quando já baixou.
-    icones_eventos: HashMap<&'static str, PathBuf>,
+    /// Ícone de cada evento e retrato de cada chefe de campo, pelo nome na CDN, quando já baixou.
+    icones_eventos: HashMap<String, PathBuf>,
+    /// Último 0x9101 (os chefes de campo da região) e quando chegou, como o medidor guardou.
+    chefes: Option<(ChefesDeCampo, Hora)>,
+    /// Nome e chefes de cada região, quando o questlog já mandou.
+    regioes: HashMap<u32, InfoRegiao>,
+    /// Aba aberta na tela de chefes: Mortos (true) ou Vivos.
+    chefes_mortos: bool,
     logo: Option<Option<TextureHandle>>,
     /// Altura do conteúdo (em pontos) e escala (pixels por ponto) com que o tamanho da janela foi
     /// pedido por último. A escala e não o zoom da config: ela muda também com o DPI do monitor.
@@ -225,6 +235,9 @@ impl Overlay {
             icones: HashMap::new(),
             emblemas: HashMap::new(),
             icones_eventos: HashMap::new(),
+            chefes: None,
+            regioes: HashMap::new(),
+            chefes_mortos: true,
             logo: None,
             altura: 0.0,
             escala_aplicada: 0.0,
@@ -241,6 +254,8 @@ impl Overlay {
                 Tela::Configuracoes
             } else if tem("--lutas") {
                 Tela::Lutas
+            } else if tem("--chefes") {
+                Tela::Chefes
             } else {
                 Tela::Medidor
             },
@@ -287,6 +302,7 @@ impl Overlay {
         self.fluxo = sessao.fluxo.clone();
         self.ping = sessao.ping();
         self.odyle = sessao.medidor.odyle;
+        self.chefes = sessao.medidor.chefes_de_campo.clone();
         let memoria = (self.tela == Tela::Configuracoes).then(|| sessao.medidor.exportar_memoria());
         drop(sessao);
         self.lido_em = Instant::now();
@@ -387,6 +403,7 @@ impl Overlay {
         match self.tela {
             Tela::Configuracoes => return self.tela_configuracoes(ui),
             Tela::Lutas => return self.tela_lutas(ui),
+            Tela::Chefes => return self.tela_chefes(ui),
             Tela::Medidor => {}
         }
         let tabela = self.tabela();
@@ -451,6 +468,9 @@ impl Overlay {
                 if visual::botao_icone(ui, "☰", 14.0).on_hover_text("Lutas anteriores").clicked() {
                     self.tela = Tela::Lutas;
                     self.ler_placar();
+                }
+                if visual::botao_icone(ui, "♛", 14.0).on_hover_text("Chefes de campo (vivos e mortos)").clicked() {
+                    self.tela = Tela::Chefes;
                 }
                 if visual::botao_icone(ui, "▭", 14.0).on_hover_text("Barra compacta: uma linha só").clicked() {
                     self.alternar_compacta();
@@ -997,11 +1017,29 @@ impl Overlay {
         );
     }
 
-    /// Eventos de horário fixo, embaixo do rodapé. Recolhida, uma linha com os próximos que couberem;
-    /// expandida, todos, um por linha, com o início e a contagem. O clique no cabeçalho alterna.
+    /// Eventos de horário fixo e chefes de campo mortos, embaixo do rodapé. Recolhida, uma linha com os
+    /// próximos que couberem, eventos e chefes juntos; expandida, todos, um por linha, com o início e a
+    /// contagem, e os chefes mortos da região depois dos eventos. O clique no cabeçalho alterna.
     fn eventos(&mut self, ui: &mut Ui) {
         let agora = nucleo::agora();
-        let lista = eventos::em_ordem(agora);
+        let lista: Vec<LinhaEvento> = eventos::em_ordem(agora)
+            .into_iter()
+            .map(|(evento, estado)| LinhaEvento {
+                nome: evento.nome.into(),
+                icone: evento
+                    .icone
+                    .as_ref()
+                    .map_or(IconeDaLinha::Recomecar, |i| IconeDaLinha::Jogo(i.nome.into(), i.recorte)),
+                estado,
+                horario: eventos::horario(evento, agora),
+                dica: format!("{}\n\n{}", evento.dica, eventos::ORIGEM),
+            })
+            .collect();
+        let vistos = self.chefes_da_regiao();
+        let mut mortos: Vec<_> = vistos.iter().flat_map(|v| &v.chefes).filter(|c| !c.vivo).collect();
+        mortos.sort_by_key(|c| c.hora_ms);
+        let mortos: Vec<LinhaEvento> = mortos.into_iter().map(|c| chefes::linha_do_chefe(c, agora)).collect();
+
         let expandida = self.config.eventos_expandidos;
         let largura = ui.available_width();
         let (rect, resposta) = ui.allocate_exact_size(vec2(largura, 22.0), Sense::click());
@@ -1032,35 +1070,43 @@ impl Overlay {
             let fuso = montar(ui, LayoutJob::single_section("horário de Brasília".into(), formato));
             pintor.galley(pos2(fim - fuso.size().x, meio - fuso.size().y / 2.0), fuso, texto());
         } else {
-            // Os próximos, enquanto couberem inteiros: o ícone (o nome, nos resets) e a contagem.
+            // Os próximos, eventos e chefes pela contagem, enquanto couberem inteiros: o ícone (o
+            // nome, sem ícone do jogo) e a contagem. No empate, o evento antes.
+            let mut juntas: Vec<&LinhaEvento> = lista.iter().chain(&mortos).collect();
+            juntas.sort_by_key(|l| eventos::ordem(l.estado));
             let mut x = inicio;
             let mut mostrados = Vec::new();
-            for (i, (evento, estado)) in lista.iter().enumerate() {
+            for (i, linha) in juntas.into_iter().enumerate() {
                 let mut job = LayoutJob::default();
                 if i > 0 {
                     trecho(&mut job, "   ·   ", 11.0, false, branco(0x99));
                 }
-                if evento.icone.is_none() {
-                    trecho(&mut job, &format!("{} ", evento.nome), 11.0, false, branco(0x99));
-                }
+                let icone = match &linha.icone {
+                    IconeDaLinha::Jogo(nome, recorte) => Some((nome.as_str(), *recorte)),
+                    IconeDaLinha::Recomecar | IconeDaLinha::Moldura => {
+                        trecho(&mut job, &format!("{} ", linha.nome), 11.0, false, branco(0x99));
+                        None
+                    }
+                };
                 let antes = montar(ui, job);
                 let mut job = LayoutJob::default();
-                contagem_do_evento(&mut job, *estado);
+                contagem_do_evento(&mut job, linha.estado);
                 let contagem = montar(ui, job);
-                let largura_icone = if evento.icone.is_some() { 20.0 } else { 0.0 };
+                let largura_icone = if icone.is_some() { 20.0 } else { 0.0 };
                 let (largura_antes, largura_contagem) = (antes.size().x, contagem.size().x);
                 if x + largura_antes + largura_icone + largura_contagem > fim {
                     break;
                 }
                 pintor.galley(pos2(x, meio - antes.size().y / 2.0), antes, texto());
                 x += largura_antes;
-                if let Some(icone) = &evento.icone {
-                    self.icone_do_evento(ui, icone, Rect::from_center_size(pos2(x + 8.0, meio), Vec2::splat(16.0)));
+                if let Some((nome, recorte)) = icone {
+                    let quadrado = Rect::from_center_size(pos2(x + 8.0, meio), Vec2::splat(16.0));
+                    self.icone_do_evento(ui, nome, recorte, quadrado);
                     x += largura_icone;
                 }
                 pintor.galley(pos2(x, meio - contagem.size().y / 2.0), contagem, texto());
                 x += largura_contagem;
-                mostrados.push(format!("{} {}", evento.nome, texto_da_contagem(*estado)));
+                mostrados.push(format!("{} {}", linha.nome, texto_da_contagem(linha.estado)));
             }
             // Um tooltip só, com o nome do que está na linha: o clique continua sendo da linha toda.
             mostrados.push(String::new());
@@ -1076,65 +1122,112 @@ impl Overlay {
             return;
         }
 
-        for (evento, estado) in &lista {
-            let (linha, resposta) = ui.allocate_exact_size(vec2(largura, 18.0), Sense::hover());
-            let pintor = ui.painter();
-            let meio = linha.center().y;
-            let verde = Color32::from_rgb(0x5B, 0xD1, 0x6B);
-            // Verde aberto, dourado faltando até 10 min, apagado no resto.
-            let (cor, destaque) = match *estado {
-                eventos::Estado::Aberto(_) => (verde, true),
-                eventos::Estado::Fechado(s) if s <= 600 => (visual::DOURADO, true),
-                eventos::Estado::Fechado(_) => (branco(0x40), false),
-            };
-            let ponto = pos2(linha.min.x + 7.0, meio);
-            if matches!(estado, eventos::Estado::Aberto(_)) {
-                let halo = Color32::from_rgba_unmultiplied(verde.r(), verde.g(), verde.b(), 0x40);
-                pintor.circle_filled(ponto, 6.0, halo);
+        for linha in &lista {
+            self.linha_do_evento(ui, linha, inicio, fim);
+        }
+        if let Some(vistos) = &vistos {
+            self.titulo_dos_chefes(ui, vistos, inicio, fim);
+            for linha in &mortos {
+                self.linha_do_evento(ui, linha, inicio, fim);
             }
-            pintor.circle_filled(ponto, 3.0, cor);
-
-            // Ícone em 16 px; nos resets, a seta de recomeçar no lugar dele.
-            let quadrado = Rect::from_center_size(pos2(inicio + 8.0, meio), Vec2::splat(16.0));
-            match &evento.icone {
-                Some(icone) => self.icone_do_evento(ui, icone, quadrado),
-                None => {
-                    let formato = TextFormat::simple(fonte(13.0, false), branco(0x99));
-                    let seta = montar(ui, LayoutJob::single_section("↻".into(), formato));
-                    pintor.galley(quadrado.center() - seta.size() / 2.0, seta, texto());
-                }
-            }
-            let formato = TextFormat::simple(fonte(11.0, false), if destaque { texto() } else { branco(0xBB) });
-            let nome = montar(ui, LayoutJob::single_section(evento.nome.into(), formato));
-            pintor.galley(pos2(inicio + 22.0, meio - nome.size().y / 2.0), nome, texto());
-            let mut job = LayoutJob::default();
-            contagem_do_evento(&mut job, *estado);
-            let contagem = montar(ui, job);
-            pintor.galley(pos2(fim - contagem.size().x, meio - contagem.size().y / 2.0), contagem, texto());
-            // O início numa coluna própria, alinhado à direita antes da contagem mais larga.
-            let formato = TextFormat::simple(fonte(10.0, false), branco(0x77));
-            let horario = montar(ui, LayoutJob::single_section(eventos::horario(evento, agora), formato));
-            pintor.galley(pos2(fim - 84.0 - horario.size().x, meio - horario.size().y / 2.0), horario, texto());
-            resposta.on_hover_text(format!("{}\n\n{}", evento.dica, eventos::ORIGEM));
         }
         ui.add_space(2.0);
     }
 
-    /// Ícone do evento (CDN do jogo) recortado como manda a tabela; enquanto não baixou, a moldura.
-    fn icone_do_evento(&mut self, ui: &Ui, icone: &eventos::Icone, quadrado: Rect) {
+    /// Uma linha da área expandida: o ponto do estado, o ícone, o nome, o início e a contagem.
+    fn linha_do_evento(&mut self, ui: &mut Ui, linha: &LinhaEvento, inicio: f32, fim: f32) {
+        let (rect, resposta) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
+        let pintor = ui.painter();
+        let meio = rect.center().y;
+        let verde = Color32::from_rgb(0x5B, 0xD1, 0x6B);
+        // Verde aberto, dourado faltando até 10 min, apagado no resto.
+        let (cor, destaque) = match linha.estado {
+            eventos::Estado::Aberto(_) => (verde, true),
+            eventos::Estado::Fechado(s) if s <= 600 => (visual::DOURADO, true),
+            eventos::Estado::Fechado(_) => (branco(0x40), false),
+        };
+        let ponto = pos2(rect.min.x + 7.0, meio);
+        if matches!(linha.estado, eventos::Estado::Aberto(_)) {
+            let halo = Color32::from_rgba_unmultiplied(verde.r(), verde.g(), verde.b(), 0x40);
+            pintor.circle_filled(ponto, 6.0, halo);
+        }
+        pintor.circle_filled(ponto, 3.0, cor);
+
+        // Ícone em 16 px; nos resets, a seta de recomeçar no lugar dele.
+        let quadrado = Rect::from_center_size(pos2(inicio + 8.0, meio), Vec2::splat(16.0));
+        match &linha.icone {
+            IconeDaLinha::Jogo(nome, recorte) => self.icone_do_evento(ui, nome, *recorte, quadrado),
+            IconeDaLinha::Recomecar => {
+                let formato = TextFormat::simple(fonte(13.0, false), branco(0x99));
+                let seta = montar(ui, LayoutJob::single_section("↻".into(), formato));
+                pintor.galley(quadrado.center() - seta.size() / 2.0, seta, texto());
+            }
+            IconeDaLinha::Moldura => {
+                pintor.rect_filled(quadrado, 3, branco(0x22));
+            }
+        }
+        let formato = TextFormat::simple(fonte(11.0, false), if destaque { texto() } else { branco(0xBB) });
+        let nome = montar(ui, LayoutJob::single_section(linha.nome.clone(), formato));
+        pintor.galley(pos2(inicio + 22.0, meio - nome.size().y / 2.0), nome, texto());
+        let mut job = LayoutJob::default();
+        contagem_do_evento(&mut job, linha.estado);
+        let contagem = montar(ui, job);
+        pintor.galley(pos2(fim - contagem.size().x, meio - contagem.size().y / 2.0), contagem, texto());
+        // O início numa coluna própria, alinhado à direita antes da contagem mais larga.
+        let formato = TextFormat::simple(fonte(10.0, false), branco(0x77));
+        let horario = montar(ui, LayoutJob::single_section(linha.horario.clone(), formato));
+        pintor.galley(pos2(fim - 84.0 - horario.size().x, meio - horario.size().y / 2.0), horario, texto());
+        resposta.on_hover_text(&linha.dica);
+    }
+
+    /// "Chefes de Altgard   20 vivos, 4 mortos" entre os eventos e os chefes mortos: o clique abre a
+    /// tela de chefes. Com a lista antiga, a hora dela à direita.
+    fn titulo_dos_chefes(&mut self, ui: &mut Ui, vistos: &chefes::ChefesDaRegiao, inicio: f32, fim: f32) {
+        let (rect, resposta) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::click());
+        let pintor = ui.painter();
+        if resposta.hovered() {
+            pintor.rect_filled(rect, 4, branco(0x0C));
+        }
+        let meio = rect.center().y;
+        let formato = TextFormat::simple(fonte(11.0, false), branco(0x99));
+        let coroa = montar(ui, LayoutJob::single_section("♛".into(), formato));
+        pintor.galley(pos2(rect.min.x + 7.0 - coroa.size().x / 2.0, meio - coroa.size().y / 2.0), coroa, texto());
+        let vivos = vistos.chefes.iter().filter(|c| c.vivo).count();
+        let mortos = vistos.chefes.len() - vivos;
+        let plural = |n: usize, um: &str, varios: &str| format!("{n} {}", if n == 1 { um } else { varios });
+        let mut job = LayoutJob::default();
+        trecho(&mut job, &format!("Chefes de {}", vistos.regiao), 11.0, true, branco(0xCC));
+        let contagem = format!("   {}, {}", plural(vivos, "vivo", "vivos"), plural(mortos, "morto", "mortos"));
+        trecho(&mut job, &contagem, 10.0, false, branco(0x88));
+        let titulo = montar(ui, job);
+        pintor.galley(pos2(inicio, meio - titulo.size().y / 2.0), titulo, texto());
+        if let Some(desde) = vistos.antiga_desde {
+            let formato = TextFormat::simple(fonte(10.0, false), visual::AMARELO);
+            let aviso = montar(ui, LayoutJob::single_section(format!("lista das {}", hora_local(desde)), formato));
+            pintor.galley(pos2(fim - aviso.size().x, meio - aviso.size().y / 2.0), aviso, texto());
+        }
+        let dica = "Abrir a tela de chefes de campo, com os vivos e os mortos.";
+        if resposta.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(dica).clicked() {
+            self.tela = Tela::Chefes;
+        }
+    }
+
+    /// Ícone da CDN do jogo (de um evento ou o retrato de um chefe) com o recorte dado; enquanto não
+    /// baixou, a moldura.
+    fn icone_do_evento(&mut self, ui: &Ui, nome: &str, recorte: [f32; 4], quadrado: Rect) {
         ui.painter().rect_filled(quadrado, 3, branco(0x22));
-        if !self.icones_eventos.contains_key(icone.nome) {
+        if !self.icones_eventos.contains_key(nome) {
             // Como no emblema: só pergunta ao catálogo logo depois de ler o placar (cada pergunta
             // olha o disco).
             if self.lido_em.elapsed() > Duration::from_millis(100) {
                 return;
             }
-            let Some(caminho) = dados_jogo::icone_do_jogo(icone.nome) else { return };
-            self.icones_eventos.insert(icone.nome, caminho);
+            let Some(caminho) = dados_jogo::icone_do_jogo(nome) else { return };
+            self.icones_eventos.insert(nome.to_string(), caminho);
         }
-        let caminho = self.icones_eventos[icone.nome].clone();
+        let caminho = self.icones_eventos[nome].clone();
         let Some(textura) = self.textura(ui.ctx(), &caminho) else { return };
-        let [x0, y0, x1, y1] = icone.recorte;
+        let [x0, y0, x1, y1] = recorte;
         egui::Image::new(SizedTexture::new(textura.id(), quadrado.size()))
             .uv(Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)))
             .corner_radius(3)
@@ -1843,7 +1936,7 @@ fn configurar_estilo(ctx: &egui::Context) -> Result<(), String> {
     };
     let regular = carregar("segoe", "segoeui.ttf");
     let semibold = carregar("segoe-semibold", "seguisb.ttf");
-    // Segoe UI Symbol cobre ☠ ▸ ▾ ✕ ⚙, que a Segoe UI não tem.
+    // Segoe UI Symbol cobre ☠ ▸ ▾ ✕ ⚙ ♛, que a Segoe UI não tem.
     let simbolos = carregar("simbolos", "seguisym.ttf");
     if !regular {
         return Err(format!("fonte Segoe UI não encontrada em {}", pasta.display()));
@@ -1995,6 +2088,25 @@ fn uma_linha(largura: f32) -> TextWrapping {
 
 fn montar(ui: &Ui, job: LayoutJob) -> Arc<Galley> {
     ui.fonts_mut(|f| f.layout_job(job))
+}
+
+/// Uma linha da área de eventos: um evento de horário fixo ou um chefe de campo morto.
+struct LinhaEvento {
+    nome: String,
+    icone: IconeDaLinha,
+    estado: eventos::Estado,
+    /// O início (ou a hora de renascer): "21:00", ou "qui 21:00" se não for hoje.
+    horario: String,
+    dica: String,
+}
+
+enum IconeDaLinha {
+    /// Nome do ícone na CDN do jogo e o recorte dele.
+    Jogo(String, [f32; 4]),
+    /// Os resets: a seta de recomeçar e, na linha recolhida, o nome.
+    Recomecar,
+    /// Chefe sem retrato no questlog: a moldura vazia e, na linha recolhida, o nome.
+    Moldura,
 }
 
 /// "fecha em 02:41" com o evento aberto; fechado, só o que falta.
