@@ -34,11 +34,21 @@ pub(super) struct PainelDrops {
     falhou: bool,
     bau_aberto: bool,
     raridades_abertas: HashSet<u8>,
+    /// Item com a ficha aberta no lugar da lista, e a chance dele aqui.
+    item: Option<(u32, Option<f64>)>,
 }
 
 impl PainelDrops {
     pub(super) fn novo(codigo: u32, lado: Lado) -> Self {
-        Self { codigo, lado, drops: None, falhou: false, bau_aberto: false, raridades_abertas: HashSet::new() }
+        Self {
+            codigo,
+            lado,
+            drops: None,
+            falhou: false,
+            bau_aberto: false,
+            raridades_abertas: HashSet::new(),
+            item: None,
+        }
     }
 }
 
@@ -168,6 +178,18 @@ impl Overlay {
         ui.add_space(6.0);
 
         let Some(painel) = &self.painel else { return };
+        if let Some((item, chance)) = painel.item {
+            let altura = (limite - 90.0).max(120.0);
+            ScrollArea::vertical().id_salt("ficha").max_height(altura).auto_shrink([false, true]).show(ui, |ui| {
+                ui.spacing_mut().item_spacing = Vec2::ZERO;
+                if self.ficha_do_item(ui, item, chance)
+                    && let Some(painel) = &mut self.painel
+                {
+                    painel.item = None;
+                }
+            });
+            return;
+        }
         let Some(drops) = painel.drops.clone() else {
             if painel.falhou {
                 nota(ui, "O questlog não respondeu. Feche e abra o painel para tentar de novo.", branco(0x99));
@@ -195,7 +217,7 @@ impl Overlay {
             if !secoes.tambem.is_empty() {
                 titulo(ui, "Também cai", branco(0xCC));
                 for item in &secoes.tambem {
-                    self.linha_item(ui, item, 0.0);
+                    self.linha_item(ui, item, 0.0, true);
                 }
             }
             if !secoes.outros.is_empty() {
@@ -293,8 +315,11 @@ impl Overlay {
             let galley = montar(ui, job);
             ui.painter().galley(pos2(centro_x - galley.size().x / 2.0, quadrado.max.y + 3.0), galley, texto());
             let celula = Rect::from_center_size(quadrado.center(), vec2(passo, lado + 4.0));
-            let dica = format!("{}\n{chance} no questlog", peca.nome);
-            ui.interact(celula, ui.id().with(("peca", peca.codigo)), Sense::hover()).on_hover_text(dica);
+            let dica = format!("{}\n{chance} no questlog\n\nClique para ver a ficha.", peca.nome);
+            let resposta = ui.interact(celula, ui.id().with(("peca", peca.codigo)), Sense::click());
+            if resposta.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(dica).clicked() {
+                self.abrir_ficha(peca);
+            }
         }
         let n = conjunto.pecas.len();
         nota(ui, &format!("As {n} peças somam 100% no questlog: deve cair uma por morte."), branco(0x99));
@@ -305,11 +330,11 @@ impl Overlay {
     fn linha_sempre(&mut self, ui: &mut Ui, item: &ItemDrop, drops: &DropsNpc) {
         let conteudo = drops.baus.get(&item.codigo).filter(|c| !c.is_empty());
         let Some(conteudo) = conteudo else {
-            self.linha_item(ui, item, 0.0);
+            self.linha_item(ui, item, 0.0, true);
             return;
         };
         let aberto = self.painel.as_ref().is_some_and(|p| p.bau_aberto);
-        let resposta = self.linha_item(ui, item, 14.0);
+        let resposta = self.linha_item(ui, item, 14.0, false);
         let seta = if aberto { "▾" } else { "▸" };
         let mut job = LayoutJob::default();
         trecho(&mut job, seta, 11.0, false, branco(0x99));
@@ -326,7 +351,7 @@ impl Overlay {
             let mut lista: Vec<&ItemDrop> = conteudo.iter().collect();
             lista.sort_by(maior_chance);
             for dentro in lista {
-                self.linha_item(ui, dentro, 30.0);
+                self.linha_item(ui, dentro, 30.0, true);
             }
             ui.add_space(2.0);
         }
@@ -375,16 +400,28 @@ impl Overlay {
         }
         if aberta {
             for item in lista {
-                self.linha_item(ui, item, 14.0);
+                self.linha_item(ui, item, 14.0, true);
             }
             ui.add_space(2.0);
         }
     }
 
-    /// Ícone, nome na cor da raridade e, à direita, a % (e a quantidade, quando passa de 1).
-    fn linha_item(&mut self, ui: &mut Ui, item: &ItemDrop, recuo: f32) -> eframe::egui::Response {
+    /// Abre a ficha do item no lugar da lista.
+    fn abrir_ficha(&mut self, item: &ItemDrop) {
+        if let Some(painel) = &mut self.painel {
+            painel.item = Some((item.codigo, item.chance));
+        }
+    }
+
+    /// Ícone, nome na cor da raridade e, à direita, a % (e a quantidade, quando passa de 1). Com
+    /// `ficha`, o clique abre a ficha do item.
+    fn linha_item(&mut self, ui: &mut Ui, item: &ItemDrop, recuo: f32, ficha: bool) -> eframe::egui::Response {
         let largura = ui.available_width();
-        let (rect, resposta) = ui.allocate_exact_size(vec2(largura, 22.0), Sense::hover());
+        let sentido = if ficha { Sense::click() } else { Sense::hover() };
+        let (rect, resposta) = ui.allocate_exact_size(vec2(largura, 22.0), sentido);
+        if ficha && resposta.hovered() {
+            ui.painter().rect_filled(rect, 3, branco(0x0C));
+        }
         let meio = rect.center().y;
         let quadrado = Rect::from_center_size(pos2(rect.min.x + recuo + 10.0, meio), Vec2::splat(18.0));
         match item.icone.as_deref() {
@@ -412,7 +449,13 @@ impl Overlay {
         pintor.galley(pos2(rect.max.x - 4.0 - direita.size().x, meio - direita.size().y / 2.0), direita, texto());
         let raridade = raridade(item.raridade).0.map_or_else(String::new, |r| format!("{r}, "));
         let sem_chance = if item.chance.is_none() { "\nO questlog não dá a chance deste." } else { "" };
-        resposta.on_hover_text(format!("{}\n{raridade}{chance} no questlog{sem_chance}", item.nome))
+        let clique = if ficha { "\n\nClique para ver a ficha." } else { "" };
+        let dica = format!("{}\n{raridade}{chance} no questlog{sem_chance}{clique}", item.nome);
+        let resposta = resposta.on_hover_text(dica);
+        if ficha && resposta.clone().on_hover_cursor(CursorIcon::PointingHand).clicked() {
+            self.abrir_ficha(item);
+        }
+        resposta
     }
 }
 
@@ -441,7 +484,7 @@ impl Overlay {
 }
 
 /// Título de seção: o texto e um fio até a borda.
-fn titulo(ui: &mut Ui, texto_titulo: &str, cor: Color32) {
+pub(super) fn titulo(ui: &mut Ui, texto_titulo: &str, cor: Color32) {
     ui.add_space(4.0);
     let largura = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(vec2(largura, 20.0), Sense::hover());
@@ -456,7 +499,7 @@ fn titulo(ui: &mut Ui, texto_titulo: &str, cor: Color32) {
     }
 }
 
-fn nota(ui: &mut Ui, texto_nota: &str, cor: Color32) {
+pub(super) fn nota(ui: &mut Ui, texto_nota: &str, cor: Color32) {
     let rotulo = eframe::egui::RichText::new(texto_nota).font(super::fonte(10.0, false)).color(cor);
     ui.add(eframe::egui::Label::new(rotulo).wrap());
 }

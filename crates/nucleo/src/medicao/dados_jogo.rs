@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use super::catalogo::{Busca, CatalogoSkills, DropsNpc, InfoRegiao};
+use super::catalogo::{Atributo, Busca, CatalogoSkills, DetalheItem, DropsNpc, InfoRegiao};
 
 // Curas que chegam pelo mesmo opcode do dano e não podem entrar na soma.
 const CURAS: [u32; 8] = [18120000, 18170000, 16770000, 16190000, 17120000, 17800000, 17100000, 17410000];
@@ -132,6 +132,16 @@ pub fn drops(codigo: u32) -> Busca<DropsNpc> {
 /// PNG da CDN pelo nome, só na memória (retratos dos chefes de campo e ícones dos drops).
 pub fn imagem(nome: &str) -> Busca<std::sync::Arc<Vec<u8>>> {
     catalogo().map_or(Busca::Falhou, |c| c.imagem(nome))
+}
+
+/// Ficha do item pelo questlog, só na memória.
+pub fn item(codigo: u32) -> Busca<DetalheItem> {
+    catalogo().map_or(Busca::Falhou, |c| c.item(codigo))
+}
+
+/// Nome em português, formato e ajuda de cada atributo, pelo questlog, só na memória.
+pub fn atributos() -> Busca<std::sync::Arc<HashMap<String, Atributo>>> {
+    catalogo().map_or(Busca::Falhou, |c| c.atributos())
 }
 
 /// Deixa pedir de novo os drops e as imagens que falharam.

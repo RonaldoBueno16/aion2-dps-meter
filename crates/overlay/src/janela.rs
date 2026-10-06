@@ -8,6 +8,7 @@
 mod chefes;
 mod configuracoes;
 mod drops;
+mod item;
 mod lutas;
 mod recolher;
 mod visual;
@@ -408,6 +409,8 @@ impl Overlay {
         // Uma falha antes (sem internet) não impede de tentar de novo ao abrir.
         dados_jogo::repetir_falhas();
         self.imagens_pedidas.clear();
+        // Os nomes dos atributos (~200 KB) já vêm enquanto a lista carrega: a primeira ficha não espera.
+        let _ = dados_jogo::atributos();
     }
 
     /// Fecha o painel de drops: a janela volta à largura do medidor, que fica onde está.

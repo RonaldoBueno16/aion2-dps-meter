@@ -174,8 +174,15 @@ cargo build --release -p overlay
   morte", o que ainda não foi conferido no jogo. A raridade aparece na cor do questlog (a mesma
   do jogo); o nome só onde foi conferido num item do jogo: Único (dourado, 41) e Especial
   (ciano, 71). Nas outras, um quadrado na cor. A % é a do questlog, sem conta nossa por cima.
-  Nada disso vai para o disco: drops, região, retratos e ícones ficam na memória enquanto o
-  Axon está aberto (4 imagens baixando por vez, com um cinza pulsando no lugar até chegar).
+  Clicar num item (uma peça do conjunto ou uma linha) troca a lista pela ficha dele, como a
+  dica do jogo: nível do item, atributos (com o nome que o jogo dá em português, pelo
+  `statFormat` do questlog, e a ajuda de cada um no mouse), os atributos ao vincular a alma
+  (fixos, ou "4 sorteados destes" com a faixa de cada um), encaixes de Pedra de Mana e Pedra
+  Divina, o texto de ajuda do item, o nível mínimo de uso e a chance naquele chefe; "‹ Drops"
+  volta. Conferido com a dica do jogo no Guarda-braço da Alma Forjada (Ataque 92, Precisão 50,
+  Acerto Crítico 50; Poder 10, Precisão 30, Bloqueio 15, PV 120; nível 45).
+  Nada disso vai para o disco: drops, fichas, região, retratos e ícones ficam na memória enquanto
+  o Axon está aberto (4 imagens baixando por vez, com um cinza pulsando no lugar até chegar).
 - ⚙ abre as configurações, que valem na hora e ficam em
   `%LOCALAPPDATA%\Aion2Meter\config.json`:
   - **Números de cada jogador**: clique no total, no por segundo ou na % da linha de
@@ -304,7 +311,7 @@ pessoal)`:
 
 | Para onde | Quando | O que vai no pedido |
 |---|---|---|
-| `questlog.gg` | Com o cache vazio, uma listagem por classe; depois, uma vez por skill ou mob que ainda não está no cache; a cada execução, uma vez por região (chefes de campo) e ao abrir os drops de um chefe | Nome da classe, código da skill, do NPC, da região ou do baú de saque |
+| `questlog.gg` | Com o cache vazio, uma listagem por classe; depois, uma vez por skill ou mob que ainda não está no cache; a cada execução, uma vez por região (chefes de campo), ao abrir os drops de um chefe ou a ficha de um item, e uma vez a lista dos nomes de atributo (`statFormat`) | Nome da classe, código da skill, do NPC, da região, do baú de saque ou do item; o idioma |
 | `assets.playnccdn.com` (CDN da NCSoft) | Uma vez por ícone (skill, emblema de classe, Odyle, evento) ou retrato de mob que ainda não foi baixado; a cada execução, uma vez por retrato de chefe de campo e ícone de item dos drops | Nome do arquivo do ícone |
 | `api.github.com` | A cada abertura | Pedido da última release deste repositório |
 | `github.com` e o servidor de arquivos do GitHub | Só ao clicar em Atualizar | Pedido do `Axon.exe` da release |
