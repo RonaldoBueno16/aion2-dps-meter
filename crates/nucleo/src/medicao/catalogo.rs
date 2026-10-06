@@ -1,10 +1,11 @@
-//! Nome em português e ícone de cada skill, e nome, level e retrato de cada NPC (o alvo da luta),
-//! buscados sob demanda e guardados em disco.
+//! Nome em português e ícone de cada skill e nome, level e retrato de cada NPC (o alvo da luta),
+//! buscados sob demanda e guardados em disco. Os chefes de campo de cada região, os drops de um chefe,
+//! a ficha de cada item e as imagens deles ficam só na memória: nada disso vai para o disco.
 //! Nomes: questlog.gg, base comunitária montada a partir do cliente Global (idioma "pt"),
 //! API não documentada: pode mudar sem aviso. Ícones: CDN oficial da NCSoft.
 //! Uma requisição por vez, com intervalo, para não sobrecarregar ninguém.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex};
@@ -52,12 +53,123 @@ impl InfoNpc {
     }
 }
 
+/// Chefe de campo de uma região do questlog.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChefeRegiao {
+    #[serde(rename = "Codigo")]
+    pub codigo: u32,
+    #[serde(rename = "Nome")]
+    pub nome: String,
+    #[serde(rename = "Nivel", default)]
+    pub nivel: i32,
+    #[serde(rename = "Retrato", default)]
+    pub retrato: Option<String>,
+}
+
+/// Região do questlog (getRegion): o nome e os NPCs nomeados dela, em ordem de código. Em Altgard
+/// (1110) são os 24 chefes de campo, na ordem dos ids do 0x9101 (111001 a 111024): conferido no
+/// Gartua Imortal (21º, pelo timer da tela) e no Profanador Newbold e no Arconte Axios (12º e 13º,
+/// pela posição do 0x3641 deles).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InfoRegiao {
+    #[serde(rename = "Nome")]
+    pub nome: String,
+    #[serde(rename = "Chefes")]
+    pub chefes: Vec<ChefeRegiao>,
+}
+
+/// Item que um NPC deixa cair, ou que vem num baú de saque, como o questlog dá.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ItemDrop {
+    #[serde(rename = "Codigo")]
+    pub codigo: u32,
+    #[serde(rename = "Nome")]
+    pub nome: String,
+    #[serde(rename = "Icone", default)]
+    pub icone: Option<String>,
+    /// "grade" do questlog: 11 comum, 21 raro, 31 épico, 41 lendário, 51 mítico, 61 único, 71 especial.
+    #[serde(rename = "Raridade", default)]
+    pub raridade: u8,
+    /// mainCategory do questlog (armor, weapon, accessory, misc, usable, pantheon...).
+    #[serde(rename = "Categoria", default)]
+    pub categoria: String,
+    /// subCategory do questlog (gloves, sword, rewardbox...).
+    #[serde(rename = "Tipo", default)]
+    pub tipo: String,
+    /// De 0 a 1; None quando o questlog não dá.
+    #[serde(rename = "Chance", default)]
+    pub chance: Option<f64>,
+    /// Mínimo e máximo por vez; None quando o questlog não dá (os itens de baú).
+    #[serde(rename = "Quantidade", default)]
+    pub quantidade: Option<(u32, u32)>,
+}
+
+/// Drops de um NPC pelo questlog: os itens (npcDropsItems do getNpc) e o que vem em cada baú de saque
+/// entre eles (itemContainsItems do getItem), pelo código do baú.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DropsNpc {
+    #[serde(rename = "Itens")]
+    pub itens: Vec<ItemDrop>,
+    #[serde(rename = "Baus", default)]
+    pub baus: BTreeMap<u32, Vec<ItemDrop>>,
+}
+
+/// Resposta do questlog que pode demorar ou não vir.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Busca<T> {
+    Pronto(T),
+    Buscando,
+    /// Sem resposta (rede ou formato): só pede de novo depois de `repetir_falhas`.
+    Falhou,
+}
+
+/// Ficha de um item pelo questlog (getItem), como a dica do jogo mostra.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DetalheItem {
+    pub codigo: u32,
+    pub nome: String,
+    pub icone: Option<String>,
+    pub raridade: u8,
+    pub categoria: String,
+    pub tipo: String,
+    /// Texto de ajuda do item, sem as tags HTML.
+    pub descricao: Option<String>,
+    pub nivel_item: Option<i64>,
+    pub nivel_minimo: Option<i64>,
+    /// Atributos principais (mainStats): o id e o valor cru do questlog.
+    pub principais: Vec<(String, f64)>,
+    /// Atributos da alma (subStats): o id, o mínimo e o máximo, crus.
+    pub alma: Vec<(String, f64, f64)>,
+    /// Quantos atributos da alma saem sorteados ao vincular; None quando são fixos.
+    pub alma_sorteia: Option<u32>,
+    pub pedras_de_mana: u32,
+    pub pedras_divinas: u32,
+    /// exchangeable: Some(true); nonexchangeable: Some(false); o resto (soulbind...) None.
+    pub negociavel: Option<bool>,
+}
+
+/// Atributo pelo questlog (statFormat), com o nome que o jogo dá em português.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Atributo {
+    pub nome: String,
+    /// O valor cru vem em centésimos de % ("plusminuspercent").
+    pub porcentagem: bool,
+    /// A ordem em que o jogo lista (sortOrder).
+    pub ordem: i64,
+    /// Texto de ajuda, sem as tags HTML.
+    pub descricao: String,
+}
+
 const API: &str = "https://questlog.gg/aion-2/api/trpc/database.";
+/// Os atributos ficam noutro roteador do tRPC (statFormat), fora do database.
+const API_ATRIBUTOS: &str = "https://questlog.gg/aion-2/api/trpc/statFormat.getStatFormat";
 const CDN: &str = "https://assets.playnccdn.com/static-aion2-gamedata/resources/";
 const IDIOMA: &str = "pt";
 const CLASSES: [&str; 9] =
     ["gladiator", "templar", "assassin", "ranger", "sorcerer", "elementalist", "cleric", "chanter", "brawler"];
 const INTERVALO_ENTRE_REQUISICOES: Duration = Duration::from_millis(400);
+/// Imagens da CDN baixando ao mesmo tempo.
+const BAIXANDO_JUNTAS: usize = 4;
 
 struct Estado {
     pasta: PathBuf,
@@ -65,6 +177,14 @@ struct Estado {
     infos: Mutex<HashMap<u32, Info>>,
     arquivo_npcs: PathBuf,
     npcs: Mutex<HashMap<u32, InfoNpc>>,
+    regioes: Mutex<HashMap<u32, InfoRegiao>>,
+    drops: Mutex<HashMap<u32, DropsNpc>>,
+    itens: Mutex<HashMap<u32, DetalheItem>>,
+    atributos: Mutex<Option<Arc<HashMap<String, Atributo>>>>,
+    /// PNG da CDN pelo nome, só na memória (retratos dos chefes de campo e ícones dos drops).
+    imagens: Mutex<HashMap<String, Arc<Vec<u8>>>>,
+    /// Pedidos de drops e de imagens que falharam nesta execução.
+    falhas: Mutex<HashSet<String>>,
     ja_pedido: Mutex<HashSet<String>>,
     /// Vira true quando o cache foi lido ou a listagem inicial terminou (com ou sem rede).
     pronto: (Mutex<bool>, Condvar),
@@ -76,6 +196,7 @@ pub struct CatalogoSkills {
     /// Nome de NPC e retrato passam na frente: num world boss, centenas de skills e ícones entram na
     /// fila antes, a 400 ms cada, e o nome do boss esperaria minutos.
     urgente: Sender<String>,
+    imagens: Sender<String>,
 }
 
 /// %LOCALAPPDATA%\Aion2Meter, onde ficam o cache das skills, os ícones e a memória dos jogadores.
@@ -107,6 +228,12 @@ impl CatalogoSkills {
             infos: Mutex::new(infos),
             arquivo_npcs,
             npcs: Mutex::new(npcs),
+            regioes: Mutex::new(HashMap::new()),
+            drops: Mutex::new(HashMap::new()),
+            itens: Mutex::new(HashMap::new()),
+            atributos: Mutex::new(None),
+            imagens: Mutex::new(HashMap::new()),
+            falhas: Mutex::new(HashSet::new()),
             ja_pedido: Mutex::new(HashSet::new()),
             pronto: (Mutex::new(false), Condvar::new()),
         });
@@ -116,7 +243,16 @@ impl CatalogoSkills {
         let _ = std::thread::Builder::new()
             .name("catalogo".into())
             .spawn(move || trabalhar(&trabalhador, &urgentes, &recebidos));
-        Self { estado, fila, urgente }
+        // Imagens da CDN: várias de uma vez e sem o intervalo do questlog (cada uma leva ~1 s).
+        let (imagens, pedidas) = mpsc::channel();
+        let pedidas = Arc::new(Mutex::new(pedidas));
+        for i in 0..BAIXANDO_JUNTAS {
+            let (estado, pedidas) = (estado.clone(), pedidas.clone());
+            let _ = std::thread::Builder::new()
+                .name(format!("imagens-{i}"))
+                .spawn(move || baixar_imagens(&estado, &pedidas));
+        }
+        Self { estado, fila, urgente, imagens }
     }
 
     /// Espera o cache ou a listagem inicial, no máximo `limite`.
@@ -158,6 +294,74 @@ impl CatalogoSkills {
         None
     }
 
+    /// Nome e chefes de campo da região; None enquanto não chegou ou se o questlog não tem (pede uma vez).
+    pub fn regiao(&self, codigo: u32) -> Option<InfoRegiao> {
+        if let Some(info) = self.estado.regioes().get(&codigo) {
+            return Some(info.clone());
+        }
+        self.pedir(format!("regiao:{codigo}"));
+        None
+    }
+
+    /// Drops do NPC e o que vem nos baús dele (pede uma vez; com falha, só depois de `repetir_falhas`).
+    pub fn drops(&self, codigo: u32) -> Busca<DropsNpc> {
+        if let Some(drops) = self.estado.drops().get(&codigo) {
+            return Busca::Pronto(drops.clone());
+        }
+        let item = format!("drops:{codigo}");
+        if self.estado.falhas().contains(&item) {
+            return Busca::Falhou;
+        }
+        self.pedir(item);
+        Busca::Buscando
+    }
+
+    /// Ficha do item, só na memória (pede uma vez; com falha, só depois de `repetir_falhas`).
+    pub fn item(&self, codigo: u32) -> Busca<DetalheItem> {
+        if let Some(item) = self.estado.itens().get(&codigo) {
+            return Busca::Pronto(item.clone());
+        }
+        self.buscar(format!("item:{codigo}"))
+    }
+
+    /// Nome e formato de cada atributo, só na memória (uma consulta de ~200 KB por execução).
+    pub fn atributos(&self) -> Busca<Arc<HashMap<String, Atributo>>> {
+        if let Some(atributos) = &*self.estado.atributos.lock().unwrap_or_else(|e| e.into_inner()) {
+            return Busca::Pronto(atributos.clone());
+        }
+        self.buscar("atributos".to_string())
+    }
+
+    fn buscar<T>(&self, item: String) -> Busca<T> {
+        if self.estado.falhas().contains(&item) {
+            return Busca::Falhou;
+        }
+        self.pedir(item);
+        Busca::Buscando
+    }
+
+    /// PNG da CDN pelo nome, só na memória (pede uma vez; com falha, só depois de `repetir_falhas`).
+    pub fn imagem(&self, nome: &str) -> Busca<Arc<Vec<u8>>> {
+        if let Some(png) = self.estado.imagens().get(nome) {
+            return Busca::Pronto(png.clone());
+        }
+        let item = format!("imagem:{nome}");
+        if self.estado.falhas().contains(&item) {
+            return Busca::Falhou;
+        }
+        self.pedir(item);
+        Busca::Buscando
+    }
+
+    /// Deixa pedir de novo os drops e as imagens que falharam (sem internet, por exemplo).
+    pub fn repetir_falhas(&self) {
+        let falhas: Vec<String> = self.estado.falhas().drain().collect();
+        let mut ja_pedido = self.estado.ja_pedido.lock().unwrap_or_else(|e| e.into_inner());
+        for item in falhas {
+            ja_pedido.remove(&item);
+        }
+    }
+
     /// Caminho local do PNG do ícone; None enquanto não baixou (pede o download uma vez).
     pub fn caminho_icone(&self, icone: Option<&str>) -> Option<PathBuf> {
         let icone = icone.filter(|i| !i.is_empty())?;
@@ -171,9 +375,14 @@ impl CatalogoSkills {
 
     fn pedir(&self, item: String) {
         let novo = self.estado.ja_pedido.lock().unwrap_or_else(|e| e.into_inner()).insert(item.clone());
-        if novo {
-            // Retrato de mob e emblema de classe (UT_) e ícone de item (a Odyle) não esperam as skills.
-            let urgente = ["npc:", "icone:UT_", "icone:Icon_Item_"].iter().any(|p| item.starts_with(p));
+        if novo && let Some(nome) = item.strip_prefix("imagem:") {
+            let _ = self.imagens.send(nome.to_string());
+        } else if novo {
+            // Retrato de mob e emblema de classe (UT_), ícone de item (Icon_ e icon_; os das skills são
+            // ICON_), os chefes da região e os drops de um chefe não esperam as skills.
+            let urgente = ["npc:", "regiao:", "drops:", "item:", "atributos", "icone:UT_", "icone:Icon_", "icone:icon_"]
+                .iter()
+                .any(|p| item.starts_with(p));
             let _ = if urgente { self.urgente.send(item) } else { self.fila.send(item) };
         }
     }
@@ -186,6 +395,26 @@ impl Estado {
 
     fn npcs(&self) -> std::sync::MutexGuard<'_, HashMap<u32, InfoNpc>> {
         self.npcs.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn regioes(&self) -> std::sync::MutexGuard<'_, HashMap<u32, InfoRegiao>> {
+        self.regioes.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn drops(&self) -> std::sync::MutexGuard<'_, HashMap<u32, DropsNpc>> {
+        self.drops.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn itens(&self) -> std::sync::MutexGuard<'_, HashMap<u32, DetalheItem>> {
+        self.itens.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn imagens(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Vec<u8>>>> {
+        self.imagens.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn falhas(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
+        self.falhas.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn marcar_pronto(&self) {
@@ -230,6 +459,39 @@ fn trabalhar(estado: &Estado, urgentes: &Receiver<String>, fila: &Receiver<Strin
                 && baixar_npc(estado, &http, id).is_ok()
             {
                 let _ = salvar_npcs(estado);
+            }
+        } else if let Some(codigo) = item.strip_prefix("regiao:") {
+            if let Ok(id) = codigo.parse::<u32>() {
+                let _ = baixar_regiao(estado, &http, id);
+            }
+        } else if let Some(codigo) = item.strip_prefix("drops:") {
+            // Falha fica marcada: o painel avisa e só pede de novo quando o usuário reabre.
+            let baixou = codigo.parse::<u32>().is_ok_and(|id| baixar_drops(estado, &http, id).is_ok());
+            if !baixou {
+                estado.falhas().insert(item.clone());
+            }
+        } else if let Some(codigo) = item.strip_prefix("item:") {
+            let ficha = codigo.parse::<u32>().ok().and_then(|id| {
+                let dados = trpc(&http, "getItem", &format!(r#"{{"id":"{id}","language":"{IDIOMA}"}}"#)).ok()?;
+                ler_detalhe(&dados)
+            });
+            match ficha {
+                Some(ficha) => {
+                    estado.itens().insert(ficha.codigo, ficha);
+                }
+                None => {
+                    estado.falhas().insert(item.clone());
+                }
+            }
+        } else if item == "atributos" {
+            let url = format!("{API_ATRIBUTOS}?input={}", escapar(&format!(r#"{{"language":"{IDIOMA}"}}"#)));
+            match pedir_json(&http, url) {
+                Ok(dados) => {
+                    *estado.atributos.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(ler_atributos(&dados)));
+                }
+                Err(_) => {
+                    estado.falhas().insert(item.clone());
+                }
             }
         } else if let Some(icone) = item.strip_prefix("icone:") {
             let _ = baixar_icone(estado, &http, icone);
@@ -290,6 +552,159 @@ pub fn ler_npc(n: &Value) -> Option<(u32, InfoNpc)> {
     Some((codigo, info))
 }
 
+fn baixar_regiao(estado: &Estado, http: &ureq::Agent, id: u32) -> Result<(), Falha> {
+    let dados = trpc(http, "getRegion", &format!(r#"{{"id":"{id}","language":"{IDIOMA}"}}"#))?;
+    let (codigo, info) = ler_regiao(&dados).ok_or("região sem nome")?;
+    estado.regioes().insert(codigo, info);
+    Ok(())
+}
+
+/// Resposta do getRegion do questlog: o nome e os NPCs de regionHasNpcs em ordem de código (a ordem
+/// em que o 0x9101 numera os chefes). Retrato como no `ler_npc`.
+pub fn ler_regiao(r: &Value) -> Option<(u32, InfoRegiao)> {
+    let codigo = r.get("id").and_then(Value::as_str)?.parse::<u32>().ok()?;
+    let nome = r.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty())?;
+    let mut chefes: Vec<ChefeRegiao> = r
+        .get("regionHasNpcs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|n| {
+            Some(ChefeRegiao {
+                codigo: n.get("id").and_then(Value::as_str)?.parse().ok()?,
+                nome: n.get("name").and_then(Value::as_str)?.to_string(),
+                nivel: n.get("level").and_then(Value::as_i64).map_or(0, |l| l.clamp(0, 999) as i32),
+                retrato: n.get("icon").and_then(Value::as_str).and_then(|i| i.rsplit('.').next()).map(str::to_string),
+            })
+        })
+        .collect();
+    chefes.sort_by_key(|c| c.codigo);
+    Some((codigo, InfoRegiao { nome: nome.to_string(), chefes }))
+}
+
+fn baixar_drops(estado: &Estado, http: &ureq::Agent, id: u32) -> Result<(), Falha> {
+    let npc = trpc(http, "getNpc", &format!(r#"{{"id":"{id}","language":"{IDIOMA}"}}"#))?;
+    let itens = ler_itens(npc.get("npcDropsItems"));
+    let mut baus = BTreeMap::new();
+    for bau in itens.iter().filter(|i| i.tipo == "rewardbox") {
+        std::thread::sleep(INTERVALO_ENTRE_REQUISICOES);
+        let dados = trpc(http, "getItem", &format!(r#"{{"id":"{}","language":"{IDIOMA}"}}"#, bau.codigo))?;
+        baus.insert(bau.codigo, ler_itens(dados.get("itemContainsItems")));
+    }
+    estado.drops().insert(id, DropsNpc { itens, baus });
+    Ok(())
+}
+
+/// Lista de itens do questlog (npcDropsItems do getNpc ou itemContainsItems do getItem). O baú repete
+/// cada lasca sem a chance e com ela: fica uma por código, a com chance. Ícone como no `ler_npc`.
+pub fn ler_itens(lista: Option<&Value>) -> Vec<ItemDrop> {
+    let mut itens: Vec<ItemDrop> = Vec::new();
+    for item in lista.and_then(Value::as_array).into_iter().flatten().filter_map(ler_item) {
+        match itens.iter_mut().find(|i| i.codigo == item.codigo) {
+            Some(repetido) if repetido.chance.is_none() => *repetido = item,
+            Some(_) => {}
+            None => itens.push(item),
+        }
+    }
+    itens
+}
+
+fn ler_item(n: &Value) -> Option<ItemDrop> {
+    // O questlog manda número ou texto conforme a lista ("grade": 41 ou "41").
+    let numero = |campo: &str| n.get(campo).and_then(|v| v.as_u64().or_else(|| v.as_str()?.parse().ok()));
+    let texto = |campo: &str| n.get(campo).and_then(Value::as_str).unwrap_or_default().to_string();
+    let limitar = |v: u64| v.min(u64::from(u32::MAX)) as u32;
+    let quantidade = match (numero("countMin"), numero("countMax")) {
+        (Some(minimo), Some(maximo)) => Some((limitar(minimo), limitar(maximo))),
+        _ => None,
+    };
+    Some(ItemDrop {
+        codigo: n.get("id").and_then(Value::as_str)?.parse().ok()?,
+        nome: n.get("name").and_then(Value::as_str).filter(|nome| !nome.trim().is_empty())?.to_string(),
+        icone: n.get("icon").and_then(Value::as_str).and_then(|i| i.rsplit('.').next()).map(str::to_string),
+        raridade: numero("grade").map_or(0, |g| g.min(255) as u8),
+        categoria: texto("mainCategory"),
+        tipo: texto("subCategory"),
+        chance: n.get("chance").and_then(Value::as_f64).filter(|c| (0.0..=1.0).contains(c)),
+        quantidade,
+    })
+}
+
+/// Resposta do getItem do questlog: a ficha do item. Atributos crus, como vêm (o overlay formata com
+/// o `Atributo` de cada um).
+pub fn ler_detalhe(r: &Value) -> Option<DetalheItem> {
+    let mut ficha = DetalheItem { codigo: 0, ..Default::default() };
+    let item = ler_item(r)?;
+    ficha.codigo = item.codigo;
+    ficha.nome = item.nome;
+    ficha.icone = item.icone;
+    ficha.raridade = item.raridade;
+    ficha.categoria = item.categoria;
+    ficha.tipo = item.tipo;
+    ficha.descricao = r.get("description").and_then(Value::as_str).map(sem_tags).filter(|d| !d.trim().is_empty());
+    let equipamento = r.get("equipmentInfo");
+    let numero = |v: Option<&Value>| v.and_then(Value::as_i64);
+    ficha.nivel_item = numero(equipamento.and_then(|e| e.get("itemLevel")));
+    ficha.nivel_minimo = numero(r.get("minLevelRequirement"));
+    let encaixes = |campo: &str| numero(equipamento.and_then(|e| e.get(campo))).map_or(0, |n| n.clamp(0, 99) as u32);
+    ficha.pedras_de_mana = encaixes("magicStoneSlotCount");
+    ficha.pedras_divinas = encaixes("godStoneSlotCount");
+    let sorteia = equipamento.and_then(|e| e.get("soulbindRandomStat")).and_then(Value::as_bool).unwrap_or(false);
+    ficha.alma_sorteia = sorteia.then(|| encaixes("soulbindRandomStatCount")).filter(|n| *n > 0);
+    let atributos = r.get("itemStats");
+    if let Some(principais) = atributos.and_then(|a| a.get("mainStats")).and_then(Value::as_object) {
+        ficha.principais = principais.iter().filter_map(|(id, v)| Some((id.clone(), v.as_f64()?))).collect();
+    }
+    for s in atributos.and_then(|a| a.get("subStats")).and_then(Value::as_array).into_iter().flatten() {
+        let valor = |campo: &str| s.get(campo).and_then(Value::as_f64);
+        let id = s.get("id").and_then(Value::as_str);
+        let (Some(id), Some(minimo), Some(maximo)) = (id, valor("minValue"), valor("maxValue")) else {
+            continue;
+        };
+        ficha.alma.push((id.to_string(), minimo, maximo));
+    }
+    ficha.negociavel = match r.get("exchangeType").and_then(Value::as_str) {
+        Some("exchangeable") => Some(true),
+        Some("nonexchangeable") => Some(false),
+        _ => None,
+    };
+    Some(ficha)
+}
+
+/// Resposta do statFormat do questlog: id do atributo → nome, formato, ordem e ajuda.
+pub fn ler_atributos(r: &Value) -> HashMap<String, Atributo> {
+    let Some(mapa) = r.as_object() else { return HashMap::new() };
+    mapa.iter()
+        .filter_map(|(id, a)| {
+            let atributo = Atributo {
+                nome: a.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty())?.to_string(),
+                porcentagem: a
+                    .get("indicator")
+                    .and_then(Value::as_str)
+                    .is_some_and(|i| i.to_lowercase().contains("percent")),
+                ordem: a.get("sortOrder").and_then(Value::as_i64).unwrap_or(i64::MAX),
+                descricao: a.get("description").and_then(Value::as_str).map(sem_tags).unwrap_or_default(),
+            };
+            Some((id.clone(), atributo))
+        })
+        .collect()
+}
+
+/// Texto do questlog sem as tags HTML ("<span style=...>0</span>" vira "0").
+pub fn sem_tags(texto: &str) -> String {
+    let mut limpo = String::with_capacity(texto.len());
+    let mut dentro = false;
+    for c in texto.chars() {
+        match c {
+            '<' => dentro = true,
+            '>' if dentro => dentro = false,
+            _ if !dentro => limpo.push(c),
+            _ => {}
+        }
+    }
+    limpo
+}
+
 fn guardar(estado: &Estado, s: &Value) {
     let Some(codigo) = s.get("id").and_then(Value::as_str).and_then(|t| t.parse::<u32>().ok()) else { return };
     let Some(nome) = s.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()) else { return };
@@ -313,8 +728,31 @@ fn baixar_icone(estado: &Estado, http: &ureq::Agent, icone: &str) -> Result<(), 
     Ok(())
 }
 
+fn baixar_imagens(estado: &Estado, pedidas: &Mutex<Receiver<String>>) {
+    let http = cliente_http();
+    loop {
+        let Ok(nome) = pedidas.lock().unwrap_or_else(|e| e.into_inner()).recv() else { break };
+        let png = if nome.chars().any(|c| c < ' ' || "\"<>|:*?\\/".contains(c)) {
+            Err("nome de imagem inválido".into())
+        } else {
+            http.get(format!("{CDN}{nome}.png")).call().and_then(|mut r| r.body_mut().read_to_vec()).map_err(Falha::from)
+        };
+        match png {
+            Ok(png) => {
+                estado.imagens().insert(nome, Arc::new(png));
+            }
+            Err(_) => {
+                estado.falhas().insert(format!("imagem:{nome}"));
+            }
+        }
+    }
+}
+
 fn trpc(http: &ureq::Agent, procedimento: &str, entrada: &str) -> Result<Value, Falha> {
-    let url = format!("{API}{procedimento}?input={}", escapar(entrada));
+    pedir_json(http, format!("{API}{procedimento}?input={}", escapar(entrada)))
+}
+
+fn pedir_json(http: &ureq::Agent, url: String) -> Result<Value, Falha> {
     let texto = http.get(url).call()?.body_mut().read_to_string()?;
     let mut doc: Value = serde_json::from_str(&texto)?;
     let dados = doc.pointer_mut("/result/data").ok_or("resposta sem result.data")?.take();

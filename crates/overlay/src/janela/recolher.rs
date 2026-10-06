@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Pos2, Vec2, ViewportCommand, pos2};
 use windows_sys::Win32::Foundation::{HWND, RECT};
 use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetWindowRect, SPI_GETCLIENTAREAANIMATION, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, SystemParametersInfoW,
+};
 
 use crate::jogo;
 
@@ -110,6 +112,44 @@ pub fn lado_mais_perto(janela: isize) -> Lado {
     }
 }
 
+/// Onde o painel de drops (`painel` pixels, com o vão) abre: à direita se couber na área; senão à
+/// esquerda se couber; senão do lado com mais espaço. Devolve o lado e quanto a janela anda (pixels;
+/// negativo: para a esquerda), com a janela de `largura_total` presa dentro da área.
+pub fn lugar_do_painel(janela: isize, painel: i32, largura_total: i32) -> (Lado, i32) {
+    match (retangulo(janela), area_de_trabalho(janela)) {
+        (Some(r), Some(area)) => lugar([r.esquerda, r.direita], [area.esquerda, area.direita], painel, largura_total),
+        _ => (Lado::Direita, 0),
+    }
+}
+
+fn lugar(janela: [i32; 2], area: [i32; 2], painel: i32, largura_total: i32) -> (Lado, i32) {
+    let (livre_esquerda, livre_direita) = (janela[0] - area[0], area[1] - janela[1]);
+    let lado = if livre_direita >= painel || (livre_esquerda < painel && livre_direita >= livre_esquerda) {
+        Lado::Direita
+    } else {
+        Lado::Esquerda
+    };
+    let x = match lado {
+        Lado::Direita => janela[0],
+        Lado::Esquerda => janela[0] - painel,
+    };
+    let x = x.clamp(area[0], (area[1] - largura_total).max(area[0]));
+    (lado, x - janela[0])
+}
+
+/// Muda a largura da janela (pixels) e a anda `dx` na horizontal na hora (SetWindowPos, sem ativar):
+/// quem ler o retângulo logo depois (o recolher) já vê o novo.
+pub fn ajustar_largura(janela: isize, largura: i32, dx: i32) {
+    let Some(r) = retangulo(janela) else { return };
+    let (altura, opcoes) = (r.base - r.topo, SWP_NOZORDER | SWP_NOACTIVATE);
+    unsafe { SetWindowPos(janela as HWND, std::ptr::null_mut(), r.esquerda + dx, r.topo, largura, altura, opcoes) };
+}
+
+/// Altura da área (do jogo ou do monitor), em pixels: o painel de drops não passa dela.
+pub fn altura_da_area(janela: isize) -> Option<i32> {
+    area_de_trabalho(janela).map(|a| a.base - a.topo)
+}
+
 fn lado_de(r: Retangulo, area: Retangulo) -> Lado {
     if r.esquerda + r.direita < area.esquerda + area.direita { Lado::Esquerda } else { Lado::Direita }
 }
@@ -164,5 +204,21 @@ fn area_de_trabalho(janela: isize) -> Option<Retangulo> {
         }
         let r = info.rcWork;
         Some(Retangulo { esquerda: r.left, topo: r.top, direita: r.right, base: r.bottom })
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn painel_abre_do_lado_que_cabe_e_a_janela_anda_o_que_falta() {
+        // Área de 0 a 1920, janela de 470 px, painel de 336 com o vão: 806 no total.
+        assert_eq!(lugar([100, 570], [0, 1920], 336, 806), (Lado::Direita, 0));
+        assert_eq!(lugar([1400, 1870], [0, 1920], 336, 806), (Lado::Esquerda, -336));
+        // Área de 1000: não cabe de lado nenhum. Mais espaço à direita: abre à direita e anda 56.
+        assert_eq!(lugar([250, 720], [0, 1000], 336, 806), (Lado::Direita, -56));
+        // Mais espaço à esquerda: abre à esquerda e para na borda.
+        assert_eq!(lugar([300, 770], [0, 1000], 336, 806), (Lado::Esquerda, -300));
     }
 }

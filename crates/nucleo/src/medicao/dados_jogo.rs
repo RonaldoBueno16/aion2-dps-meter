@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use super::catalogo::CatalogoSkills;
+use super::catalogo::{Atributo, Busca, CatalogoSkills, DetalheItem, DropsNpc, InfoRegiao};
 
 // Curas que chegam pelo mesmo opcode do dano e não podem entrar na soma.
 const CURAS: [u32; 8] = [18120000, 18170000, 16770000, 16190000, 17120000, 17800000, 17100000, 17410000];
@@ -117,6 +117,38 @@ pub fn emblema_classe(classe: &str) -> Option<PathBuf> {
 /// Ícone do item Energia Odyle na CDN do jogo (o mesmo do medidor Abyss). None enquanto não baixou.
 pub fn icone_odyle() -> Option<PathBuf> {
     catalogo()?.caminho_icone(Some("Icon_Item_Odenergy_A_001"))
+}
+
+/// Nome e chefes de campo da região do 0x9101. None enquanto não chegou do questlog.
+pub fn regiao(codigo: u32) -> Option<InfoRegiao> {
+    catalogo()?.regiao(codigo)
+}
+
+/// Drops do chefe de campo e o que vem nos baús dele, pelo questlog.
+pub fn drops(codigo: u32) -> Busca<DropsNpc> {
+    catalogo().map_or(Busca::Falhou, |c| c.drops(codigo))
+}
+
+/// PNG da CDN pelo nome, só na memória (retratos dos chefes de campo e ícones dos drops).
+pub fn imagem(nome: &str) -> Busca<std::sync::Arc<Vec<u8>>> {
+    catalogo().map_or(Busca::Falhou, |c| c.imagem(nome))
+}
+
+/// Ficha do item pelo questlog, só na memória.
+pub fn item(codigo: u32) -> Busca<DetalheItem> {
+    catalogo().map_or(Busca::Falhou, |c| c.item(codigo))
+}
+
+/// Nome em português, formato e ajuda de cada atributo, pelo questlog, só na memória.
+pub fn atributos() -> Busca<std::sync::Arc<HashMap<String, Atributo>>> {
+    catalogo().map_or(Busca::Falhou, |c| c.atributos())
+}
+
+/// Deixa pedir de novo os drops e as imagens que falharam.
+pub fn repetir_falhas() {
+    if let Some(c) = catalogo() {
+        c.repetir_falhas();
+    }
 }
 
 /// Ícone da CDN do jogo pelo nome (os dos eventos do overlay). None enquanto não baixou.

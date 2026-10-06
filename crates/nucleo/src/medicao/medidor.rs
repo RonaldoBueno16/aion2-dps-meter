@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::catalogo::InfoNpc;
 use super::dados_jogo;
-use crate::protocolo::combate::{Buff, EventoDano, TICKET_ODYLE, Ticket};
+use crate::protocolo::combate::{Buff, ChefesDeCampo, EventoDano, TICKET_ODYLE, Ticket};
 use crate::{Hora, TICKS_POR_SEGUNDO, segundos};
 
 #[derive(Clone, Debug)]
@@ -263,6 +263,9 @@ pub struct Medidor {
     /// Energia Odyle (básica, carregada) do último ticket dela (0x610B no login, 0x610C). Não zera
     /// na troca de conexão: é do personagem, e o login manda de novo.
     pub odyle: Option<(u64, Option<u64>)>,
+    /// Última lista de chefes de campo da região (0x9101) e quando chegou. Não zera na troca de
+    /// conexão nem no Zerar: é do mundo, e o servidor repete a cada poucos segundos.
+    pub chefes_de_campo: Option<(ChefesDeCampo, Hora)>,
 
     dano: IndexMap<u32, Acumulado>,
     recebido: IndexMap<u32, Acumulado>,
@@ -341,6 +344,7 @@ impl Default for Medidor {
             inatividade: 15 * TICKS_POR_SEGUNDO,
             fim_pelo_combate: true,
             odyle: None,
+            chefes_de_campo: None,
             dano: IndexMap::new(),
             recebido: IndexMap::new(),
             cura_candidata: IndexMap::new(),

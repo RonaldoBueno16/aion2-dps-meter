@@ -476,6 +476,64 @@ fn procurar_marcador_dono(p: &[u8], desde: usize, propria_entidade: u32) -> u32 
     if dono == 0 || dono >= 1 << 24 || dono == propria_entidade { 0 } else { dono }
 }
 
+/// Chefe de campo da lista do 0x9101.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChefeDeCampo {
+    /// Região × 100 + número do chefe (111021: Altgard, 21º).
+    pub id: u32,
+    pub vivo: bool,
+    /// Só com o chefe vivo.
+    pub posicao: Option<[f32; 3]>,
+    /// Unix em ms. Morto: quando renasce. Vivo: a hora marcada em que nasceu (três chefes passaram de
+    /// mortos a vivos com a mesma hora em 2026-10-05; um deles nasceu 136 s antes dela), ou 0
+    /// (provavelmente: não morreu desde que o servidor reiniciou).
+    pub hora_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChefesDeCampo {
+    pub regiao: u32,
+    pub chefes: Vec<ChefeDeCampo>,
+}
+
+/// Chefes de campo da região, opcode 0x9101, que o servidor manda a cada poucos segundos (1 a 6 s nas
+/// capturas), com o mapa aberto ou não: [u16 0][u32 região][u8 n] e n entradas [u8 vivo][varint id]
+/// [vivo: 3 f32 de posição][na 1ª de cada grupo de 8: u8 com o vivo das 8, um bit cada][u64 ms].
+/// Sobram 3 bytes (00 00 00 nos 254 pacotes vistos), sem uso. A máscara confere o alinhamento: sem
+/// bater, None.
+pub fn chefes_de_campo(pacote: &[u8]) -> Option<ChefesDeCampo> {
+    let mut r = abrir_corpo(pacote).ok()?;
+    r.ler_u16().ok()?;
+    let regiao = r.ler_u32().ok()?;
+    let n = usize::from(r.ler_u8().ok()?);
+    let mut chefes = Vec::with_capacity(n);
+    let mut mascara = 0;
+    for i in 0..n {
+        let vivo = match r.ler_u8().ok()? {
+            0 => false,
+            1 => true,
+            _ => return None,
+        };
+        let id = u32::try_from(r.ler_varint().ok()?).ok()?;
+        let posicao = if vivo {
+            let b = r.ler_bytes(12).ok()?;
+            let f = |i: usize| f32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+            Some([f(0), f(4), f(8)])
+        } else {
+            None
+        };
+        if i % 8 == 0 {
+            mascara = r.ler_u8().ok()?;
+        }
+        if (mascara >> (i % 8)) & 1 != u8::from(vivo) {
+            return None;
+        }
+        let hora_ms = i64::from_le_bytes(r.ler_bytes(8).ok()?.try_into().ok()?);
+        chefes.push(ChefeDeCampo { id, vivo, posicao, hora_ms });
+    }
+    Some(ChefesDeCampo { regiao, chefes })
+}
+
 /// UTF-8 sem os caracteres de controle (bytes inválidos viram U+FFFD).
 fn sem_controle(bruto: &[u8]) -> String {
     String::from_utf8_lossy(bruto).chars().filter(|c| !c.is_control()).collect()

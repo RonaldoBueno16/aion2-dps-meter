@@ -22,6 +22,8 @@ pub const HP_RESTANTE: u16 = 0x8D00;
 pub const ESTADO_COMBATE: u16 = 0x8D21;
 pub const MORTE_ENTIDADE: u16 = 0x8D04;
 pub const GRUPO: u16 = 0x9702;
+/// Chefes de campo da região (vivo, hora de renascer): achado nas capturas do Axon, 2026-10-06.
+pub const CHEFES_DE_CAMPO: u16 = 0x9101;
 pub const PODER_JOGADOR: u16 = 0x561C;
 pub const TICKETS: u16 = 0x610B;
 pub const TICKET_MUDOU: u16 = 0x610C;
@@ -46,6 +48,7 @@ pub fn nome(opcode: u16) -> &'static str {
         ESTADO_COMBATE => "EstadoCombate",
         MORTE_ENTIDADE => "MorteEntidade",
         GRUPO => "Grupo",
+        CHEFES_DE_CAMPO => "ChefesDeCampo",
         PODER_JOGADOR => "PoderJogador",
         COMPRIMIDO => "Comprimido",
         _ => "",

@@ -33,7 +33,7 @@ pub struct Icone {
 }
 
 const INTEIRO: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
-const ROSTO: [f32; 4] = [0.22, 0.10, 0.78, 0.66];
+pub const ROSTO: [f32; 4] = [0.22, 0.10, 0.78, 0.66];
 
 pub struct Evento {
     pub nome: &'static str,
@@ -163,6 +163,16 @@ pub fn horario(evento: &Evento, hora: Hora) -> String {
         Estado::Aberto(falta) => local - (evento.aberto - falta),
         Estado::Fechado(falta) => local + falta,
     };
+    formatar_inicio(inicio, local)
+}
+
+/// O mesmo para uma hora absoluta (unix, em segundos), como a de renascer de um chefe de campo.
+pub fn horario_unix(inicio: i64, hora: Hora) -> String {
+    formatar_inicio(inicio + FUSO, local(hora))
+}
+
+/// Os dois em segundos no horário de Brasília.
+fn formatar_inicio(inicio: i64, local: i64) -> String {
     let hh_mm = format!("{:02}:{:02}", inicio.rem_euclid(DIA) / HORA, inicio.rem_euclid(HORA) / 60);
     let dia = inicio.div_euclid(DIA);
     if dia == local.div_euclid(DIA) { hh_mm } else { format!("{} {hh_mm}", DIAS[(dia + 4).rem_euclid(7) as usize]) }
@@ -171,11 +181,16 @@ pub fn horario(evento: &Evento, hora: Hora) -> String {
 /// Os abertos primeiro (o que fecha antes no topo), depois o que começa antes.
 pub fn em_ordem(hora: Hora) -> Vec<(&'static Evento, Estado)> {
     let mut lista: Vec<_> = EVENTOS.iter().map(|e| (e, estado(e, hora))).collect();
-    lista.sort_by_key(|(_, estado)| match *estado {
+    lista.sort_by_key(|(_, estado)| ordem(*estado));
+    lista
+}
+
+/// Chave da ordem da lista: aberto antes de fechado, e então o que falta.
+pub fn ordem(estado: Estado) -> (u8, i64) {
+    match estado {
         Estado::Aberto(s) => (0, s),
         Estado::Fechado(s) => (1, s),
-    });
-    lista
+    }
 }
 
 /// "mm:ss" abaixo de 1 h, "h:mm:ss" abaixo de 1 dia, "2d 05h" a partir daí.
@@ -297,6 +312,13 @@ mod testes {
         // Aberto: o início da vez que está aberta.
         assert_eq!(horario(evento("Shugo Festa"), utc(TERCA_4H + 90)), "04:00");
         assert_eq!(horario(evento("Reset semanal"), utc(TERCA_4H)), "qua 04:00");
+    }
+
+    #[test]
+    fn horario_unix_do_gartua() {
+        // Renasce às 22:20:40 de terça (06/10) em Brasília.
+        assert_eq!(horario_unix(1_791_336_040, utc(TERCA_4H)), "22:20");
+        assert_eq!(horario_unix(1_791_336_040, utc(QUARTA_4H)), "ter 22:20");
     }
 
     #[test]
