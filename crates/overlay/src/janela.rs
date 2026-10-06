@@ -1,8 +1,8 @@
 //! A janela, no visual da 0.8.0 (inspirado no medidor do TK): cabeçalho com o logo e botões de
 //! ícone, a barra do alvo (o chefe da luta ou o mob que mais apanhou), abas DPS | Tank | Healer,
 //! uma linha por jogador (medalhão da classe, barra em degradê na cor dela, total, por segundo e %),
-//! a ficha e as skills ao expandir, e o rodapé com o estado e o tempo da luta. Mais: configurações,
-//! lutas anteriores e recolher para a borda.
+//! a ficha e as skills ao expandir, o rodapé com o estado e o tempo da luta e, embaixo dele, os
+//! eventos de horário fixo. Mais: configurações, lutas anteriores e recolher para a borda.
 
 mod configuracoes;
 mod lutas;
@@ -37,7 +37,7 @@ use crate::atalho::Atalho;
 use crate::atualizacao::{self, Atualizacao, Estado};
 use crate::bandeja::{self, Bandeja};
 use crate::config::{self, Config};
-use crate::fenda::{self, Fenda};
+use crate::eventos;
 use crate::jogo;
 
 /// 470 e não os 390 do WPF: a tabela da aba DPS precisa de ~280 px ao lado do nome.
@@ -70,8 +70,6 @@ const ALTURA_LINHA: f32 = 28.0;
 const PARADO: Duration = Duration::from_secs(5);
 /// Logo do cabeçalho: o hexágono do axon.ico em 64 px.
 const LOGO: &[u8] = include_bytes!("../assets/axon-64.png");
-/// Portal da fenda no rodapé, gerado do assets/fenda.svg em 64 px.
-const FENDA: &[u8] = include_bytes!("../assets/fenda-64.png");
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tela {
@@ -131,8 +129,9 @@ pub struct Overlay {
     icones: HashMap<PathBuf, Option<TextureHandle>>,
     /// Ícone da primeira skill de cada classe, usado no medalhão, quando já baixou.
     emblemas: HashMap<&'static str, PathBuf>,
+    /// Ícone de cada evento, pelo nome na CDN, quando já baixou.
+    icones_eventos: HashMap<&'static str, PathBuf>,
     logo: Option<Option<TextureHandle>>,
-    icone_fenda: Option<Option<TextureHandle>>,
     /// Altura do conteúdo (em pontos) e escala (pixels por ponto) com que o tamanho da janela foi
     /// pedido por último. A escala e não o zoom da config: ela muda também com o DPI do monitor.
     altura: f32,
@@ -225,8 +224,8 @@ impl Overlay {
             assinatura: (0, 0),
             icones: HashMap::new(),
             emblemas: HashMap::new(),
+            icones_eventos: HashMap::new(),
             logo: None,
-            icone_fenda: None,
             altura: 0.0,
             escala_aplicada: 0.0,
             replay: replay.is_some(),
@@ -411,6 +410,7 @@ impl Overlay {
         self.linhas(ui, &tabela);
         ui.add_space(8.0);
         self.rodape(ui, &tabela);
+        self.eventos(ui);
         ui.add_space(2.0);
         self.status(ui);
     }
@@ -958,15 +958,13 @@ impl Overlay {
             livre_ate = sinal_de_ping(ui, ping, rect, livre_ate, meio) - 10.0;
         }
 
-        // Depois do total, cada um se couber antes do ping: a Energia Odyle e a fenda.
-        let fim_odyle = self.odyle_no_rodape(ui, rect, meio, fim_esquerda, livre_ate);
-        self.fenda_no_rodape(ui, rect, meio, fim_odyle, livre_ate);
+        // Depois do total, se couber antes do ping: a Energia Odyle.
+        self.odyle_no_rodape(ui, rect, meio, fim_esquerda, livre_ate);
     }
 
-    /// Energia Odyle: o cristal (ou "Odyle", enquanto o ícone não baixou) e os valores. Devolve onde
-    /// ela termina; sem Odyle ou sem espaço, o próprio `inicio`.
-    fn odyle_no_rodape(&mut self, ui: &Ui, rect: Rect, meio: f32, inicio: f32, livre_ate: f32) -> f32 {
-        let Some((basica, carregada)) = self.odyle else { return inicio };
+    /// Energia Odyle: o cristal (ou "Odyle", enquanto o ícone não baixou) e os valores.
+    fn odyle_no_rodape(&mut self, ui: &Ui, rect: Rect, meio: f32, inicio: f32, livre_ate: f32) {
+        let Some((basica, carregada)) = self.odyle else { return };
         let icone = self.icone_odyle(ui.ctx());
         let rotulo = if icone.is_some() { "   ·   " } else { "   ·   Odyle " };
         let formato = TextFormat::simple(fonte(11.0, false), branco(0x99));
@@ -975,53 +973,6 @@ impl Overlay {
         trecho(&mut job, &n(basica as f64, 0), 11.0, true, branco(0xCC));
         if let Some(carregada) = carregada {
             trecho(&mut job, &format!(" (+{})", n(carregada as f64, 0)), 11.0, false, branco(0x99));
-        }
-        let valor = montar(ui, job);
-        let largura_icone = if icone.is_some() { 17.0 } else { 0.0 };
-        let (largura_rotulo, largura_valor) = (rotulo.size().x, valor.size().x);
-        if inicio + largura_rotulo + largura_icone + largura_valor > livre_ate {
-            return inicio;
-        }
-        let pintor = ui.painter();
-        pintor.galley(pos2(inicio, meio - rotulo.size().y / 2.0), rotulo, texto());
-        let x = inicio + largura_rotulo;
-        if let Some(icone) = icone {
-            let quadrado = Rect::from_center_size(pos2(x + 7.5, meio), Vec2::splat(15.0));
-            egui::Image::new(SizedTexture::new(icone.id(), quadrado.size())).paint_at(ui, quadrado);
-        }
-        pintor.galley(pos2(x + largura_icone, meio - valor.size().y / 2.0), valor, texto());
-        let area = Rect::from_min_max(pos2(x, rect.min.y), pos2(x + largura_icone + largura_valor, rect.max.y));
-        ui.interact(area, ui.id().with("odyle"), Sense::hover()).on_hover_text(
-            "Energia Odyle: a básica e, entre parênteses, a carregada, como o servidor manda no login \
-             (ticket 60000001 do 0x610B) e a cada mudança (0x610C, como no uso de essência OD). Com o \
-             Axon aberto depois do login, ela aparece na próxima mudança ou no próximo login. O máximo \
-             (o /840 da tela) não vem no pacote.",
-        );
-        x + largura_icone + largura_valor
-    }
-
-    /// Fenda Espaço-Temporal: o portal e quanto falta para ela abrir ou, aberta, para o portal fechar.
-    fn fenda_no_rodape(&mut self, ui: &Ui, rect: Rect, meio: f32, inicio: f32, livre_ate: f32) {
-        let icone = self.icone_fenda(ui.ctx());
-        let rotulo = if icone.is_some() { "   ·   " } else { "   ·   Fenda " };
-        let formato = TextFormat::simple(fonte(11.0, false), branco(0x99));
-        let rotulo = montar(ui, LayoutJob::single_section(rotulo.into(), formato));
-        let (aberta, segundos) = match fenda::fenda(nucleo::agora()) {
-            Fenda::Aberta(segundos) => (true, segundos),
-            Fenda::Fechada(segundos) => (false, segundos),
-        };
-        let ticks = segundos * TICKS_POR_SEGUNDO;
-        let tempo = match segundos / 3600 {
-            0 => minutos_e_segundos(ticks),
-            horas => format!("{horas}:{}", minutos_e_segundos(ticks)),
-        };
-        let mut job = LayoutJob::default();
-        if aberta {
-            let verde = Color32::from_rgb(0x5B, 0xD1, 0x6B);
-            trecho(&mut job, "aberta ", 11.0, false, verde);
-            trecho(&mut job, &tempo, 11.0, true, verde);
-        } else {
-            trecho(&mut job, &tempo, 11.0, true, branco(0xCC));
         }
         let valor = montar(ui, job);
         let largura_icone = if icone.is_some() { 17.0 } else { 0.0 };
@@ -1038,13 +989,156 @@ impl Overlay {
         }
         pintor.galley(pos2(x + largura_icone, meio - valor.size().y / 2.0), valor, texto());
         let area = Rect::from_min_max(pos2(x, rect.min.y), pos2(x + largura_icone + largura_valor, rect.max.y));
-        ui.interact(area, ui.id().with("fenda"), Sense::hover()).on_hover_text(
-            "Fenda Espaço-Temporal: quanto falta para a próxima abertura (a cada 3 h, às 02h, 05h, 08h, \
-             11h, 14h, 17h, 20h e 23h de Brasília) e, com \"aberta\", quanto falta para o portal fechar \
-             (fica aberto 10 min; lá dentro o evento dura 1 h). Conta pelo relógio do PC. A NCSoft não \
-             publicou o horário do servidor SA: esta é a tabela dos sites de timer (shugo.gg, \
-             aion2timers.com).",
+        ui.interact(area, ui.id().with("odyle"), Sense::hover()).on_hover_text(
+            "Energia Odyle: a básica e, entre parênteses, a carregada, como o servidor manda no login \
+             (ticket 60000001 do 0x610B) e a cada mudança (0x610C, como no uso de essência OD). Com o \
+             Axon aberto depois do login, ela aparece na próxima mudança ou no próximo login. O máximo \
+             (o /840 da tela) não vem no pacote.",
         );
+    }
+
+    /// Eventos de horário fixo, embaixo do rodapé. Recolhida, uma linha com os próximos que couberem;
+    /// expandida, todos, um por linha, com o início e a contagem. O clique no cabeçalho alterna.
+    fn eventos(&mut self, ui: &mut Ui) {
+        let agora = nucleo::agora();
+        let lista = eventos::em_ordem(agora);
+        let expandida = self.config.eventos_expandidos;
+        let largura = ui.available_width();
+        let (rect, resposta) = ui.allocate_exact_size(vec2(largura, 22.0), Sense::click());
+        let pintor = ui.painter();
+        if resposta.hovered() {
+            pintor.rect_filled(rect, 4, branco(0x0C));
+        }
+        pintor.hline(
+            rect.x_range(),
+            rect.min.y,
+            Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0xE6, 0xC0, 0x6A, 0x20)),
+        );
+        let meio = rect.center().y;
+        let seta = if expandida { "▾" } else { "▸" };
+        let formato = TextFormat::simple(fonte(11.0, false), branco(0x99));
+        let seta = montar(ui, LayoutJob::single_section(seta.into(), formato));
+        pintor.galley(pos2(rect.min.x + 7.0 - seta.size().x / 2.0, meio - seta.size().y / 2.0), seta, texto());
+
+        let inicio = rect.min.x + 18.0;
+        let fim = rect.max.x - 6.0;
+        let mut dica_recolhida = String::new();
+        if expandida {
+            let mut job = LayoutJob::default();
+            trecho(&mut job, "Eventos", 11.0, true, branco(0xCC));
+            let titulo = montar(ui, job);
+            pintor.galley(pos2(inicio, meio - titulo.size().y / 2.0), titulo, texto());
+            let formato = TextFormat::simple(fonte(10.0, false), branco(0x77));
+            let fuso = montar(ui, LayoutJob::single_section("horário de Brasília".into(), formato));
+            pintor.galley(pos2(fim - fuso.size().x, meio - fuso.size().y / 2.0), fuso, texto());
+        } else {
+            // Os próximos, enquanto couberem inteiros: o ícone (o nome, nos resets) e a contagem.
+            let mut x = inicio;
+            let mut mostrados = Vec::new();
+            for (i, (evento, estado)) in lista.iter().enumerate() {
+                let mut job = LayoutJob::default();
+                if i > 0 {
+                    trecho(&mut job, "   ·   ", 11.0, false, branco(0x99));
+                }
+                if evento.icone.is_none() {
+                    trecho(&mut job, &format!("{} ", evento.nome), 11.0, false, branco(0x99));
+                }
+                let antes = montar(ui, job);
+                let mut job = LayoutJob::default();
+                contagem_do_evento(&mut job, *estado);
+                let contagem = montar(ui, job);
+                let largura_icone = if evento.icone.is_some() { 20.0 } else { 0.0 };
+                let (largura_antes, largura_contagem) = (antes.size().x, contagem.size().x);
+                if x + largura_antes + largura_icone + largura_contagem > fim {
+                    break;
+                }
+                pintor.galley(pos2(x, meio - antes.size().y / 2.0), antes, texto());
+                x += largura_antes;
+                if let Some(icone) = &evento.icone {
+                    self.icone_do_evento(ui, icone, Rect::from_center_size(pos2(x + 8.0, meio), Vec2::splat(16.0)));
+                    x += largura_icone;
+                }
+                pintor.galley(pos2(x, meio - contagem.size().y / 2.0), contagem, texto());
+                x += largura_contagem;
+                mostrados.push(format!("{} {}", evento.nome, texto_da_contagem(*estado)));
+            }
+            // Um tooltip só, com o nome do que está na linha: o clique continua sendo da linha toda.
+            mostrados.push(String::new());
+            mostrados.push("Clique para ver todos, com o horário de cada um.".into());
+            dica_recolhida = mostrados.join("\n");
+        }
+        let dica = if expandida { "Recolher os eventos" } else { dica_recolhida.as_str() };
+        if resposta.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(dica).clicked() {
+            self.config.eventos_expandidos = !expandida;
+            self.aplicar_config();
+        }
+        if !expandida {
+            return;
+        }
+
+        for (evento, estado) in &lista {
+            let (linha, resposta) = ui.allocate_exact_size(vec2(largura, 18.0), Sense::hover());
+            let pintor = ui.painter();
+            let meio = linha.center().y;
+            let verde = Color32::from_rgb(0x5B, 0xD1, 0x6B);
+            // Verde aberto, dourado faltando até 10 min, apagado no resto.
+            let (cor, destaque) = match *estado {
+                eventos::Estado::Aberto(_) => (verde, true),
+                eventos::Estado::Fechado(s) if s <= 600 => (visual::DOURADO, true),
+                eventos::Estado::Fechado(_) => (branco(0x40), false),
+            };
+            let ponto = pos2(linha.min.x + 7.0, meio);
+            if matches!(estado, eventos::Estado::Aberto(_)) {
+                let halo = Color32::from_rgba_unmultiplied(verde.r(), verde.g(), verde.b(), 0x40);
+                pintor.circle_filled(ponto, 6.0, halo);
+            }
+            pintor.circle_filled(ponto, 3.0, cor);
+
+            // Ícone em 16 px; nos resets, a seta de recomeçar no lugar dele.
+            let quadrado = Rect::from_center_size(pos2(inicio + 8.0, meio), Vec2::splat(16.0));
+            match &evento.icone {
+                Some(icone) => self.icone_do_evento(ui, icone, quadrado),
+                None => {
+                    let formato = TextFormat::simple(fonte(13.0, false), branco(0x99));
+                    let seta = montar(ui, LayoutJob::single_section("↻".into(), formato));
+                    pintor.galley(quadrado.center() - seta.size() / 2.0, seta, texto());
+                }
+            }
+            let formato = TextFormat::simple(fonte(11.0, false), if destaque { texto() } else { branco(0xBB) });
+            let nome = montar(ui, LayoutJob::single_section(evento.nome.into(), formato));
+            pintor.galley(pos2(inicio + 22.0, meio - nome.size().y / 2.0), nome, texto());
+            let mut job = LayoutJob::default();
+            contagem_do_evento(&mut job, *estado);
+            let contagem = montar(ui, job);
+            pintor.galley(pos2(fim - contagem.size().x, meio - contagem.size().y / 2.0), contagem, texto());
+            // O início numa coluna própria, alinhado à direita antes da contagem mais larga.
+            let formato = TextFormat::simple(fonte(10.0, false), branco(0x77));
+            let horario = montar(ui, LayoutJob::single_section(eventos::horario(evento, agora), formato));
+            pintor.galley(pos2(fim - 84.0 - horario.size().x, meio - horario.size().y / 2.0), horario, texto());
+            resposta.on_hover_text(format!("{}\n\n{}", evento.dica, eventos::ORIGEM));
+        }
+        ui.add_space(2.0);
+    }
+
+    /// Ícone do evento (CDN do jogo) recortado como manda a tabela; enquanto não baixou, a moldura.
+    fn icone_do_evento(&mut self, ui: &Ui, icone: &eventos::Icone, quadrado: Rect) {
+        ui.painter().rect_filled(quadrado, 3, branco(0x22));
+        if !self.icones_eventos.contains_key(icone.nome) {
+            // Como no emblema: só pergunta ao catálogo logo depois de ler o placar (cada pergunta
+            // olha o disco).
+            if self.lido_em.elapsed() > Duration::from_millis(100) {
+                return;
+            }
+            let Some(caminho) = dados_jogo::icone_do_jogo(icone.nome) else { return };
+            self.icones_eventos.insert(icone.nome, caminho);
+        }
+        let caminho = self.icones_eventos[icone.nome].clone();
+        let Some(textura) = self.textura(ui.ctx(), &caminho) else { return };
+        let [x0, y0, x1, y1] = icone.recorte;
+        egui::Image::new(SizedTexture::new(textura.id(), quadrado.size()))
+            .uv(Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)))
+            .corner_radius(3)
+            .paint_at(ui, quadrado);
     }
 
     /// Barra compacta: numa linha só, o alvo e o HP, o seu DPS, o do grupo e o ping.
@@ -1142,14 +1236,6 @@ impl Overlay {
         }
         let caminho = self.icone_odyle.clone()?;
         self.textura(ctx, &caminho)
-    }
-
-    fn icone_fenda(&mut self, ctx: &egui::Context) -> Option<TextureHandle> {
-        if self.icone_fenda.is_none() {
-            let imagem = decodificar(std::io::Cursor::new(FENDA));
-            self.icone_fenda = Some(imagem.map(|imagem| ctx.load_texture("fenda", imagem, opcoes_de_textura())));
-        }
-        self.icone_fenda.clone().flatten()
     }
 
     fn status(&mut self, ui: &mut Ui) {
@@ -1909,6 +1995,29 @@ fn uma_linha(largura: f32) -> TextWrapping {
 
 fn montar(ui: &Ui, job: LayoutJob) -> Arc<Galley> {
     ui.fonts_mut(|f| f.layout_job(job))
+}
+
+/// "fecha em 02:41" com o evento aberto; fechado, só o que falta.
+fn texto_da_contagem(estado: eventos::Estado) -> String {
+    match estado {
+        eventos::Estado::Aberto(s) => format!("fecha em {}", eventos::contagem(s)),
+        eventos::Estado::Fechado(s) => eventos::contagem(s),
+    }
+}
+
+/// "fecha em 02:41" em verde com o evento aberto; fechado, só o que falta, em dourado até 10 min.
+fn contagem_do_evento(job: &mut LayoutJob, estado: eventos::Estado) {
+    match estado {
+        eventos::Estado::Aberto(s) => {
+            let verde = Color32::from_rgb(0x5B, 0xD1, 0x6B);
+            trecho(job, "fecha em ", 11.0, false, verde);
+            trecho(job, &eventos::contagem(s), 11.0, true, verde);
+        }
+        eventos::Estado::Fechado(s) => {
+            let cor = if s <= 600 { visual::DOURADO } else { branco(0xCC) };
+            trecho(job, &eventos::contagem(s), 11.0, true, cor);
+        }
+    }
 }
 
 fn razao(parte: i32, todo: i32) -> f64 {

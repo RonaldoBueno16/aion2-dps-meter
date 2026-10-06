@@ -47,6 +47,8 @@ pub struct Config {
     pub resumo_em_linhas: bool,
     /// Barra compacta: uma linha com o alvo, o seu DPS, o do grupo e o ping.
     pub compacta: bool,
+    /// Eventos embaixo do rodapé: todos, um por linha; desligado, só a linha com os próximos.
+    pub eventos_expandidos: bool,
 }
 
 impl Default for Config {
@@ -65,6 +67,7 @@ impl Default for Config {
             atualizacao_ms: 500,
             resumo_em_linhas: false,
             compacta: false,
+            eventos_expandidos: false,
         }
     }
 }
@@ -135,6 +138,8 @@ mod testes {
         assert_eq!((c.atalho_mostrar.as_str(), c.atalho_atravessar.as_str()), ("Ctrl+H", "Ctrl+T"));
         assert_eq!((c.atalho_resumo.as_str(), c.atalho_compacta.as_str()), ("", ""));
         assert_eq!((c.ocultar_nomes, c.atualizacao_ms, c.resumo_em_linhas, c.compacta), (false, 500, false, false));
+        // Config de antes da 0.10.0: os eventos recolhidos.
+        assert!(!c.eventos_expandidos);
         let rapida = Config { atualizacao_ms: 10, ..Config::default() }.dentro_das_faixas();
         assert_eq!(rapida.atualizacao_ms, ATUALIZACAO_MIN);
         // Sem o campo (config da 0.3.x): o fundo de antes.
