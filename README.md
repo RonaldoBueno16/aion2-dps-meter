@@ -32,9 +32,10 @@ cargo build --release -p overlay
   jogo está aberto há 2 minutos sem o servidor aparecer (VPN, ExitLag e similares).
 - O jogo precisa estar em "tela cheia em janela" (borderless), que é o padrão atual.
 - O Axon fica como ícone na área de notificação (a seta ao lado do relógio), fora da barra
-  de tarefas. O overlay só aparece com o jogo em primeiro plano: aberto com outro programa
-  na frente, ele espera invisível e surge quando você volta ao jogo. Clique esquerdo no
-  ícone liga ou desliga o overlay; o direito abre o menu (Mostrar/Esconder, "Clique
+  de tarefas. Desde a 0.12.0 o overlay fica visível com o jogo na frente, atrás de outra
+  janela, minimizado ou fechado, e pode ser arrastado para fora do jogo (outro monitor
+  inclusive); para tirá-lo da tela, use o ícone (ou o atalho, com o jogo na frente). Clique
+  esquerdo no ícone liga ou desliga o overlay; o direito abre o menu (Mostrar/Esconder, "Clique
   atravessa o overlay" e "Fechar Axon"). Escondido, o medidor continua contando. O jogo é
   achado pela janela (classe `UnrealWindow`, título "AION2"), sem abrir handle no processo dele.
 - **Atalhos** (desde a 0.8.0): `Ctrl+H` mostra ou esconde o overlay; `Ctrl+T` liga ou
@@ -126,8 +127,9 @@ cargo build --release -p overlay
   cada nome, inclusive o seu, a cada 30 s e ao fechar. Com o overlay aberto no meio da
   sessão, você é reconhecido pelo nome no primeiro abate ou invocação. Valor lido na
   conexão atual sempre vence.
-- Arraste a janela pelo fundo; ela não sai de cima do jogo (aberta em outro monitor, é
-  trazida para dentro). Clique num jogador para ver as skills. ↺ (Zerar) começa
+- Arraste a janela pelo fundo, para qualquer lugar da tela. Recolher e o painel de drops usam a
+  área do jogo com a janela em cima dele e, fora dele, a do monitor onde ela está. Clique num
+  jogador para ver as skills. ↺ (Zerar) começa
   uma luta nova. Ela também acaba sozinha depois de 15 s sem dano (ajustável) e, desde a
   0.8.0, quando todos os mobs dela saem de combate (pacote 0x8D21 ou morte; mob sem golpe
   nem entrada em combate há 5 s não segura a luta) ou quando o último chefe dela morre, mesmo
@@ -163,7 +165,8 @@ cargo build --release -p overlay
   vivos vem no pacote e não aparece.
 - **Drops** (desde a 0.11.0): clicar num chefe na tela Bosses abre, ao lado da janela, o que ele
   deixa cair segundo o questlog (`getNpc`, e `getItem` para o que vem no baú). O painel abre do
-  lado com espaço na área do jogo; à esquerda, a janela anda e o medidor fica no lugar. O ✕, o
+  lado com espaço na área (do jogo ou do monitor); à esquerda, a janela anda e o medidor fica no
+  lugar. O ✕, o
   mesmo chefe de novo, recolher ou a barra compacta fecham. Em cima, o retrato, o nível e quando
   renasce; embaixo, nesta ordem: o conjunto do chefe (as peças com o nome dele, lado a lado na
   cor da raridade, com a % de cada uma), o que cai sempre (o baú de saque, que abre e mostra o

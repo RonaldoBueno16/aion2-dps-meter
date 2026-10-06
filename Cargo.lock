@@ -1211,7 +1211,7 @@ checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
 
 [[package]]
 name = "nucleo"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "indexmap",
  "lz4_flex",
@@ -1584,7 +1584,7 @@ dependencies = [
 
 [[package]]
 name = "overlay"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "eframe",
  "embed-manifest",
@@ -1813,7 +1813,7 @@ dependencies = [
 
 [[package]]
 name = "replay"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "indexmap",
  "nucleo",
