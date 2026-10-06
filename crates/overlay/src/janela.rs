@@ -1075,8 +1075,8 @@ impl Overlay {
     }
 
     /// Eventos de horário fixo e chefes de campo mortos, embaixo do rodapé. Recolhida, uma linha com os
-    /// próximos que couberem, eventos e chefes juntos; expandida, todos, um por linha, com o início e a
-    /// contagem, e os chefes mortos da região depois dos eventos. O clique no cabeçalho alterna.
+    /// próximos que couberem, eventos e chefes juntos; expandida, os eventos um por linha, com o início
+    /// e a contagem, e só o resumo dos chefes da região no fim. O clique no cabeçalho alterna.
     fn eventos(&mut self, ui: &mut Ui) {
         let agora = nucleo::agora();
         let lista: Vec<LinhaEvento> = eventos::em_ordem(agora)
@@ -1189,9 +1189,6 @@ impl Overlay {
         }
         if let Some(vistos) = &vistos {
             self.titulo_dos_chefes(ui, vistos, inicio, fim);
-            for linha in &mortos {
-                self.linha_do_evento(ui, linha, inicio, fim);
-            }
         }
         ui.add_space(2.0);
     }
@@ -1243,8 +1240,8 @@ impl Overlay {
         resposta.on_hover_text(&linha.dica);
     }
 
-    /// "Chefes de Altgard   20 vivos, 4 mortos" entre os eventos e os chefes mortos: o clique abre a
-    /// tela de chefes. Com a lista antiga, a hora dela à direita.
+    /// "Chefes de Altgard   20 vivos, 4 mortos" depois dos eventos, sem os chefes um a um: o clique abre
+    /// a tela de chefes. Com a lista antiga, a hora dela à direita.
     fn titulo_dos_chefes(&mut self, ui: &mut Ui, vistos: &chefes::ChefesDaRegiao, inicio: f32, fim: f32) {
         let (rect, resposta) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::click());
         let pintor = ui.painter();

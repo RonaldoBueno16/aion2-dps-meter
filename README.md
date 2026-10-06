@@ -241,8 +241,8 @@ cargo build --release -p overlay
   (`crates/overlay/src/eventos.rs`). A Arena of Tactics ficou de fora: só o metabot.gg traz o
   horário dela. Desde a 0.11.0 os chefes de campo mortos da região entram também: na linha
   recolhida, junto com os eventos pela contagem (o retrato e o tempo até renascer); na lista,
-  depois dos eventos, embaixo de "Chefes de Altgard   20 vivos, 4 mortos", que abre a tela
-  Bosses.
+  só a linha "Chefes de Altgard   20 vivos, 4 mortos" depois dos eventos, e o clique nela abre a
+  tela Bosses com cada chefe.
 - Nomes e ícones dos eventos: Vigilante Kairah e Senhor Guardião Nahma são os nomes dos NPCs em
   português no questlog; Shugo Festa vem dos itens dela (Chave de Recompensa da Shugo Festa) e a
   Fenda, do Bilhete de Entrada da Fenda Espaço-Temporal. Invasão Dimensional, Cerco de Artefato,
