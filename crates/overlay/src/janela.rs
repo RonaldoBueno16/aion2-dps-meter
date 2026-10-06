@@ -129,6 +129,8 @@ pub struct Overlay {
     icones: HashMap<PathBuf, Option<TextureHandle>>,
     /// Ícone da primeira skill de cada classe, usado no medalhão, quando já baixou.
     emblemas: HashMap<&'static str, PathBuf>,
+    /// Ícone de cada evento, pelo nome na CDN, quando já baixou.
+    icones_eventos: HashMap<&'static str, PathBuf>,
     logo: Option<Option<TextureHandle>>,
     /// Altura do conteúdo (em pontos) e escala (pixels por ponto) com que o tamanho da janela foi
     /// pedido por último. A escala e não o zoom da config: ela muda também com o DPI do monitor.
@@ -222,6 +224,7 @@ impl Overlay {
             assinatura: (0, 0),
             icones: HashMap::new(),
             emblemas: HashMap::new(),
+            icones_eventos: HashMap::new(),
             logo: None,
             altura: 0.0,
             escala_aplicada: 0.0,
@@ -1019,6 +1022,7 @@ impl Overlay {
 
         let inicio = rect.min.x + 18.0;
         let fim = rect.max.x - 6.0;
+        let mut dica_recolhida = String::new();
         if expandida {
             let mut job = LayoutJob::default();
             trecho(&mut job, "Eventos", 11.0, true, branco(0xCC));
@@ -1028,25 +1032,42 @@ impl Overlay {
             let fuso = montar(ui, LayoutJob::single_section("horário de Brasília".into(), formato));
             pintor.galley(pos2(fim - fuso.size().x, meio - fuso.size().y / 2.0), fuso, texto());
         } else {
-            // Os próximos, enquanto couberem inteiros.
+            // Os próximos, enquanto couberem inteiros: o ícone (o nome, nos resets) e a contagem.
             let mut x = inicio;
+            let mut mostrados = Vec::new();
             for (i, (evento, estado)) in lista.iter().enumerate() {
                 let mut job = LayoutJob::default();
                 if i > 0 {
                     trecho(&mut job, "   ·   ", 11.0, false, branco(0x99));
                 }
-                trecho(&mut job, &format!("{} ", evento.curto), 11.0, false, branco(0x99));
+                if evento.icone.is_none() {
+                    trecho(&mut job, &format!("{} ", evento.nome), 11.0, false, branco(0x99));
+                }
+                let antes = montar(ui, job);
+                let mut job = LayoutJob::default();
                 contagem_do_evento(&mut job, *estado);
-                let item = montar(ui, job);
-                if x + item.size().x > fim {
+                let contagem = montar(ui, job);
+                let largura_icone = if evento.icone.is_some() { 20.0 } else { 0.0 };
+                let (largura_antes, largura_contagem) = (antes.size().x, contagem.size().x);
+                if x + largura_antes + largura_icone + largura_contagem > fim {
                     break;
                 }
-                let largura_item = item.size().x;
-                pintor.galley(pos2(x, meio - item.size().y / 2.0), item, texto());
-                x += largura_item;
+                pintor.galley(pos2(x, meio - antes.size().y / 2.0), antes, texto());
+                x += largura_antes;
+                if let Some(icone) = &evento.icone {
+                    self.icone_do_evento(ui, icone, Rect::from_center_size(pos2(x + 8.0, meio), Vec2::splat(16.0)));
+                    x += largura_icone;
+                }
+                pintor.galley(pos2(x, meio - contagem.size().y / 2.0), contagem, texto());
+                x += largura_contagem;
+                mostrados.push(format!("{} {}", evento.nome, texto_da_contagem(*estado)));
             }
+            // Um tooltip só, com o nome do que está na linha: o clique continua sendo da linha toda.
+            mostrados.push(String::new());
+            mostrados.push("Clique para ver todos, com o horário de cada um.".into());
+            dica_recolhida = mostrados.join("\n");
         }
-        let dica = if expandida { "Recolher os eventos" } else { "Ver todos os eventos, com o horário de cada um" };
+        let dica = if expandida { "Recolher os eventos" } else { dica_recolhida.as_str() };
         if resposta.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(dica).clicked() {
             self.config.eventos_expandidos = !expandida;
             self.aplicar_config();
@@ -1073,9 +1094,19 @@ impl Overlay {
             }
             pintor.circle_filled(ponto, 3.0, cor);
 
+            // Ícone em 16 px; nos resets, a seta de recomeçar no lugar dele.
+            let quadrado = Rect::from_center_size(pos2(inicio + 8.0, meio), Vec2::splat(16.0));
+            match &evento.icone {
+                Some(icone) => self.icone_do_evento(ui, icone, quadrado),
+                None => {
+                    let formato = TextFormat::simple(fonte(13.0, false), branco(0x99));
+                    let seta = montar(ui, LayoutJob::single_section("↻".into(), formato));
+                    pintor.galley(quadrado.center() - seta.size() / 2.0, seta, texto());
+                }
+            }
             let formato = TextFormat::simple(fonte(11.0, false), if destaque { texto() } else { branco(0xBB) });
             let nome = montar(ui, LayoutJob::single_section(evento.nome.into(), formato));
-            pintor.galley(pos2(inicio, meio - nome.size().y / 2.0), nome, texto());
+            pintor.galley(pos2(inicio + 22.0, meio - nome.size().y / 2.0), nome, texto());
             let mut job = LayoutJob::default();
             contagem_do_evento(&mut job, *estado);
             let contagem = montar(ui, job);
@@ -1087,6 +1118,27 @@ impl Overlay {
             resposta.on_hover_text(format!("{}\n\n{}", evento.dica, eventos::ORIGEM));
         }
         ui.add_space(2.0);
+    }
+
+    /// Ícone do evento (CDN do jogo) recortado como manda a tabela; enquanto não baixou, a moldura.
+    fn icone_do_evento(&mut self, ui: &Ui, icone: &eventos::Icone, quadrado: Rect) {
+        ui.painter().rect_filled(quadrado, 3, branco(0x22));
+        if !self.icones_eventos.contains_key(icone.nome) {
+            // Como no emblema: só pergunta ao catálogo logo depois de ler o placar (cada pergunta
+            // olha o disco).
+            if self.lido_em.elapsed() > Duration::from_millis(100) {
+                return;
+            }
+            let Some(caminho) = dados_jogo::icone_do_jogo(icone.nome) else { return };
+            self.icones_eventos.insert(icone.nome, caminho);
+        }
+        let caminho = self.icones_eventos[icone.nome].clone();
+        let Some(textura) = self.textura(ui.ctx(), &caminho) else { return };
+        let [x0, y0, x1, y1] = icone.recorte;
+        egui::Image::new(SizedTexture::new(textura.id(), quadrado.size()))
+            .uv(Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)))
+            .corner_radius(3)
+            .paint_at(ui, quadrado);
     }
 
     /// Barra compacta: numa linha só, o alvo e o HP, o seu DPS, o do grupo e o ping.
@@ -1943,6 +1995,14 @@ fn uma_linha(largura: f32) -> TextWrapping {
 
 fn montar(ui: &Ui, job: LayoutJob) -> Arc<Galley> {
     ui.fonts_mut(|f| f.layout_job(job))
+}
+
+/// "fecha em 02:41" com o evento aberto; fechado, só o que falta.
+fn texto_da_contagem(estado: eventos::Estado) -> String {
+    match estado {
+        eventos::Estado::Aberto(s) => format!("fecha em {}", eventos::contagem(s)),
+        eventos::Estado::Fechado(s) => eventos::contagem(s),
+    }
 }
 
 /// "fecha em 02:41" em verde com o evento aberto; fechado, só o que falta, em dourado até 10 min.

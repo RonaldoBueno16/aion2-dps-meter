@@ -189,20 +189,31 @@ cargo build --release -p overlay
   para.
 - Os eventos (desde a 0.10.0) ficam embaixo do rodapé, contando a cada segundo pelo relógio do
   PC, no horário de Brasília (servidor SA). Recolhidos, numa linha, os próximos que couberem
-  inteiros, na ordem em que acontecem: `Shugo 41:20 · Invasão 11:20 · Kaira 1:27:19 · ...`. O
-  clique na linha mostra todos, um por linha, com o início (`21:00`, ou `qui 21:00` se não for
-  hoje) e a contagem, e esconde de novo; a escolha fica na config. Aberto, o evento vai para o
-  começo, com `fecha em 02:41` em verde (e a bolinha verde na lista); faltando até 10 min, a
-  contagem fica dourada.
-  O mouse sobre cada um explica a regra. São 9: Fenda Espaço-Temporal (a cada 3 h, às 02h, 05h,
-  ..., 23h; portal aberto 10 min), Festival Shugo (toda hora cheia; 3 min para entrar),
-  Invasão Dimensional (toda hora, aos 30 min; 3 min para entrar), Vigia Kaira (a cada 3 h, às
-  01h, 04h, ..., 22h; 30 min; horário não confirmado), Cerco de Artefato (segunda, quinta e
-  sábado às 21h), Chefes do Cerco (os mesmos dias, às 21h30), General Guardião Nahma (sexta e
-  domingo às 21h) e os resets diário (04h) e semanal (quarta às 04h). A NCSoft não publicou os
-  horários do SA: a tabela é a do shugo.gg, conferida com metabot.gg e aion2rifttimer.com em
-  2026-10-06 (`crates/overlay/src/eventos.rs`). Os nomes são traduções nossas, não os do
-  cliente. A Arena of Tactics ficou de fora: só o metabot.gg traz o horário dela.
+  inteiros, na ordem em que acontecem: o ícone de cada um e a contagem (`41:20`, `1:27:19`),
+  e o nome nos resets, que não têm ícone; o mouse sobre a linha diz o nome de cada um. O clique
+  na linha mostra todos, um por linha, com o ícone, o nome, o início (`21:00`, ou `qui 21:00`
+  se não for hoje) e a contagem, e esconde de novo; a escolha fica na config. Aberto, o evento
+  vai para o começo, com `fecha em 02:41` em verde (e a bolinha verde na lista); faltando até
+  10 min, a contagem fica dourada. O mouse sobre cada linha da lista explica a regra. Nas noites
+  de cerco, perto das 21h e das 21h30, com dois eventos abertos, a linha recolhida pode ficar sem
+  espaço para a Fenda, que continua na lista. São 9: Fenda Espaço-Temporal (a cada 3 h, às 02h, 05h,
+  ..., 23h; portal aberto 10 min), Shugo Festa (toda hora cheia; 3 min para entrar), Invasão
+  Dimensional (toda hora, aos 30 min; 3 min para entrar), Vigilante Kairah (a cada 3 h, às 01h,
+  04h, ..., 22h; 30 min; horário não confirmado), Cerco de Artefato (segunda, quinta e sábado às
+  21h), Chefes do Cerco (os mesmos dias, às 21h30), Senhor Guardião Nahma (sexta e domingo às
+  21h) e os resets diário (04h) e semanal (quarta às 04h). A NCSoft não publicou os horários do
+  SA: a tabela é a do shugo.gg, conferida com metabot.gg e aion2rifttimer.com em 2026-10-06
+  (`crates/overlay/src/eventos.rs`). A Arena of Tactics ficou de fora: só o metabot.gg traz o
+  horário dela.
+- Nomes e ícones dos eventos: Vigilante Kairah e Senhor Guardião Nahma são os nomes dos NPCs em
+  português no questlog; Shugo Festa vem dos itens dela (Chave de Recompensa da Shugo Festa) e a
+  Fenda, do Bilhete de Entrada da Fenda Espaço-Temporal. Invasão Dimensional, Cerco de Artefato,
+  Chefes do Cerco e os resets são traduções nossas. Os ícones vêm da CDN do jogo, como os
+  emblemas das classes, e ficam no cache dos ícones: o bilhete da Fenda, o retrato do Shugo
+  Gerente do Festival, o Baú de Mérito Dimensional (Invasão), os retratos da Kairah, do Executor
+  Argo (Chefes do Cerco) e do Nahma, recortados no rosto para caber em 16 px, e a Prova de Herói:
+  Reshanta Inferior (Cerco). Os resets mostram ↻. Enquanto o ícone não baixou, aparece só a
+  moldura.
 - O dano é o número que o jogo mostra ao bater (o campo do pacote, sem conversão). Até a
   0.5.1 ele era multiplicado por 18,82 (HP do mob, ver PROTOCOLO.md §6) e não batia com a tela.
   Até a 0.7.1, golpe de mob com a flag 0x20 saía com dano 10.000 no Tank (27 golpes no world

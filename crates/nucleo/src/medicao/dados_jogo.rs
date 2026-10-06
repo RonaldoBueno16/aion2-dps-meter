@@ -119,6 +119,11 @@ pub fn icone_odyle() -> Option<PathBuf> {
     catalogo()?.caminho_icone(Some("Icon_Item_Odenergy_A_001"))
 }
 
+/// Ícone da CDN do jogo pelo nome (os dos eventos do overlay). None enquanto não baixou.
+pub fn icone_do_jogo(nome: &str) -> Option<PathBuf> {
+    catalogo()?.caminho_icone(Some(nome))
+}
+
 /// Agrupa variantes da mesma skill (14030010, 14030020... viram 14030000).
 pub fn skill_base(skill: u32) -> u32 {
     if (10_000_000..20_000_000).contains(&skill) { skill / 10_000 * 10_000 } else { skill }
