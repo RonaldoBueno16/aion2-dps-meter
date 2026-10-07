@@ -157,7 +157,7 @@ pub(super) fn separar(itens: &[ItemDrop]) -> Secoes<'_> {
 }
 
 impl Overlay {
-    /// O painel ao lado da janela. `limite`: altura máxima, em pontos (a da área do jogo).
+    /// O painel ao lado da janela. `limite`: altura máxima, em pontos (a da área do jogo ou do monitor).
     pub(super) fn painel_drops(&mut self, ui: &mut Ui, limite: f32) {
         let Some(painel) = &self.painel else { return };
         let codigo = painel.codigo;
