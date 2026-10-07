@@ -187,7 +187,8 @@ sem byte sobrando). Vem para mobs e para jogadores.
   hora limite ficou 300,3 s depois da hora do pacote no relógio do PC; ele saiu de combate (`00
   00`) 10 s depois da primeira, e a segunda chegou com um prazo novo. Nas outras capturas,
   inclusive os 777 do world boss de 2026-10-03, nenhum `0x8D21` tem o prazo. Leitura: tempo para
-  matar o chefe, que o jogo mostra contando (hipótese até conferir com o relógio da tela).
+  matar o chefe, que o jogo mostra contando: conferido no jogo em 2026-10-07, o "mate em" do
+  overlay bateu com o relógio da tela.
 
 - Mob: o 0 chega no instante da morte em 73 de 84 casos (no máximo 0,06 s depois do último
   golpe); os outros vêm em pares 1 → 0 sem golpe nenhum (aggro que resetou, hipótese). O 1
