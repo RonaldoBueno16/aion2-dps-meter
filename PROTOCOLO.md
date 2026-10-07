@@ -58,7 +58,8 @@ eles são preenchimento). Na captura, o bloco descomprimiu com o tamanho exato d
 | `0x3633` | Seu personagem (id, nome, level, power), só no login | confirmado (seção 7b) |
 | `0x561C` | Power mudou: `[varint entidade][u32 power]...` (o `0x561D` traz o mesmo valor duas vezes, sem entidade) | confirmado uma vez com o seu personagem (seção 7b) |
 | `0x3645` | Outro jogador entrando no campo de visão (id, nome, level, power, equipamento; 1.300 a 1.500 bytes) | confirmado (seção 7b) |
-| `0x8D21` | Estado de combate de entidade (mob ou jogador) | confirmado (seção 5b) |
+| `0x8D21` | Estado de combate de entidade (mob ou jogador); num chefe, com prazo para matar | estado confirmado; prazo visto num chefe só (seção 5b) |
+| `0xE005` | Barra de um chefe: `[varint entidade][03 01][u32 máximo][u32 atual][02]`; no chefe de 2026-10-06, 1200 → 16 em 45 s, caindo aos saltos junto com os golpes, e `00 03 02` no fim (barra quebrada, hipótese) | lido numa captura, não usado |
 | `0x382A`, `0x382B`, `0x382C` | Buff novo, renovado e removido | confirmado (seção 5c) |
 | `0x382D` | Ligado a buffs (1.909 de 1.962 no world boss) | não fechou (seção 5c) |
 | `0x610B` | Tickets de conteúdo no login, entre eles a Energia Odyle | confirmado (seção 7d) |
@@ -173,12 +174,21 @@ pacote de troca de alvo do mob também não foi achado.
 
 ```
 varint  entidade
-varint  0          (nos 901 pacotes vistos)
+varint  com prazo  (0 nos 901 pacotes de 2026-10-05; 1 no chefe de 2026-10-06)
 varint  estado     (1 = entrou em combate, 0 = saiu)
+u64     prazo      (hora limite em ms Unix; só com "com prazo" = 1)
 ```
 
 Pista do medidor do TK, conferida em 2026-10-05 nas 6 capturas do cliente global (901 de 901
 sem byte sobrando). Vem para mobs e para jogadores.
+
+- Prazo (2026-10-06, `captura-2026-10-06-tempo-boss`): o chefe 35518 (spawn fora da captura,
+  então sem o código do NPC) mandou `01 01` + u64 duas vezes, ao entrar em combate. Nas duas, a
+  hora limite ficou 300,3 s depois da hora do pacote no relógio do PC; ele saiu de combate (`00
+  00`) 10 s depois da primeira, e a segunda chegou com um prazo novo. Nas outras capturas,
+  inclusive os 777 do world boss de 2026-10-03, nenhum `0x8D21` tem o prazo. Leitura: tempo para
+  matar o chefe, que o jogo mostra contando: conferido no jogo em 2026-10-07, o "mate em" do
+  overlay bateu com o relógio da tela.
 
 - Mob: o 0 chega no instante da morte em 73 de 84 casos (no máximo 0,06 s depois do último
   golpe); os outros vêm em pares 1 → 0 sem golpe nenhum (aggro que resetou, hipótese). O 1

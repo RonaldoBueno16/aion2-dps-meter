@@ -125,6 +125,8 @@ pub struct Alvo {
     /// misturar com o dano: a relação entre os dois muda de mob para mob).
     pub derrota_em: Option<f64>,
     pub morto: bool,
+    /// Hora limite para matá-lo (0x8D21), na hora do Windows; None sem prazo ou com ele morto.
+    pub prazo: Option<Hora>,
     /// Dano dos jogadores nele nesta luta.
     pub dano: f64,
     /// O seu dano nele nesta luta.
@@ -179,6 +181,9 @@ const HP_MINIMO_PARA_ESTIMAR: i64 = 5 * TICKS_POR_SEGUNDO;
 /// estava na tela quando o Axon abriu não teve o pacote de criação). No evento de 2026-10-03, os dois
 /// world bosses apanharam de 784 e 89 ids; o mob comum mais batido, de 13; nas outras capturas, até 2.
 const ATACANTES_DE_CHEFE: usize = 30;
+
+/// Prazo para matar a 1 h ou mais é descartado (o visto foi de 300 s).
+const PRAZO_MAXIMO: i64 = 3600 * TICKS_POR_SEGUNDO;
 
 /// "Entrou em combate" até esse tempo depois da morte é ignorado.
 const T1_DEPOIS_DA_MORTE: i64 = 5 * TICKS_POR_SEGUNDO;
@@ -310,6 +315,8 @@ pub struct Medidor {
     hp_maximo_de: HashMap<u32, u64>,
     /// Leituras de HP dos últimos `JANELA_HP`, por mob, para o "derrota em".
     hp_recente: HashMap<u32, VecDeque<(Hora, u64)>>,
+    /// Hora limite para matar cada mob (0x8D21 com prazo), até ele sair de combate (a morte também tira).
+    prazo_de: HashMap<u32, Hora>,
     /// Skill de mob → quantos golpes cada NPC (código) deu com ela: o golpe recebido ganha o nome
     /// do mob que mais a usou (nenhuma base pública tem nome de skill de mob). Nas capturas, 1 de 29
     /// skills de mob veio de dois mobs. Vale entre conexões: o código não muda.
@@ -369,6 +376,7 @@ impl Default for Medidor {
             hp_de: HashMap::new(),
             hp_maximo_de: HashMap::new(),
             hp_recente: HashMap::new(),
+            prazo_de: HashMap::new(),
             npc_da_skill: HashMap::new(),
             nomes: IndexMap::new(),
             niveis: HashMap::new(),
@@ -496,6 +504,7 @@ impl Medidor {
         self.hp_de.remove(&entidade);
         self.hp_maximo_de.remove(&entidade);
         self.hp_recente.remove(&entidade);
+        self.prazo_de.remove(&entidade);
         self.mortos.remove(&entidade);
     }
 
@@ -686,6 +695,22 @@ impl Medidor {
     /// continua em combate (no mob, o 0 chegou no instante da morte em 73 de 84 casos). O estado de
     /// jogador não entra: o seu caía 1,5 a 3 s depois de cada golpe e quebrou em 4 pedaços a luta
     /// contínua do world boss de 2026-10-03.
+    /// Prazo para matar o mob, que o 0x8D21 traz ao ele entrar em combate (visto num chefe só: 300 s
+    /// depois da entrada). Comparado depois com a hora do Windows, como o renascer dos chefes de
+    /// campo: o relógio do PC precisa estar certo. Mob morto, prazo vencido ou a mais de
+    /// `PRAZO_MAXIMO` ficam de fora.
+    pub fn registrar_prazo(&mut self, entidade: u32, prazo_ms: u64, hora: Hora) {
+        if self.mortos.contains_key(&entidade) {
+            return;
+        }
+        let Some(prazo) = i64::try_from(prazo_ms).ok().and_then(|ms| ms.checked_mul(TICKS_POR_SEGUNDO / 1000)) else {
+            return;
+        };
+        if prazo > hora && prazo - hora < PRAZO_MAXIMO {
+            self.prazo_de.insert(entidade, prazo);
+        }
+    }
+
     pub fn registrar_estado_combate(&mut self, entidade: u32, em_combate: bool, hora: Hora) {
         if self.jogadores_conhecidos.contains(&entidade) {
             return;
@@ -704,6 +729,7 @@ impl Medidor {
             return;
         }
         self.fora_de_combate.insert(entidade);
+        self.prazo_de.remove(&entidade);
         if !self.fim_pelo_combate
             || !self.em_luta
             || self.encerrada_em.is_some()
@@ -912,6 +938,7 @@ impl Medidor {
         self.hp_de.clear();
         self.hp_maximo_de.clear();
         self.hp_recente.clear();
+        self.prazo_de.clear();
         self.meu_id = None; // a memória, o seu nome e o histórico continuam: valem para a conexão nova
     }
 
@@ -1013,6 +1040,7 @@ impl Medidor {
             hp_maximo: self.hp_maximo_de.get(&entidade).copied(),
             derrota_em: self.derrota_em(entidade).filter(|_| !self.mortos.contains_key(&entidade)),
             morto: self.mortos.contains_key(&entidade),
+            prazo: self.prazo_de.get(&entidade).copied(),
             dano: self.dano_no_mob(entidade),
             meu_dano,
         })

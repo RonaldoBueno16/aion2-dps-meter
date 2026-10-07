@@ -653,6 +653,11 @@ impl Overlay {
             let falta = minutos_e_segundos((segundos * TICKS_POR_SEGUNDO as f64) as i64);
             trecho(&mut detalhe, &format!("{separador}derrota em {falta}"), 10.0, false, branco(0xCC));
         }
+        if let Some(falta) = falta_para_o_prazo(alvo) {
+            let separador = if detalhe.sections.is_empty() { "" } else { "  ·  " };
+            let prazo = format!("{separador}mate em {}", minutos_e_segundos(falta));
+            trecho(&mut detalhe, &prazo, 10.0, true, cor_do_prazo(alvo, falta));
+        }
         let detalhe = (!detalhe.sections.is_empty()).then(|| montar(ui, detalhe));
 
         let x = rect.min.x + 48.0;
@@ -1378,6 +1383,10 @@ impl Overlay {
                         let falta = minutos_e_segundos((segundos * TICKS_POR_SEGUNDO as f64) as i64);
                         trecho(&mut job, &format!("derrota em {falta}  "), 10.0, false, branco(0xCC));
                     }
+                    if let Some(falta) = falta_para_o_prazo(alvo) {
+                        let prazo = format!("mate em {}  ", minutos_e_segundos(falta));
+                        trecho(&mut job, &prazo, 10.0, true, cor_do_prazo(alvo, falta));
+                    }
                     trecho(&mut job, &nome_do_alvo(alvo), 12.0, true, texto());
                 }
                 None if self.fluxo.is_none() => trecho(&mut job, self.procurando(), 10.0, false, branco(0x99)),
@@ -1766,6 +1775,17 @@ fn sinal_de_ping(ui: &Ui, ping: i64, rect: Rect, fim: f32, meio: f32) -> f32 {
 }
 
 /// Nome do questlog; sem ele, o código do NPC ou o id da entidade.
+/// Quanto falta (ticks) para o prazo de matar o alvo, enquanto ele não venceu.
+fn falta_para_o_prazo(alvo: &Alvo) -> Option<i64> {
+    alvo.prazo.map(|prazo| prazo.saturating_sub(nucleo::agora())).filter(|falta| *falta > 0)
+}
+
+/// Vermelho quando o "derrota em" passa do prazo: no ritmo atual, não dá tempo.
+fn cor_do_prazo(alvo: &Alvo, falta: i64) -> Color32 {
+    let nao_da = alvo.derrota_em.is_some_and(|segundos| segundos * TICKS_POR_SEGUNDO as f64 > falta as f64);
+    if nao_da { visual::VERMELHO_CLARO } else { visual::DOURADO }
+}
+
 fn nome_do_alvo(alvo: &Alvo) -> String {
     if !alvo.nome.is_empty() {
         alvo.nome.clone()
@@ -2182,17 +2202,20 @@ fn decodificar(leitor: impl std::io::BufRead + std::io::Seek) -> Option<egui::Co
     Some(egui::ColorImage::from_rgba_unmultiplied([info.width as usize, info.height as usize], &rgba))
 }
 
+/// As cores de classe do Abyss DPS Meter, o medidor que o pessoal usa (o jogo não publica uma
+/// paleta): a variante clara, que ele usa no texto; a barra aqui escurece a mesma cor. Ele não tem
+/// cor para o Elementalist e usa o ciano padrão.
 fn cor_da_classe(classe: &str) -> Color32 {
     match classe {
-        "Gladiator" => Color32::from_rgb(0xC7, 0x9C, 0x6E),
-        "Templar" => Color32::from_rgb(0xF5, 0x8C, 0xBA),
-        "Assassin" => Color32::from_rgb(0xFF, 0xF5, 0x69),
-        "Ranger" => Color32::from_rgb(0xAB, 0xD4, 0x73),
-        "Sorcerer" => Color32::from_rgb(0x69, 0xCC, 0xF0),
-        "Elementalist" | "Spirit" => Color32::from_rgb(0x94, 0x82, 0xC9),
-        "Cleric" => Color32::from_rgb(0xE8, 0xE8, 0xE8),
-        "Chanter" => Color32::from_rgb(0x3E, 0x9B, 0xFF),
-        "Brawler" => Color32::from_rgb(0xFF, 0x7D, 0x0A),
+        "Gladiator" => Color32::from_rgb(0xC0, 0x7A, 0xE0),
+        "Templar" => Color32::from_rgb(0xF5, 0xA4, 0x5C),
+        "Assassin" => Color32::from_rgb(0x4E, 0xE0, 0x8A),
+        "Ranger" => Color32::from_rgb(0xF0, 0xC9, 0x5C),
+        "Sorcerer" => Color32::from_rgb(0x5D, 0xB6, 0xEC),
+        "Elementalist" | "Spirit" => Color32::from_rgb(0x7D, 0xD8, 0xD8),
+        "Cleric" => Color32::from_rgb(0x5C, 0xE8, 0xD0),
+        "Chanter" => Color32::from_rgb(0xF7, 0xDC, 0x6F),
+        "Brawler" => Color32::from_rgb(0xE0, 0x70, 0x5C),
         _ => Color32::from_rgb(0xA0, 0xA0, 0xA0),
     }
 }
@@ -2321,6 +2344,19 @@ fn compacto(valor: f64) -> String {
 #[cfg(test)]
 mod testes {
     use super::*;
+
+    #[test]
+    fn prazo_fica_vermelho_quando_a_derrota_estimada_passa_dele() {
+        let falta = 300 * TICKS_POR_SEGUNDO;
+        let alvo = |derrota_em| Alvo { derrota_em, ..Default::default() };
+        assert_eq!(cor_do_prazo(&alvo(Some(420.0)), falta), visual::VERMELHO_CLARO);
+        assert_eq!(cor_do_prazo(&alvo(Some(180.0)), falta), visual::DOURADO);
+        assert_eq!(cor_do_prazo(&alvo(None), falta), visual::DOURADO);
+        // Prazo vencido some; o que ainda falta aparece.
+        let com_prazo = |prazo| Alvo { prazo: Some(prazo), ..Default::default() };
+        assert_eq!(falta_para_o_prazo(&com_prazo(nucleo::agora() - TICKS_POR_SEGUNDO)), None);
+        assert!(falta_para_o_prazo(&com_prazo(nucleo::agora() + falta)).is_some_and(|f| f > 299 * TICKS_POR_SEGUNDO));
+    }
 
     #[test]
     fn lista_mostra_os_10_primeiros_e_voce_abaixo_deles() {

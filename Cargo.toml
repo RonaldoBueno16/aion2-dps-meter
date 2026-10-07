@@ -4,7 +4,7 @@ members = ["crates/nucleo", "crates/replay", "crates/overlay"]
 
 [workspace.package]
 # SemVer. A release usa a versÃ£o da tag (v0.2.0 â†’ 0.2.0); manter igual Ã  tag ao lanÃ§ar.
-version = "0.12.1"
+version = "0.13.1"
 edition = "2024"
 license = "MIT"
 publish = false

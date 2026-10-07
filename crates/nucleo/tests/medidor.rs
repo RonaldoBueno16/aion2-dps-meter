@@ -380,6 +380,35 @@ fn boss_que_volta_ao_combate_depois_de_morrer_e_mob_sumido_nao_seguram_a_luta() 
 }
 
 #[test]
+fn prazo_para_matar_vale_ate_o_chefe_sair_de_combate_ou_morrer() {
+    const CHEFE: u32 = 35518;
+    let em_ms = |hora: i64| (hora / 10_000) as u64;
+    let mut m = Medidor::default();
+    m.inatividade = i64::MAX;
+    m.fim_pelo_combate = false;
+    m.registrar(golpe_em(CHEFE, 11174, 14340000, 100), T0);
+    m.registrar_estado_combate(CHEFE, true, T0);
+    m.registrar_prazo(CHEFE, em_ms(T0 + segundos(300.0)), T0);
+    assert_eq!(m.obter_placar().alvo.and_then(|a| a.prazo), Some(T0 + segundos(300.0)));
+
+    // Saiu de combate (largou a luta): o prazo some até o próximo.
+    m.registrar_estado_combate(CHEFE, false, T0 + segundos(10.0));
+    assert_eq!(m.obter_placar().alvo.and_then(|a| a.prazo), None);
+
+    // Prazo vencido ou absurdo não entra.
+    m.registrar_prazo(CHEFE, em_ms(T0 + segundos(5.0)), T0 + segundos(11.0));
+    m.registrar_prazo(CHEFE, u64::MAX, T0 + segundos(11.0));
+    m.registrar_prazo(CHEFE, em_ms(T0 + segundos(7200.0)), T0 + segundos(11.0));
+    assert_eq!(m.obter_placar().alvo.and_then(|a| a.prazo), None);
+
+    m.registrar_estado_combate(CHEFE, true, T0 + segundos(60.0));
+    m.registrar_prazo(CHEFE, em_ms(T0 + segundos(360.0)), T0 + segundos(60.0));
+    assert_eq!(m.obter_placar().alvo.and_then(|a| a.prazo), Some(T0 + segundos(360.0)));
+    m.registrar_morte(CHEFE, 11174, 14020000, 2401, "Yoshi", T0 + segundos(90.0));
+    assert_eq!(m.obter_placar().alvo.and_then(|a| a.prazo), None);
+}
+
+#[test]
 fn mob_que_volta_ao_combate_mantem_a_luta() {
     let mut m = Medidor::default();
     m.registrar(golpe(11174, 14340000, 100), T0);
