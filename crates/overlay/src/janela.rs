@@ -653,6 +653,11 @@ impl Overlay {
             let falta = minutos_e_segundos((segundos * TICKS_POR_SEGUNDO as f64) as i64);
             trecho(&mut detalhe, &format!("{separador}derrota em {falta}"), 10.0, false, branco(0xCC));
         }
+        if let Some(falta) = falta_para_o_prazo(alvo) {
+            let separador = if detalhe.sections.is_empty() { "" } else { "  ·  " };
+            let prazo = format!("{separador}mate em {}", minutos_e_segundos(falta));
+            trecho(&mut detalhe, &prazo, 10.0, true, cor_do_prazo(alvo, falta));
+        }
         let detalhe = (!detalhe.sections.is_empty()).then(|| montar(ui, detalhe));
 
         let x = rect.min.x + 48.0;
@@ -1378,6 +1383,10 @@ impl Overlay {
                         let falta = minutos_e_segundos((segundos * TICKS_POR_SEGUNDO as f64) as i64);
                         trecho(&mut job, &format!("derrota em {falta}  "), 10.0, false, branco(0xCC));
                     }
+                    if let Some(falta) = falta_para_o_prazo(alvo) {
+                        let prazo = format!("mate em {}  ", minutos_e_segundos(falta));
+                        trecho(&mut job, &prazo, 10.0, true, cor_do_prazo(alvo, falta));
+                    }
                     trecho(&mut job, &nome_do_alvo(alvo), 12.0, true, texto());
                 }
                 None if self.fluxo.is_none() => trecho(&mut job, self.procurando(), 10.0, false, branco(0x99)),
@@ -1766,6 +1775,17 @@ fn sinal_de_ping(ui: &Ui, ping: i64, rect: Rect, fim: f32, meio: f32) -> f32 {
 }
 
 /// Nome do questlog; sem ele, o código do NPC ou o id da entidade.
+/// Quanto falta (ticks) para o prazo de matar o alvo, enquanto ele não venceu.
+fn falta_para_o_prazo(alvo: &Alvo) -> Option<i64> {
+    alvo.prazo.map(|prazo| prazo.saturating_sub(nucleo::agora())).filter(|falta| *falta > 0)
+}
+
+/// Vermelho quando o "derrota em" passa do prazo: no ritmo atual, não dá tempo.
+fn cor_do_prazo(alvo: &Alvo, falta: i64) -> Color32 {
+    let nao_da = alvo.derrota_em.is_some_and(|segundos| segundos * TICKS_POR_SEGUNDO as f64 > falta as f64);
+    if nao_da { visual::VERMELHO_CLARO } else { visual::DOURADO }
+}
+
 fn nome_do_alvo(alvo: &Alvo) -> String {
     if !alvo.nome.is_empty() {
         alvo.nome.clone()
@@ -2321,6 +2341,19 @@ fn compacto(valor: f64) -> String {
 #[cfg(test)]
 mod testes {
     use super::*;
+
+    #[test]
+    fn prazo_fica_vermelho_quando_a_derrota_estimada_passa_dele() {
+        let falta = 300 * TICKS_POR_SEGUNDO;
+        let alvo = |derrota_em| Alvo { derrota_em, ..Default::default() };
+        assert_eq!(cor_do_prazo(&alvo(Some(420.0)), falta), visual::VERMELHO_CLARO);
+        assert_eq!(cor_do_prazo(&alvo(Some(180.0)), falta), visual::DOURADO);
+        assert_eq!(cor_do_prazo(&alvo(None), falta), visual::DOURADO);
+        // Prazo vencido some; o que ainda falta aparece.
+        let com_prazo = |prazo| Alvo { prazo: Some(prazo), ..Default::default() };
+        assert_eq!(falta_para_o_prazo(&com_prazo(nucleo::agora() - TICKS_POR_SEGUNDO)), None);
+        assert!(falta_para_o_prazo(&com_prazo(nucleo::agora() + falta)).is_some_and(|f| f > 299 * TICKS_POR_SEGUNDO));
+    }
 
     #[test]
     fn lista_mostra_os_10_primeiros_e_voce_abaixo_deles() {

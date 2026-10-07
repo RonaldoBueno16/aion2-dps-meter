@@ -128,8 +128,15 @@ fn golpe_pelas_costas() {
 
 #[test]
 fn estado_de_combate() {
-    assert_eq!(combate::estado_combate(&hex("0B218D97DE010000")), Some((28439, false)));
-    assert_eq!(combate::estado_combate(&hex("0A218DE1590001")), Some((11489, true)));
+    let estado = |entidade, em_combate, prazo_ms| Some(combate::EstadoCombate { entidade, em_combate, prazo_ms });
+    assert_eq!(combate::estado_combate(&hex("0B218D97DE010000")), estado(28439, false, None));
+    assert_eq!(combate::estado_combate(&hex("0A218DE1590001")), estado(11489, true, None));
+    // Chefe de 2026-10-06: entrou em combate com a hora limite 300,3 s depois do pacote (23:38:32).
+    assert_eq!(
+        combate::estado_combate(&hex("13218DBE95020101A8103A14A1010000")),
+        estado(35518, true, Some(1_791_340_712_104))
+    );
+    assert_eq!(combate::estado_combate(&hex("0B218DBE95020000")), estado(35518, false, None));
 }
 
 #[test]

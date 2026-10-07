@@ -69,6 +69,14 @@ cargo build --release -p overlay
   mostra também o % de HP, uma barra fina de HP no pé e "derrota em", quanto falta para o HP
   zerar na velocidade em que ele caiu nos últimos 30 s (aparece com 5 s de leituras e o HP
   caindo).
+- **Mate em** (desde a 0.13.0): quando o servidor manda um prazo para matar o alvo junto com a
+  entrada dele em combate (`0x8D21`, PROTOCOLO.md §5b), o card e a barra compacta mostram
+  "mate em 4:32", contando até o prazo. Fica vermelho quando o "derrota em" passa do que
+  falta (no ritmo atual, não dá tempo); some quando ele sai de combate ou morre. Visto num
+  chefe só, em 2026-10-06: duas entradas em combate, cada uma com o prazo 300 s à frente. O
+  prazo vem na hora do servidor e é comparado com a do Windows, como o renascer dos chefes de
+  campo: com o relógio do PC errado, o tempo sai errado na mesma medida (na captura, os dois
+  bateram com 0,3 s de diferença).
 - **Guerra com chefe** (desde a 0.8.0): quando um mob da luta é chefe, a aba DPS conta só o
   dano no chefe, e o tempo conta do primeiro golpe nele; o selo "⚔ só no chefe" aparece ao lado
   das abas. Num evento de world boss, os golpes nos mobs em volta não inflam o placar. Sem
@@ -146,7 +154,7 @@ cargo build --release -p overlay
   com posição, nome, DPS e %, para colar no chat do jogo. Sai numa linha só, ou um jogador por
   linha com "Resumo em linhas". O rodapé mostra "Resumo copiado" por 3 s.
 - **Barra compacta** (desde a 0.8.0), ▭ no cabeçalho: o medidor vira uma linha com o % de HP
-  e o "derrota em" do alvo, o nome dele, o seu DPS, o do grupo (dano total da aba DPS dividido
+  e o "derrota em" do alvo (e o "mate em", quando há prazo), o nome dele, o seu DPS, o do grupo (dano total da aba DPS dividido
   pelo tempo da luta) e o ping. O ▭ da barra volta ao medidor completo. Fica salva no
   `config.json`.
 - **Bosses** (desde a 0.11.0), ♛ no cabeçalho: os chefes de campo da região em que você está,

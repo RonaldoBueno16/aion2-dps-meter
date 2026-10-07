@@ -239,8 +239,11 @@ fn ao_pacote(medidor: &mut Medidor, pacote: &[u8], hora: Hora) {
             }
         }
         opcodes::ESTADO_COMBATE => {
-            if let Some((entidade, em_combate)) = combate::estado_combate(pacote) {
-                medidor.registrar_estado_combate(entidade, em_combate, hora);
+            if let Some(estado) = combate::estado_combate(pacote) {
+                medidor.registrar_estado_combate(estado.entidade, estado.em_combate, hora);
+                if let Some(prazo_ms) = estado.prazo_ms.filter(|_| estado.em_combate) {
+                    medidor.registrar_prazo(estado.entidade, prazo_ms, hora);
+                }
             }
         }
         opcodes::BUFF_NOVO | opcodes::BUFF_RENOVADO => {

@@ -100,20 +100,35 @@ pub fn hp_restante(pacote: &[u8]) -> Option<(u32, u64)> {
     ler().ok()
 }
 
-/// Estado de combate de uma entidade (mob ou jogador), opcode 0x8D21:
-/// [varint entidade][varint 0][varint 1 = entrou em combate, 0 = saiu]. No mob, o 0 chega no
-/// instante da morte ou quando ele larga a luta (PROTOCOLO.md §5b). Devolve (entidade, em combate).
-pub fn estado_combate(pacote: &[u8]) -> Option<(u32, bool)> {
-    let ler = || -> Resultado<(u32, u64)> {
+/// Estado de combate de uma entidade (mob ou jogador), opcode 0x8D21.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EstadoCombate {
+    pub entidade: u32,
+    pub em_combate: bool,
+    /// Hora limite para matar, em ms Unix, como o servidor manda. Só num chefe até agora.
+    pub prazo_ms: Option<u64>,
+}
+
+/// 0x8D21: [varint entidade][varint com prazo][varint 1 = entrou em combate, 0 = saiu] e, com
+/// prazo 1, [u64 hora limite em ms Unix]. No mob, o 0 chega no instante da morte ou quando ele
+/// larga a luta (PROTOCOLO.md §5b).
+pub fn estado_combate(pacote: &[u8]) -> Option<EstadoCombate> {
+    let ler = || -> Resultado<(u32, u64, Option<u64>)> {
         let mut r = abrir_corpo(pacote)?;
         let entidade = r.ler_varint()? as u32;
-        r.ler_varint()?; // 0 nos 901 pacotes vistos
-        Ok((entidade, r.ler_varint()?))
+        let com_prazo = r.ler_varint()? == 1;
+        let estado = r.ler_varint()?;
+        let prazo_ms = if com_prazo && r.restante() >= 8 {
+            Some(u64::from(r.ler_u32()?) | u64::from(r.ler_u32()?) << 32)
+        } else {
+            None
+        };
+        Ok((entidade, estado, prazo_ms))
     };
     ler()
         .ok()
-        .filter(|&(entidade, estado)| entidade > 0 && estado <= 1)
-        .map(|(entidade, estado)| (entidade, estado == 1))
+        .filter(|&(entidade, estado, _)| entidade > 0 && estado <= 1)
+        .map(|(entidade, estado, prazo_ms)| EstadoCombate { entidade, em_combate: estado == 1, prazo_ms })
 }
 
 /// Buff aplicado (0x382A) ou renovado (0x382B, cerca de 1 vez por segundo enquanto dura).
