@@ -1,5 +1,5 @@
-//! A janela do AION 2: os atalhos só valem com ela em primeiro plano, e o recolher e o painel de
-//! drops usam a área dela quando o overlay está em cima.
+//! A janela do AION 2: o overlay não sai de cima dela, e os atalhos só valem com ela em primeiro
+//! plano.
 //! Achada pelo gerenciador de janelas (classe UnrealWindow, título "AION2"): só título, classe e
 //! retângulo, sem abrir handle no processo do jogo.
 
@@ -48,6 +48,20 @@ pub fn area() -> Option<[i32; 4]> {
         .then(|| [canto.x, canto.y, canto.x + cliente.right, canto.y + cliente.bottom])
 }
 
+/// Canto (x, y) mais perto que deixa uma janela de `largura` × `altura` dentro do jogo. Sem o
+/// jogo, ou fora do modo que segue o jogo, devolve o canto pedido.
+pub fn dentro(x: i32, y: i32, largura: i32, altura: i32) -> (i32, i32) {
+    match area().filter(|_| seguindo()) {
+        Some(area) => prender(x, y, largura, altura, area),
+        None => (x, y),
+    }
+}
+
+/// min antes de max: janela maior que o jogo fica presa pelo canto de cima à esquerda.
+fn prender(x: i32, y: i32, largura: i32, altura: i32, [esquerda, topo, direita, base]: [i32; 4]) -> (i32, i32) {
+    (x.min(direita - largura).max(esquerda), y.min(base - altura).max(topo))
+}
+
 /// HWND do jogo (0 = não está aberto). Guardado enquanto a janela existir.
 fn janela() -> isize {
     let guardada = JOGO.load(Ordering::Relaxed);
@@ -81,6 +95,15 @@ unsafe extern "system" fn conferir(janela: HWND, achada: LPARAM) -> i32 {
 #[cfg(test)]
 mod testes {
     use super::*;
+
+    #[test]
+    fn janela_fica_dentro_da_area_do_jogo() {
+        let jogo = [1920, 0, 3840, 1080]; // jogo no segundo monitor
+        assert_eq!(prender(40, 220, 470, 135, jogo), (1920, 220)); // aberta no primeiro monitor
+        assert_eq!(prender(3700, 1000, 470, 135, jogo), (3370, 945)); // passou da borda de baixo à direita
+        assert_eq!(prender(2000, 300, 470, 135, jogo), (2000, 300)); // já dentro: não mexe
+        assert_eq!(prender(2000, 300, 2500, 135, jogo), (1920, 300)); // maior que o jogo
+    }
 
     /// Precisa do AION 2 aberto: `cargo test -p overlay -- --ignored --nocapture`.
     #[test]

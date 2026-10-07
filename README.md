@@ -33,8 +33,8 @@ cargo build --release -p overlay
 - O jogo precisa estar em "tela cheia em janela" (borderless), que é o padrão atual.
 - O Axon fica como ícone na área de notificação (a seta ao lado do relógio), fora da barra
   de tarefas. Desde a 0.12.0 o overlay fica visível com o jogo na frente, atrás de outra
-  janela, minimizado ou fechado, e pode ser arrastado para fora do jogo (outro monitor
-  inclusive); para tirá-lo da tela, use o ícone (ou o atalho, com o jogo na frente). Clique
+  janela, minimizado ou fechado; para tirá-lo da tela, use o ícone (ou o atalho, com o jogo
+  na frente). Clique
   esquerdo no ícone liga ou desliga o overlay; o direito abre o menu (Mostrar/Esconder, "Clique
   atravessa o overlay" e "Fechar Axon"). Escondido, o medidor continua contando. O jogo é
   achado pela janela (classe `UnrealWindow`, título "AION2"), sem abrir handle no processo dele.
@@ -127,9 +127,8 @@ cargo build --release -p overlay
   cada nome, inclusive o seu, a cada 30 s e ao fechar. Com o overlay aberto no meio da
   sessão, você é reconhecido pelo nome no primeiro abate ou invocação. Valor lido na
   conexão atual sempre vence.
-- Arraste a janela pelo fundo, para qualquer lugar da tela. Recolher e o painel de drops usam a
-  área do jogo com a janela em cima dele e, fora dele, a do monitor onde ela está. Clique num
-  jogador para ver as skills. ↺ (Zerar) começa
+- Arraste a janela pelo fundo; ela não sai de cima do jogo (aberta em outro monitor, é
+  trazida para dentro). Clique num jogador para ver as skills. ↺ (Zerar) começa
   uma luta nova. Ela também acaba sozinha depois de 15 s sem dano (ajustável) e, desde a
   0.8.0, quando todos os mobs dela saem de combate (pacote 0x8D21 ou morte; mob sem golpe
   nem entrada em combate há 5 s não segura a luta) ou quando o último chefe dela morre, mesmo

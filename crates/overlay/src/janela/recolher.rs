@@ -1,7 +1,6 @@
-//! Recolher para a borda: a janela desliza até a borda mais próxima da área do jogo, quando está em
-//! cima dele (senão, da área de trabalho do monitor, sem a barra de tarefas), e vira uma aba
-//! "Overlay ›" colada nela; clicar na aba traz a janela de volta ao lugar de antes. Posições em
-//! pixels físicos, como o Windows devolve.
+//! Recolher para a borda: a janela desliza até a borda mais próxima da área do jogo (ou da área de
+//! trabalho do monitor, sem a barra de tarefas, no replay) e vira uma aba "Overlay ›" colada nela; clicar na aba traz a janela de
+//! volta ao lugar de antes. Posições em pixels físicos, como o Windows devolve.
 
 use std::time::{Duration, Instant};
 
@@ -151,12 +150,6 @@ pub fn altura_da_area(janela: isize) -> Option<i32> {
     area_de_trabalho(janela).map(|a| a.base - a.topo)
 }
 
-/// O meio da janela cai dentro da área.
-fn em_cima(r: Retangulo, area: Retangulo) -> bool {
-    let (x, y) = ((r.esquerda + r.direita) / 2, (r.topo + r.base) / 2);
-    (area.esquerda..area.direita).contains(&x) && (area.topo..area.base).contains(&y)
-}
-
 fn lado_de(r: Retangulo, area: Retangulo) -> Lado {
     if r.esquerda + r.direita < area.esquerda + area.direita { Lado::Esquerda } else { Lado::Direita }
 }
@@ -191,20 +184,16 @@ fn retangulo(janela: isize) -> Option<Retangulo> {
     (ok != 0).then_some(Retangulo { esquerda: r.left, topo: r.top, direita: r.right, base: r.bottom })
 }
 
-/// Área do jogo, quando o overlay segue o jogo e está em cima dele; senão (outro monitor, jogo
-/// minimizado), a área de trabalho (sem a barra de tarefas) do monitor onde a janela está.
+/// Área do jogo, quando o overlay segue o jogo; senão, a área de trabalho (sem a barra de
+/// tarefas) do monitor onde a janela está.
 fn area_de_trabalho(janela: isize) -> Option<Retangulo> {
     if janela == 0 {
         return None;
     }
     if jogo::seguindo()
         && let Some([esquerda, topo, direita, base]) = jogo::area()
-        && let Some(r) = retangulo(janela)
     {
-        let jogo = Retangulo { esquerda, topo, direita, base };
-        if em_cima(r, jogo) {
-            return Some(jogo);
-        }
+        return Some(Retangulo { esquerda, topo, direita, base });
     }
     unsafe {
         let monitor = MonitorFromWindow(janela as HWND, MONITOR_DEFAULTTONEAREST);
@@ -221,16 +210,6 @@ fn area_de_trabalho(janela: isize) -> Option<Retangulo> {
 #[cfg(test)]
 mod testes {
     use super::*;
-
-    #[test]
-    fn area_do_jogo_so_com_a_janela_em_cima_dele() {
-        let ret = |esquerda, topo, direita, base| Retangulo { esquerda, topo, direita, base };
-        let jogo = ret(1920, 0, 3840, 1080); // jogo no segundo monitor
-        assert!(em_cima(ret(2000, 300, 2470, 435), jogo));
-        assert!(!em_cima(ret(40, 220, 510, 355), jogo)); // arrastada para o primeiro monitor
-        assert!(em_cima(ret(1700, 300, 2170, 435), jogo)); // metade para fora: o meio ainda em cima
-        assert!(!em_cima(ret(1500, 300, 1970, 435), jogo)); // o meio já fora
-    }
 
     #[test]
     fn painel_abre_do_lado_que_cabe_e_a_janela_anda_o_que_falta() {

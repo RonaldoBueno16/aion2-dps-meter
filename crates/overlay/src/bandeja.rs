@@ -1,7 +1,7 @@
 //! Ícone na área de notificação (a seta ao lado do relógio) enquanto o Axon roda. Clique esquerdo
 //! liga ou desliga o overlay; clique direito abre o menu. Ligado, o overlay fica visível com o jogo
-//! na frente, atrás de outra janela, minimizado ou fechado, e onde for arrastado (outro monitor
-//! inclusive); escondido, o medidor continua contando.
+//! na frente, atrás de outra janela, minimizado ou fechado, sempre dentro da área dele; escondido,
+//! o medidor continua contando.
 //! Fica numa thread própria, com uma janela oculta para receber os cliques, o temporizador e os
 //! atalhos globais: com o overlay escondido, o egui para de desenhar e não teria como trazê-lo de
 //! volta. O RegisterHotKey só vale na thread da janela que recebe o WM_HOTKEY, por isso fica aqui.
@@ -11,17 +11,17 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey};
 use windows_sys::Win32::UI::Shell::{NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, ChangeWindowMessageFilterEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
     DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetCursorPos, GetMessageW, GetSystemMetrics, GetWindowLongPtrW,
-    IMAGE_ICON, IsWindowVisible, LR_DEFAULTCOLOR, LoadImageW, MF_CHECKED, MF_SEPARATOR, MF_STRING,
+    GetWindowRect, IMAGE_ICON, IsWindowVisible, LR_DEFAULTCOLOR, LoadImageW, MF_CHECKED, MF_SEPARATOR, MF_STRING,
     MF_UNCHECKED, MSG, MSGFLT_ALLOW, PostMessageW, PostQuitMessage,
-    RegisterClassW, RegisterWindowMessageW, SM_CXSMICON, SM_CYSMICON, SW_HIDE, SW_SHOWNOACTIVATE,
-    SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
+    RegisterClassW, RegisterWindowMessageW, SM_CXSMICON, SM_CYSMICON, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
+    SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos,
     ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE,
     WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
 };
@@ -279,8 +279,9 @@ unsafe fn alternar(overlay: HWND) {
     unsafe { atualizar(overlay) };
 }
 
-/// Mostra o overlay com ele ligado (sem tirar o foco do jogo) e o esconde desligado. Não depende
-/// do jogo: minimizado ou atrás de outra janela, o overlay continua onde está.
+/// Mostra o overlay com ele ligado (sem tirar o foco do jogo), com o jogo na frente ou não, e o
+/// traz para dentro da área do jogo se estiver fora dela (outro monitor, jogo em janela que mudou
+/// de lugar, zoom que passou da borda). Com o jogo minimizado, fica onde está.
 unsafe fn atualizar(overlay: HWND) {
     if SAINDO.load(Ordering::Relaxed) {
         return;
@@ -289,6 +290,14 @@ unsafe fn atualizar(overlay: HWND) {
     unsafe {
         if aparece != (IsWindowVisible(overlay) != 0) {
             ShowWindow(overlay, if aparece { SW_SHOWNOACTIVATE } else { SW_HIDE });
+        }
+        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        if !aparece || GetWindowRect(overlay, &mut r) == 0 {
+            return;
+        }
+        let (x, y) = jogo::dentro(r.left, r.top, r.right - r.left, r.bottom - r.top);
+        if (x, y) != (r.left, r.top) {
+            SetWindowPos(overlay, std::ptr::null_mut(), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         }
     }
 }

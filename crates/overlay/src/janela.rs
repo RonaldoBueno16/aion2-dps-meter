@@ -208,7 +208,8 @@ impl Overlay {
         let sessao = Arc::new(Mutex::new(Sessao::default()));
         carregar_memoria(&mut travar(&sessao).medidor);
         let replay = arquivo_replay();
-        // Ao vivo, os atalhos e o recolher seguem o jogo; o replay de debug roda sem ele.
+        // Ao vivo, o overlay fica dentro da área do jogo e os atalhos seguem o jogo; o replay de debug
+        // roda sem ele.
         jogo::seguir(replay.is_none());
         // Mudar o firewall só com o clique do usuário. --pedir-firewall (debug) mostra o aviso no replay.
         let pedir_firewall = tem("--pedir-firewall") || (replay.is_none() && !crate::firewall::liberada());
@@ -2122,6 +2123,8 @@ fn seguir_cursor(janela: isize, inicio_cursor: [i32; 2], inicio_canto: [i32; 4])
         return;
     }
     let (x, y) = (inicio_canto[0] + cursor.x - inicio_cursor[0], inicio_canto[1] + cursor.y - inicio_cursor[1]);
+    // Não sai de cima do jogo.
+    let (x, y) = jogo::dentro(x, y, inicio_canto[2], inicio_canto[3]);
     unsafe { SetWindowPos(janela as _, std::ptr::null_mut(), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) };
 }
 
