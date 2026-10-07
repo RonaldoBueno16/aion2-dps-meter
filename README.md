@@ -55,7 +55,8 @@ cargo build --release -p overlay
   usam, tingido na cor da classe e com anel da mesma cor; até a 0.7.1 era o ícone da primeira
   skill da classe), a posição, o
   nome, uma barra em degradê na cor da classe, proporcional ao primeiro, e três números:
-  total, por segundo e %. A sua linha tem borda dourada. Ao passar o mouse aparecem
+  total, por segundo e %. Desde a 0.13.1, as cores de classe são as do Abyss DPS Meter (o jogo
+  não publica uma paleta). A sua linha tem borda dourada. Ao passar o mouse aparecem
   `Classe · Nv · GS` (classe em inglês, por escolha; GS é o número que o jogo mostra como
   Power; `?` = ainda não chegou; `~31` = valor da memória, visto numa sessão anterior e talvez
   velho) e os números que não cabem na linha; clicar abre a ficha com os mesmos dados e as skills.
@@ -69,7 +70,7 @@ cargo build --release -p overlay
   mostra também o % de HP, uma barra fina de HP no pé e "derrota em", quanto falta para o HP
   zerar na velocidade em que ele caiu nos últimos 30 s (aparece com 5 s de leituras e o HP
   caindo).
-- **Mate em** (desde a 0.13.0): quando o servidor manda um prazo para matar o alvo junto com a
+- **Mate em** (desde a 0.13.1): quando o servidor manda um prazo para matar o alvo junto com a
   entrada dele em combate (`0x8D21`, PROTOCOLO.md §5b), o card e a barra compacta mostram
   "mate em 4:32", contando até o prazo. Fica vermelho quando o "derrota em" passa do que
   falta (no ritmo atual, não dá tempo); some quando ele sai de combate ou morre. Visto num

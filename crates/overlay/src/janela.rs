@@ -2202,17 +2202,20 @@ fn decodificar(leitor: impl std::io::BufRead + std::io::Seek) -> Option<egui::Co
     Some(egui::ColorImage::from_rgba_unmultiplied([info.width as usize, info.height as usize], &rgba))
 }
 
+/// As cores de classe do Abyss DPS Meter, o medidor que o pessoal usa (o jogo não publica uma
+/// paleta): a variante clara, que ele usa no texto; a barra aqui escurece a mesma cor. Ele não tem
+/// cor para o Elementalist e usa o ciano padrão.
 fn cor_da_classe(classe: &str) -> Color32 {
     match classe {
-        "Gladiator" => Color32::from_rgb(0xC7, 0x9C, 0x6E),
-        "Templar" => Color32::from_rgb(0xF5, 0x8C, 0xBA),
-        "Assassin" => Color32::from_rgb(0xFF, 0xF5, 0x69),
-        "Ranger" => Color32::from_rgb(0xAB, 0xD4, 0x73),
-        "Sorcerer" => Color32::from_rgb(0x69, 0xCC, 0xF0),
-        "Elementalist" | "Spirit" => Color32::from_rgb(0x94, 0x82, 0xC9),
-        "Cleric" => Color32::from_rgb(0xE8, 0xE8, 0xE8),
-        "Chanter" => Color32::from_rgb(0x3E, 0x9B, 0xFF),
-        "Brawler" => Color32::from_rgb(0xFF, 0x7D, 0x0A),
+        "Gladiator" => Color32::from_rgb(0xC0, 0x7A, 0xE0),
+        "Templar" => Color32::from_rgb(0xF5, 0xA4, 0x5C),
+        "Assassin" => Color32::from_rgb(0x4E, 0xE0, 0x8A),
+        "Ranger" => Color32::from_rgb(0xF0, 0xC9, 0x5C),
+        "Sorcerer" => Color32::from_rgb(0x5D, 0xB6, 0xEC),
+        "Elementalist" | "Spirit" => Color32::from_rgb(0x7D, 0xD8, 0xD8),
+        "Cleric" => Color32::from_rgb(0x5C, 0xE8, 0xD0),
+        "Chanter" => Color32::from_rgb(0xF7, 0xDC, 0x6F),
+        "Brawler" => Color32::from_rgb(0xE0, 0x70, 0x5C),
         _ => Color32::from_rgb(0xA0, 0xA0, 0xA0),
     }
 }
