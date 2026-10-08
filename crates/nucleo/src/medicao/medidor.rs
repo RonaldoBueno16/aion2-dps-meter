@@ -348,6 +348,9 @@ pub struct Medidor {
     prazo_de: HashMap<u32, Hora>,
     /// Barra de groggy de cada chefe (0xE005), até ele sair de combate ou morrer.
     groggy_de: HashMap<u32, Groggy>,
+    /// Mobs que já mandaram 0xE005 ou prazo no 0x8D21: chefe, mesmo sem spawn e com poucos atacantes
+    /// (o 35518 de 2026-10-06 teve 16). Ao contrário da barra e do prazo, fica depois da morte.
+    chefe_pelo_servidor: HashSet<u32>,
     /// Skill de mob → quantos golpes cada NPC (código) deu com ela: o golpe recebido ganha o nome
     /// do mob que mais a usou (nenhuma base pública tem nome de skill de mob). Nas capturas, 1 de 29
     /// skills de mob veio de dois mobs. Vale entre conexões: o código não muda.
@@ -411,6 +414,7 @@ impl Default for Medidor {
             hp_recente: HashMap::new(),
             prazo_de: HashMap::new(),
             groggy_de: HashMap::new(),
+            chefe_pelo_servidor: HashSet::new(),
             npc_da_skill: HashMap::new(),
             nomes: IndexMap::new(),
             niveis: HashMap::new(),
@@ -547,6 +551,7 @@ impl Medidor {
         self.hp_recente.remove(&entidade);
         self.prazo_de.remove(&entidade);
         self.groggy_de.remove(&entidade);
+        self.chefe_pelo_servidor.remove(&entidade);
         self.mortos.remove(&entidade);
     }
 
@@ -765,6 +770,7 @@ impl Medidor {
         };
         if prazo > hora && prazo - hora < PRAZO_MAXIMO {
             self.prazo_de.insert(entidade, prazo);
+            self.chefe_pelo_servidor.insert(entidade);
         }
     }
 
@@ -777,6 +783,7 @@ impl Medidor {
         if self.jogadores_conhecidos.contains(&entidade) {
             return;
         }
+        self.chefe_pelo_servidor.insert(entidade);
         let g = self.groggy_de.entry(entidade).or_default();
         match barra {
             BarraGroggy::Valor { maximo, atual, .. } => {
@@ -1028,6 +1035,7 @@ impl Medidor {
         self.hp_recente.clear();
         self.prazo_de.clear();
         self.groggy_de.clear();
+        self.chefe_pelo_servidor.clear();
         self.meu_id = None; // a memória, o seu nome e o histórico continuam: valem para a conexão nova
     }
 
@@ -1087,12 +1095,15 @@ impl Medidor {
         }
     }
 
-    /// Mobs desta luta que são chefe: nomeado ou herói no questlog, ou batido por uma multidão.
+    /// Mobs desta luta que são chefe: nomeado ou herói no questlog, batido por uma multidão, ou com
+    /// barra de groggy ou prazo para matar.
     fn chefes(&self) -> Vec<u32> {
         self.dano_em
             .iter()
             .filter(|&(&mob, jogadores)| {
-                jogadores.len() >= ATACANTES_DE_CHEFE || self.npc(mob).is_some_and(|n| n.chefe())
+                jogadores.len() >= ATACANTES_DE_CHEFE
+                    || self.chefe_pelo_servidor.contains(&mob)
+                    || self.npc(mob).is_some_and(|n| n.chefe())
             })
             .map(|(&mob, _)| mob)
             .collect()

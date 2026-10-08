@@ -800,3 +800,34 @@ fn buff_do_groggy_sem_barra_e_barra_de_jogador_sao_ignorados() {
     m.registrar_barra_groggy(BarraGroggy::Valor { entidade: 11174, maximo: 1200, atual: 600 }, T0);
     assert_eq!(m.obter_placar().alvo.and_then(|a| a.groggy), None);
 }
+
+#[test]
+fn mob_com_barra_de_groggy_ou_prazo_conta_como_chefe() {
+    // Como o 35518 de 2026-10-06: sem spawn e com poucos atacantes, mas com 0xE005 e prazo.
+    const CHEFE: u32 = 35518;
+    const OUTRO_CHEFE: u32 = 35600;
+    let mut m = Medidor::default();
+    m.inatividade = i64::MAX;
+    m.fim_pelo_combate = false;
+    m.definir_jogador(11174, "Fulano", 31, true);
+    m.registrar(golpe_em(CHEFE, 22222, 11010000, 500), T0);
+    m.registrar(golpe_em(MOB, 11174, 14340000, 100), T0 + segundos(1.0)); // você num add
+    let alvo = |m: &Medidor| m.obter_placar().alvo.map(|a| (a.entidade, a.chefe));
+    assert_eq!(alvo(&m), Some((MOB, false)));
+
+    m.registrar_barra_groggy(BarraGroggy::Valor { entidade: CHEFE, maximo: 1200, atual: 1200 }, T0 + segundos(2.0));
+    assert_eq!(alvo(&m), Some((CHEFE, true)));
+    // Saiu de combate e morreu: a barra some, mas ele continua chefe desta luta.
+    m.registrar_estado_combate(CHEFE, false, T0 + segundos(3.0));
+    m.registrar_morte(CHEFE, 11174, 14020000, 2401, "Fulano", T0 + segundos(4.0));
+    assert_eq!(alvo(&m), Some((CHEFE, true)));
+
+    // O prazo do 0x8D21 também marca.
+    let mut m2 = Medidor::default();
+    m2.registrar(golpe_em(OUTRO_CHEFE, 22222, 11010000, 500), T0);
+    m2.registrar_prazo(OUTRO_CHEFE, (T0 + segundos(300.0)) as u64 / 10_000, T0);
+    assert_eq!(alvo(&m2), Some((OUTRO_CHEFE, true)));
+    // Id reaproveitado por outro mob: a marca não passa para ele.
+    m2.registrar_npc(OUTRO_CHEFE, 2400031);
+    assert_eq!(alvo(&m2), Some((OUTRO_CHEFE, false)));
+}

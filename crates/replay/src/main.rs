@@ -126,8 +126,11 @@ fn imprimir_lutas(quadros: &[pcapng::QuadroCapturado]) {
         let dano = &luta.placar.dano;
         let primeiro =
             dano.jogadores.first().map_or(String::new(), |j| format!(", 1º {} {}", j.nome, p(j.porcentagem, 0)));
+        let alvo = luta.placar.alvo.as_ref().map_or(String::new(), |a| {
+            format!(", alvo #{}{}", a.entidade, if a.chefe { " (chefe)" } else { "" })
+        });
         println!(
-            "  #{:<3} de {:>6} s a {:>6} s ({:>5} s): dano {}, recebido {}, cura {}, {} jogadores{primeiro}",
+            "  #{:<3} de {:>6} s a {:>6} s ({:>5} s): dano {}, recebido {}, cura {}, {} jogadores{primeiro}{alvo}",
             luta.numero,
             n(segundos(luta.inicio - comeco), 1),
             n(segundos(luta.fim - comeco), 1),
