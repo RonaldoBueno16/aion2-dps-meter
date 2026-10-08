@@ -194,27 +194,103 @@ cargo build --release -p overlay
   Acerto Crítico 50; Poder 10, Precisão 30, Bloqueio 15, PV 120; nível 45).
   Nada disso vai para o disco: drops, fichas, região, retratos e ícones ficam na memória enquanto
   o Axon está aberto (4 imagens baixando por vez, com um cinza pulsando no lugar até chegar).
+- **Onde conseguir** (desde a 0.14.0): embaixo da ficha de qualquer item, de onde ele vem segundo o
+  questlog (o mesmo `getItem` da ficha). Os 5 monstros de maior chance, com o nível, a região (pelo
+  `getNpc`, só desses 5) e "chefe de campo" quando ele é chefe de uma região já vista (o clique
+  abre os drops dele); "e mais N monstros" abre o resto, até 100. O baú em que o item vem, de quem
+  o baú cai e a chance por morte (a do baú no chefe vezes a do item no baú, supondo independentes);
+  o clique abre a ficha do baú. A receita, com a profissão como o questlog dá (em inglês) e os
+  ingredientes; o clique mostra a maestria (pelo `getRecipe`) e cada ingrediente, que abre a ficha
+  dele. E missão, dungeon, conquista, vendedor, coleta, pedido de suprimento e passe. "‹ Voltar"
+  volta à ficha de antes. As fontes e as % são as do questlog, não conferidas no jogo.
+- **Lista de desejos** (desde a 0.14.0), ★ no cabeçalho: os itens que você procura. A ☆ no topo da
+  ficha marca o item; nesta versão não há busca por nome, então dá para marcar o que aparece nos
+  drops de um chefe, num baú ou numa receita. Cada linha mostra a melhor fonte (o chefe da região
+  que derruba o item, com a chance e quando renasce; senão o monstro de maior chance, o baú, a
+  receita ou a primeira das outras), a prioridade (Alta, Média ou Baixa; o clique troca, e a lista
+  começa pelas altas), o 🔔 do alerta e o ✕, que pede o segundo clique. O clique no item abre a
+  ficha ao lado. Na tela Bosses, o chefe da região que derruba um desejo, direto ou pelo baú, com a
+  chance mínima (0,5% no padrão; item comum cai de centenas de monstros com chance minúscula),
+  ganha ★, com os itens na dica, e "★ Só com desejo" filtra a lista. A ★ também aparece no item
+  nos drops. No `config.json` vão só o código de cada item, a prioridade e o alerta; nome, ícone e
+  de onde ele vem chegam do questlog a cada abertura e ficam só na memória.
+- **Alertas** (desde a 0.14.0): aviso de evento e de chefe de campo antes da hora e na hora, numa
+  faixa no topo do overlay (as 3 mais novas, e "+N" para as outras), que some em 20 s (de 5 a 120)
+  ou no ✕ e não tira o foco do jogo. Com ela, duas notas curtas de som, no volume do Axon no mixer
+  do Windows, e o balão do Windows só quando a faixa não aparece (overlay escondido ou recolhido;
+  dá para trocar por nunca ou sempre). Com a tela bloqueada ou no modo apresentação, nem som nem
+  balão. O 🔔 de cada evento na lista expandida liga o alerta com 5 min; a antecedência de cada
+  evento (na hora, 1, 3, 5, 10, 15, 30 ou 60 min) fica em Configurações › Alertas. O 🔔 de um
+  chefe na tela Bosses avisa 5 min antes de ele renascer (um valor para todos os chefes) e quando o
+  servidor diz que ele renasceu, o que pode ser antes da hora. Fora da região, a conta usa a última
+  lista que o jogo mandou ("renasce em 5 min (lista das 17:22)", "deve ter renascido"), e essa
+  lista some ao fechar o Axon. O chefe que derruba um item da lista de desejos com o 🔔 ligado nela
+  também avisa, com o item no texto. "Alertas" no menu do ícone, ao lado do relógio, liga e desliga
+  tudo, e "Testar alerta" (na página) manda um pelo mesmo caminho. Com "Só com o jogo aberto"
+  ligado, nada sai com o jogo fechado, e o que venceu nesse tempo não sai atrasado. A Vigilante
+  Kairah avisa com "horário não confirmado".
+- **Relatório de morte** (desde a 0.14.0): quando você morre, um card abaixo do alvo mostra
+  "☠ Você morreu" com a hora, quem deu o golpe final (retrato e nome do mob, ou o jogador na cor da
+  classe), a skill e o dano, e embaixo o HP antes do golpe final e quantos golpes você levou em
+  quanto tempo. Fica 15 s (de 5 a 60) ou até o ✕; numa luta passada, aparece parado. O clique abre
+  o relatório: os últimos 10 s (de 5 a 30) antes da morte, cada golpe, cura e efeito com o tempo
+  antes dela, quem fez, a skill, o valor e o HP logo depois, o golpe final em destaque e o total
+  recebido, o maior golpe, quantos monstros e as curas. Na aba Tank, a sua linha expandida tem
+  "☠ Morte às 14:32:05", que abre o mesmo relatório; na barra compacta, "☠ 4.926 <mob>" pelo tempo
+  do card. O golpe final é o último golpe do matador com a skill da morte, porque o `0x8D04` não
+  traz o dano (PROTOCOLO.md §5). Skill de monstro vai com o código, e efeito de jogador sem valor.
+  Nas lutas anteriores (☰), ☠ marca a luta em que você morreu (☠2, duas vezes). Só a sua morte,
+  e só com você reconhecido (abra o Axon antes de entrar no mundo). O medidor guarda os últimos
+  30 s de cada jogador conhecido, só na memória.
+- **Recordes de chefe** (desde a 0.14.0): o seu melhor tempo de kill e o seu melhor DPS em cada
+  chefe, por classe, no `recordes.json`. Na luta com um chefe que já tem recorde, uma linha embaixo
+  do alvo compara: "★ 2:41 (4 jog.)  ·  previsão 2:58 (+17 s)  ·  DPS 12,3K de 13,1K (−6%)", onde a
+  previsão é o tempo da luta mais o "derrota em". Depois do kill, o resultado ("★ Novo recorde 2:35
+  (antes 2:41)", "2:58, recorde 2:41 (+17 s)") ou o motivo de não contar. Conta o kill com o Axon
+  aberto desde antes do primeiro golpe no chefe, um chefe só, você reconhecido, com classe e com
+  dano nele. O tempo exige o chefe com 99% do HP no primeiro golpe que o Axon viu nele, sem ele
+  sair de combate, e menos de 30 jogadores (no world boss fica só o DPS); o DPS exige 20 s batendo
+  nele. Nas lutas
+  anteriores (☰), a ★ marca o kill que bateu recorde, e "★ Recordes" abre a lista, onde dá para
+  apagar um ou todos (com segundo clique). No arquivo vão só o código do chefe, a sua classe,
+  números e datas, nenhum nome. Desligar (Configurações › Recordes) para de ler e de gravar sem
+  apagar o arquivo; arquivo que não dá para ler vira `recordes.json.corrompido`, e o replay nunca
+  grava.
+- **Diário e semanal** (desde a 0.14.0), na linha "☑ Diário e semanal" no fim dos eventos
+  expandidos: a contagem até o reset diário e o semanal, a Energia Odyle (apagada quando chegou
+  antes do reset das 04h, porque pode ter mudado sem o servidor avisar) e o checklist dos 7 eventos
+  da tabela, marcado por clique. O item desmarca sozinho no reset, todo dia às 04h ou, no semanal,
+  na quarta às 04h (o Cerco de Artefato, os Chefes do Cerco e o Nahma começam semanais; o clique no
+  "Diário"/"Semanal" troca). No
+  `config.json` vão só o id do evento, o período e a hora da marcação. As entradas de cada dungeon
+  (o `0x610B` traz o número, PROTOCOLO.md §7d) entram quando os nomes forem conferidos com a tela
+  do jogo.
 - ⚙ abre as configurações, que valem na hora e ficam em
-  `%LOCALAPPDATA%\Aion2Meter\config.json`:
-  - **Números de cada jogador**: clique no total, no por segundo ou na % da linha de
-    amostra para esconder ou mostrar (o escondido fica riscado); vale nas três abas. Na
-    0.8.0 substituiu as colunas por aba e Classe/Nv/GS, que foram para o mouse e a ficha (o
-    `config.json` antigo continua abrindo).
-  - **Só o meu dano**: só a sua linha, nas três abas; a % fica sempre em 100%. Enquanto
-    você não foi reconhecido (ver Pendências), a lista fica vazia com um aviso.
-  - **Alcance**: Proximidade (todos que aparecem perto). Party está desativado até uma
-    captura em grupo mostrar o pacote do grupo.
-  - **Luta**: segundos sem dano até a luta zerar, de 5 a 120.
-  - **Exibição** (desde a 0.8.0): "Ocultar nomes" troca o nome dos outros jogadores pelo da
-    classe (ou "Jogador", com a classe ainda desconhecida) no medidor, nas lutas anteriores e
-    no resumo copiado; o seu continua. "Resumo em linhas" muda o formato do resumo copiado.
-    "Atualizar a cada": de quanto em quanto o placar é relido, de 100 a 1000 ms em passos de
-    100 (padrão 500).
-  - **Tamanho**: de 60% a 200%, escalando a janela inteira.
-  - **Transparência do fundo**: de 0% a 90%, em passos de 5% (padrão 15%). Texto, barras e
-    borda continuam opacos.
-  - **Atalhos**: mostra os quatro atalhos, ou avisa que um está desligado, em uso por outro
-    programa ou que o texto do `config.json` não vale.
+  `%LOCALAPPDATA%\Aion2Meter\config.json`. Desde a 0.14.0 é um índice em três grupos, com o
+  estado de cada página numa linha ao lado; o clique abre a página, e "‹ Configurações" volta:
+  - **Medidor › Números e jogadores**: clique no total, no por segundo ou na % da linha de
+    amostra para esconder ou mostrar (o escondido fica riscado); vale nas três abas. Na 0.8.0
+    substituiu as colunas por aba e Classe/Nv/GS, que foram para o mouse e a ficha (o
+    `config.json` antigo continua abrindo). "Só o meu dano": só a sua linha, nas três abas; a %
+    fica sempre em 100%, e, enquanto você não foi reconhecido (ver Pendências), a lista fica
+    vazia com um aviso. Alcance: Proximidade (todos que aparecem perto); Party está desativado
+    até uma captura em grupo mostrar o pacote do grupo. "Ocultar nomes" (desde a 0.8.0) troca o
+    nome dos outros jogadores pelo da classe (ou "Jogador", com a classe ainda desconhecida) no
+    medidor, nas lutas anteriores e no resumo copiado; o seu continua.
+  - **Medidor › Luta**: segundos sem dano até a luta zerar, de 5 a 120; "Resumo em linhas", o
+    formato do resumo copiado; e o relatório de morte (ligado ou não, quanto o card fica e
+    quantos segundos antes da morte o relatório mostra).
+  - **Medidor › Visual**: tamanho de 60% a 200%, escalando a janela inteira; transparência do
+    fundo de 0% a 90%, em passos de 5% (padrão 15%; texto, barras e borda continuam opacos); e
+    "Atualizar a cada", de quanto em quanto o placar é relido, de 100 a 1000 ms em passos de 100
+    (padrão 500).
+  - **Jogo › Alertas**, **Jogo › Lista de desejos** (o destaque na tela Bosses, a chance mínima
+    e o filtro) e **Jogo › Recordes**: ver acima.
+  - **Sistema › Atalhos**: mostra os quatro atalhos, ou avisa que um está desligado, em uso por
+    outro programa ou que o texto do `config.json` não vale.
+  - **Sistema › Dados no PC**: cada arquivo da pasta `%LOCALAPPDATA%\Aion2Meter`, com o tamanho
+    e para que serve; "Restaurar padrões" no `config.json` e "Apagar" no `jogadores.json`, os dois
+    com segundo clique, e "Abrir a pasta".
 - ‹ ou › (a seta aponta para a borda mais perto) desliza a janela até a borda do jogo e
   deixa só a aba "Overlay"; clicar nela traz a janela de volta ao
   mesmo lugar. Recolhido, o medidor continua contando. Com as animações do Windows
@@ -322,13 +398,21 @@ pessoal)`:
 
 | Para onde | Quando | O que vai no pedido |
 |---|---|---|
-| `questlog.gg` | Com o cache vazio, uma listagem por classe; depois, uma vez por skill ou mob que ainda não está no cache; a cada execução, uma vez por região (chefes de campo), ao abrir os drops de um chefe ou a ficha de um item, e uma vez a lista dos nomes de atributo (`statFormat`) | Nome da classe, código da skill, do NPC, da região, do baú de saque ou do item; o idioma |
+| `questlog.gg` | Com o cache vazio, uma listagem por classe; depois, uma vez por skill ou mob que ainda não está no cache; a cada execução, uma vez por região (chefes de campo), ao abrir os drops de um chefe ou a ficha de um item (mais o baú em que ele vem, a região dos 5 monstros de maior chance e a receita aberta), e uma vez a lista dos nomes de atributo (`statFormat`); com itens na lista de desejos, uma vez por item e por baú dele, ao abrir a lista ou a tela Bosses ou, com o 🔔 de um desejo ligado, quando chega a lista de chefes de uma região | Nome da classe, código da skill, do NPC, da região, do baú de saque, do item ou da receita; o idioma |
 | `assets.playnccdn.com` (CDN da NCSoft) | Uma vez por ícone (skill, emblema de classe, Odyle, evento) ou retrato de mob que ainda não foi baixado; a cada execução, uma vez por retrato de chefe de campo e ícone de item dos drops | Nome do arquivo do ícone |
 | `api.github.com` | A cada abertura | Pedido da última release deste repositório |
 | `github.com` e o servidor de arquivos do GitHub | Só ao clicar em Atualizar | Pedido do `Axon.exe` da release |
 
 O cache das skills, dos mobs e dos ícones fica em `%LOCALAPPDATA%\Aion2Meter`. Os chefes de
-campo, os drops e as imagens deles ficam só na memória e somem ao fechar o Axon.
+campo, os drops, as fichas e as fontes dos itens (regiões e receitas) e as imagens deles ficam só
+na memória e somem ao fechar o Axon. O que o Axon grava na pasta, e nada mais:
+
+| Arquivo | O que tem |
+|---|---|
+| `config.json` | As configurações; os ids dos chefes com 🔔 e a antecedência dos eventos; a lista de desejos (código do item, prioridade e alerta); o checklist (id do evento, período e hora da marcação) |
+| `recordes.json` | Os recordes de chefe: código do chefe, a sua classe, tempos, DPS, número de jogadores e datas, sem nome (`.tmp` sobra se o PC desligou no meio da gravação; `.corrompido` guarda o que não deu para ler) |
+| `jogadores.json` | O último level e Power de cada nome visto, inclusive o seu |
+| `skills-pt.json`, `npcs-pt.json`, `icones\` | Nomes de skills e de mobs do questlog e ícones da CDN da NCSoft |
 
 ## Licença
 
@@ -347,7 +431,7 @@ código foi escrito do zero.
 |---|---|
 | `crates/nucleo` | Protocolo (varint, LZ4, framing, parsers), captura (raw socket, pcapng, remontagem TCP), medição (placar, catálogo de skills) e formatação pt-BR |
 | `crates/nucleo/tests` | LZ4 contra o `lz4_flex`, framing, remontagem TCP, parsers com bytes reais, placar e troca de servidor (`cargo test`). O teste de rede do catálogo é opcional: `cargo test -p nucleo --test catalogo -- --ignored` |
-| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y] [--limite N] [--nova-versao] [--pedir-firewall] [--lutas] [--chefes] [--drops N] [--ate S]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada; `--lutas` separa as lutas como ao vivo e abre a tela Lutas; `--chefes` abre a tela Bosses; `--drops 2400424` abre o painel de drops do NPC dado; `--ate 90` lê só os 90 primeiros segundos da captura, para ver a janela no meio de uma luta) |
+| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config [página]] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y] [--limite N] [--nova-versao] [--pedir-firewall] [--lutas] [--chefes] [--drops N] [--ficha N] [--desejos] [--diario] [--voce ID] [--testar-alerta] [--ate S]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada; `--config alertas` abre direto numa página; `--lutas` separa as lutas como ao vivo e abre a tela Lutas; `--chefes` abre a tela Bosses; `--drops 2400424` abre o painel de drops do NPC dado e `--ficha 210540076` a ficha do item dado; `--desejos` e `--diario` abrem essas telas; `--voce 16201` trata o jogador dado como você, para ver o relatório de morte de outro; `--ate 90` lê só os 90 primeiros segundos da captura, para ver a janela no meio de uma luta) |
 | `crates/overlay/assets` | `logo-axon.jpg` (a logo original) e `axon.ico`, o hexágono recortado dela com fundo transparente, de 16 a 256 px |
 | `crates/replay` | Replay de `.pcapng` com diagnóstico e modo `ao-vivo` no console; `--lutas` lista as lutas como o overlay ao vivo as separa |
 | `dados/skills.json` | Opcional, fora do repositório e das releases: nomes em inglês do RATmeter (GPL-3.0, ver PROTOCOLO.md §9), só reserva quando o questlog não tem a skill |
@@ -406,8 +490,8 @@ testes → release) fica para quando o Actions voltar; aí a tag sozinha publica
   suposição. Golpe de jogador em mob com skill que o questlog marca como cura (dreno, por
   exemplo) sai do DPS e entra no Healer. Só mexer nessa regra quando uma captura mostrar
   uma skill assim.
-- **Tank**: escala 1:1 conferida num golpe só. "aggro" é inferido do último golpe de
-  cada mob, porque o pacote de troca de alvo não foi achado.
+- **Tank**: "aggro" é inferido do último golpe de cada mob, porque o pacote de troca de alvo
+  não foi achado.
 - Invocação criada antes de o Axon abrir continua como linha própria "#id": o dono só vem no
   pacote de criação.
 - **Firewall**: a regra não foi conferida num PC com o Firewall do Windows
@@ -422,6 +506,20 @@ testes → release) fica para quando o Actions voltar; aí a tag sozinha publica
   em 3 dos 24 chefes. Outras regiões usam a mesma regra sem conferência.
 - **Drops**: as % são as do questlog e não foram conferidas no jogo. Que cai uma peça do conjunto
   por morte é leitura nossa da soma de 100%; falta conferir matando o chefe algumas vezes.
+- **Relatório de morte**: nenhuma captura tem a sua morte. Ele foi conferido com a morte de outro
+  jogador no world boss de 2026-10-03 (golpe final de 4.926 do Arconte Axios), e o código do NPC
+  do matador no `0x8D04` foi visto nessa morte só.
+- **Alertas**: a regra de quando cada alerta sai tem testes; a entrega (faixa, som e balão) ainda
+  não foi conferida com o jogo aberto em tela cheia sem borda.
+- **Lista de desejos**: fontes e % do questlog, não conferidas no jogo. A chance pelo baú supõe
+  que o baú e o item dentro dele são sorteados à parte. O destaque na tela Bosses depende da ordem
+  dos chefes da região (conferida só em Altgard).
+- **Recordes**: as regras do kill saíram das capturas de 3 chefes, e nenhum recorde foi gravado
+  ainda com o jogo aberto. O world boss é reconhecido pelos 30 jogadores: com menos, ele guarda o
+  tempo também.
+- **Entradas de dungeon**: o `0x610B` traz um número por dungeon e dificuldade, mas a ligação de
+  cada id com a dungeon é hipótese até um print da tela de entradas do jogo. Também não se sabe se
+  o servidor manda `0x610C` no reset das 04h.
 
 ## Conferido
 
@@ -430,3 +528,6 @@ testes → release) fica para quando o Actions voltar; aí a tag sozinha publica
   ao vivo (153 golpes) é dado real daquela luta.
 - Port de C# para Rust (0.1.0 → 0.2.0): o replay em Rust deu saída idêntica à do CLI em
   C# nas 5 capturas locais, inclusive nas opções de diagnóstico.
+- Tank 1:1 (0.14.0): a queda do HP do jogador no `0x8D00` foi igual ao dano do golpe de monstro
+  em 89 de 93 golpes em você e em 565 de 899 em outros jogadores; nos outros, cura ou escudo no
+  meio (PROTOCOLO.md §5). Até a 0.13.1 isso estava conferido num golpe só.
