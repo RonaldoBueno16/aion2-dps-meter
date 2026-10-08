@@ -258,7 +258,7 @@ fn ao_pacote(medidor: &mut Medidor, pacote: &[u8], hora: Hora) {
         }
         opcodes::CHEFES_DE_CAMPO => {
             if let Some(lista) = combate::chefes_de_campo(pacote) {
-                medidor.chefes_de_campo = Some((lista, hora));
+                medidor.registrar_chefes_de_campo(lista, hora);
             }
         }
         opcodes::TICKET_MUDOU => {

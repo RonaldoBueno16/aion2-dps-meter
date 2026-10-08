@@ -271,6 +271,9 @@ pub struct Medidor {
     /// Última lista de chefes de campo da região (0x9101) e quando chegou. Não zera na troca de
     /// conexão nem no Zerar: é do mundo, e o servidor repete a cada poucos segundos.
     pub chefes_de_campo: Option<(ChefesDeCampo, Hora)>,
+    /// A última lista de cada região por onde você passou, para o alerta de um chefe de outra região.
+    /// Só em RAM, com a mesma regra do `chefes_de_campo`.
+    pub chefes_por_regiao: HashMap<u32, (ChefesDeCampo, Hora)>,
 
     dano: IndexMap<u32, Acumulado>,
     recebido: IndexMap<u32, Acumulado>,
@@ -352,6 +355,7 @@ impl Default for Medidor {
             fim_pelo_combate: true,
             odyle: None,
             chefes_de_campo: None,
+            chefes_por_regiao: HashMap::new(),
             dano: IndexMap::new(),
             recebido: IndexMap::new(),
             cura_candidata: IndexMap::new(),
@@ -526,6 +530,12 @@ impl Medidor {
     pub fn registrar_hp_do_spawn(&mut self, entidade: u32, atual: u64, maximo: u64) {
         self.hp_maximo_de.insert(entidade, maximo);
         self.hp_de.insert(entidade, atual);
+    }
+
+    /// 0x9101: a lista vira a da região em que você está e fica guardada pela região.
+    pub fn registrar_chefes_de_campo(&mut self, lista: ChefesDeCampo, hora: Hora) {
+        self.chefes_por_regiao.insert(lista.regiao, (lista.clone(), hora));
+        self.chefes_de_campo = Some((lista, hora));
     }
 
     /// 0x8D00. O de jogador conhecido fica de fora: o HP dele não entra no alvo.

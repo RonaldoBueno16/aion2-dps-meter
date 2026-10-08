@@ -3,7 +3,7 @@ mod comum;
 use comum::{T0, quase_igual, segundos};
 use nucleo::medicao::catalogo::InfoNpc;
 use nucleo::medicao::medidor::{LUTAS_GUARDADAS, Medidor, PerfilJogador};
-use nucleo::protocolo::combate::{Buff, EventoDano, TICKET_ODYLE, Ticket};
+use nucleo::protocolo::combate::{Buff, ChefeDeCampo, ChefesDeCampo, EventoDano, TICKET_ODYLE, Ticket};
 
 const MOB: u32 = 46027;
 
@@ -267,6 +267,26 @@ fn esquecer_memoria_apaga_os_perfis_e_o_seu_nome_e_volta_a_guardar() {
 
     m.definir_jogador(16173, "Beltrano", 45, false);
     assert_eq!(m.exportar_memoria().1["Beltrano"], PerfilJogador { nivel: 45, poder: 0 });
+}
+
+#[test]
+fn lista_de_chefes_fica_guardada_por_regiao() {
+    let lista = |regiao: u32, vivo| ChefesDeCampo {
+        regiao,
+        chefes: vec![ChefeDeCampo { id: regiao * 100 + 1, vivo, posicao: None, hora_ms: 0 }],
+    };
+    let mut m = Medidor::default();
+    m.registrar_chefes_de_campo(lista(1110, false), T0);
+    m.registrar_chefes_de_campo(lista(1120, true), T0 + segundos(5.0));
+    m.registrar_chefes_de_campo(lista(1110, true), T0 + segundos(9.0));
+    // É do mundo: troca de conexão e Zerar não apagam.
+    m.nova_conexao();
+    m.reiniciar();
+
+    assert_eq!(m.chefes_de_campo.as_ref().map(|(l, _)| l.regiao), Some(1110));
+    assert_eq!(m.chefes_por_regiao.len(), 2);
+    assert!(m.chefes_por_regiao[&1110].0.chefes[0].vivo); // a mais nova da região
+    assert_eq!(m.chefes_por_regiao[&1120].1, T0 + segundos(5.0));
 }
 
 #[test]
