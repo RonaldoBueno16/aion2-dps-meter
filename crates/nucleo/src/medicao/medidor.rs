@@ -6,6 +6,7 @@
 //! combate (0x8D21 ou morte); o próximo golpe zera tudo e a luta que acabou vai para o histórico.
 
 use std::cmp::Ordering;
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -182,6 +183,42 @@ pub struct LutaPassada {
     pub inicio: Hora,
     pub fim: Hora,
     pub placar: Arc<Placar>,
+    /// O chefe da luta, para o recorde; None sem chefe.
+    pub abate: Option<Abate>,
+}
+
+/// O chefe de uma luta com o que as regras do recorde precisam (`recordes::candidato`). Com mais de um
+/// chefe, o que mais apanhou. Sai da luta aberta assim que o chefe morre, e o mesmo vai na
+/// `LutaPassada`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Abate {
+    /// Chefes na luta: o recorde exige 1.
+    pub chefes: usize,
+    pub entidade: u32,
+    /// Código do NPC do spawn; 0 sem o spawn (o chefe já estava na tela quando o Axon abriu).
+    pub codigo: u32,
+    /// Primeiro golpe de jogador nele nesta luta.
+    pub primeiro_golpe: Hora,
+    /// Hora do 0x8D04 dele; None se ele não morreu na luta.
+    pub morte: Option<Hora>,
+    /// HP logo antes do primeiro golpe de jogador e o máximo do spawn.
+    pub hp_inicial: Option<u64>,
+    pub hp_maximo: Option<u64>,
+    /// Saiu de combate sem morrer: um 0x8D21 = 0 mais de 1 s antes da morte, ou sem morte.
+    pub saiu_de_combate: bool,
+    /// Jogadores que bateram nele.
+    pub jogadores: usize,
+    /// None com você não reconhecido.
+    pub voce: Option<VoceNoAbate>,
+}
+
+/// Você no chefe: dano 0 se não bateu nele.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VoceNoAbate {
+    pub classe: &'static str,
+    pub dano: f64,
+    /// Do seu primeiro ao último golpe nele, em ticks (sem o piso de 1 s do aDPS).
+    pub ativo: i64,
 }
 
 /// O que um jogador recebeu, separado como no `registrar`.
@@ -284,7 +321,7 @@ const HP_MINIMO_PARA_ESTIMAR: i64 = 5 * TICKS_POR_SEGUNDO;
 /// Mob que apanhou de tantos jogadores diferentes na luta é chefe, mesmo sem o nome (boss que já
 /// estava na tela quando o Axon abriu não teve o pacote de criação). No evento de 2026-10-03, os dois
 /// world bosses apanharam de 784 e 89 ids; o mob comum mais batido, de 13; nas outras capturas, até 2.
-const ATACANTES_DE_CHEFE: usize = 30;
+pub(crate) const ATACANTES_DE_CHEFE: usize = 30;
 
 /// Prazo para matar a 1 h ou mais é descartado (o visto foi de 300 s).
 const PRAZO_MAXIMO: i64 = 3600 * TICKS_POR_SEGUNDO;
@@ -432,6 +469,10 @@ pub struct Medidor {
     dano_em: IndexMap<u32, IndexMap<u32, Acumulado>>,
     /// Primeiro golpe de jogador em cada mob da luta: a guerra com chefe conta o tempo dali.
     primeiro_golpe_em: HashMap<u32, Hora>,
+    /// HP de cada mob logo antes do primeiro golpe de jogador, e a primeira saída de combate de cada
+    /// mob da luta: o recorde de tempo exige o chefe inteiro e sem reset.
+    hp_no_primeiro_golpe: HashMap<u32, u64>,
+    saiu_de_combate_em: HashMap<u32, Hora>,
     /// Último mob em que você bateu nesta luta. O alvo selecionado no jogo não chega em nenhum
     /// pacote conhecido do servidor; o golpe é o que se sabe com certeza.
     meu_alvo: Option<u32>,
@@ -521,6 +562,8 @@ impl Default for Medidor {
             buffs_fechados: Vec::new(),
             dano_em: IndexMap::new(),
             primeiro_golpe_em: HashMap::new(),
+            hp_no_primeiro_golpe: HashMap::new(),
+            saiu_de_combate_em: HashMap::new(),
             meu_alvo: None,
             consultar_npc: npc_do_catalogo,
             npc_de: HashMap::new(),
@@ -831,7 +874,13 @@ impl Medidor {
             let autor = self.resolver_autor(e.autor_id);
             self.contar_prefixo(autor, e.skill);
             somar(self.dano_em.entry(e.alvo_id).or_default(), autor, e.skill, e.dano as f64, &e, hora);
-            self.primeiro_golpe_em.entry(e.alvo_id).or_insert(hora);
+            if let Entry::Vacant(primeiro) = self.primeiro_golpe_em.entry(e.alvo_id) {
+                primeiro.insert(hora);
+                // O 0x8D00 do golpe chega depois dele (826 de 826 primeiros golpes nas capturas).
+                if let Some(&hp) = self.hp_de.get(&e.alvo_id) {
+                    self.hp_no_primeiro_golpe.insert(e.alvo_id, hp);
+                }
+            }
             if self.meu_id == Some(autor) {
                 self.meu_alvo = Some(e.alvo_id);
             }
@@ -1124,6 +1173,10 @@ impl Medidor {
             return;
         }
         self.fora_de_combate.insert(entidade);
+        // A primeira saída vale: a morte também passa por aqui, depois de um reset.
+        if self.em_luta && self.mobs_da_luta.contains_key(&entidade) {
+            self.saiu_de_combate_em.entry(entidade).or_insert(hora);
+        }
         self.prazo_de.remove(&entidade);
         self.groggy_de.remove(&entidade);
         if !self.fim_pelo_combate
@@ -1200,6 +1253,7 @@ impl Medidor {
                     inicio: self.inicio,
                     fim: self.ultimo,
                     placar: Arc::new(placar),
+                    abate: self.abate(),
                 };
                 self.historico.push_front(luta);
                 self.historico.truncate(LUTAS_GUARDADAS);
@@ -1216,9 +1270,49 @@ impl Medidor {
         self.buffs_fechados.clear();
         self.dano_em.clear();
         self.primeiro_golpe_em.clear();
+        self.hp_no_primeiro_golpe.clear();
+        self.saiu_de_combate_em.clear();
         self.meu_alvo = None;
         self.mortes_da_luta.clear();
         self.em_luta = false;
+    }
+
+    /// O chefe da luta aberta, para o recorde: vale assim que ele morre, sem esperar a luta fechar (ela
+    /// só fecha no próximo golpe, e o Axon pode ser fechado antes). None sem luta ou sem chefe.
+    pub fn abate(&self) -> Option<Abate> {
+        if !self.em_luta {
+            return None;
+        }
+        let chefes = self.chefes();
+        let entidade =
+            chefes.iter().copied().rev().max_by(|&a, &b| self.dano_no_mob(a).total_cmp(&self.dano_no_mob(b)))?;
+        let primeiro_golpe = *self.primeiro_golpe_em.get(&entidade)?;
+        let morte = self.mortos.get(&entidade).copied().filter(|&morte| morte >= primeiro_golpe);
+        let saiu_de_combate = self
+            .saiu_de_combate_em
+            .get(&entidade)
+            .is_some_and(|&saiu| morte.is_none_or(|morte| morte - saiu > TOLERANCIA_FIM));
+        let jogadores = self.dano_em.get(&entidade);
+        let voce = self.meu_id.map(|eu| {
+            let meu = jogadores.and_then(|j| j.get(&eu));
+            VoceNoAbate {
+                classe: self.classe(eu),
+                dano: meu.map_or(0.0, |a| a.total),
+                ativo: meu.and_then(|a| a.ativo.de.map(|de| a.ativo.ate - de)).unwrap_or(0),
+            }
+        });
+        Some(Abate {
+            chefes: chefes.len(),
+            entidade,
+            codigo: self.npc_de.get(&entidade).copied().unwrap_or(0),
+            primeiro_golpe,
+            morte,
+            hp_inicial: self.hp_no_primeiro_golpe.get(&entidade).copied(),
+            hp_maximo: self.hp_maximo_de.get(&entidade).copied(),
+            saiu_de_combate,
+            jogadores: jogadores.map_or(0, IndexMap::len),
+            voce,
+        })
     }
 
     /// As lutas que já acabaram, da mais nova para a mais velha (até LUTAS_GUARDADAS).
