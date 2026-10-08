@@ -473,6 +473,8 @@ pub struct Medidor {
     poderes: HashMap<u32, i32>,
     prefixos_de: HashMap<u32, IndexMap<u32, i32>>,
     meu_id: Option<u32>,
+    /// Só debug (`--voce`): o id tratado como você, de novo a cada conexão.
+    voce_forcado: Option<u32>,
 
     // Ids que são jogadores ou invocações deles: separa "jogador → mob" de "jogador → jogador".
     jogadores_conhecidos: HashSet<u32>,
@@ -541,6 +543,7 @@ impl Default for Medidor {
             poderes: HashMap::new(),
             prefixos_de: HashMap::new(),
             meu_id: None,
+            voce_forcado: None,
             jogadores_conhecidos: HashSet::new(),
             dono_de: HashMap::new(),
             nome_dono_de: HashMap::new(),
@@ -569,6 +572,13 @@ impl Medidor {
         }
         self.jogadores_conhecidos.insert(id);
         self.lembrar(id);
+    }
+
+    /// Só debug (`--voce <id>` no replay): trata o id como você nesta conexão e nas próximas, que
+    /// apagam o `meu_id`. O login (0x3633) que chegar depois troca, como sempre.
+    pub fn forcar_voce(&mut self, id: u32) {
+        self.voce_forcado = Some(id);
+        self.definir_jogador(id, "", 0, true);
     }
 
     /// Power 0 = desconhecido (não apaga um valor já visto).
@@ -1331,6 +1341,9 @@ impl Medidor {
         self.recebidos.clear();
         self.hp_jogador.clear();
         self.meu_id = None; // a memória, o seu nome e o histórico continuam: valem para a conexão nova
+        if let Some(id) = self.voce_forcado {
+            self.definir_jogador(id, "", 0, true);
+        }
     }
 
     pub fn obter_placar(&self) -> Placar {

@@ -10,8 +10,9 @@ use eframe::egui::{CursorIcon, Galley, Rect, RichText, Sense, Stroke, StrokeKind
 use super::super::{ALTURA_LINHA, Aba, Overlay, Tres, botao, branco, fonte, montar, numeros_da_linha, texto, textos};
 use super::{dica, frase, interruptor, passo, secao, valor};
 use crate::config::{
-    self, ATUALIZACAO_MAX, ATUALIZACAO_MIN, Config, INATIVIDADE_MAX, INATIVIDADE_MIN, TRANSPARENCIA_MAX,
-    TRANSPARENCIA_PADRAO, ZOOM_MAX, ZOOM_MIN,
+    self, ATUALIZACAO_MAX, ATUALIZACAO_MIN, CARD_MORTE_MAX_S, CARD_MORTE_MIN_S, Config, INATIVIDADE_MAX,
+    INATIVIDADE_MIN, JANELA_MORTE_MAX_S, JANELA_MORTE_MIN_S, TRANSPARENCIA_MAX, TRANSPARENCIA_PADRAO, ZOOM_MAX,
+    ZOOM_MIN,
 };
 
 const NOMES_DOS_NUMEROS: [&str; 3] = ["o total", "o por segundo", "a %"];
@@ -33,6 +34,9 @@ pub(super) fn resumo_luta(c: &Config) -> String {
     let mut resumo = format!("luta nova em {} s", c.inatividade);
     if c.resumo_em_linhas {
         resumo.push_str(", resumo em linhas");
+    }
+    if !c.relatorio_morte {
+        resumo.push_str(", sem relatório de morte");
     }
     resumo
 }
@@ -107,6 +111,48 @@ impl Overlay {
             &mut self.config.resumo_em_linhas,
             acento,
         );
+
+        ui.add_space(14.0);
+        secao(ui, "Relatório de morte");
+        ui.add_space(4.0);
+        interruptor(
+            ui,
+            "Relatório da sua morte",
+            "Quando você morre, um card abaixo do alvo mostra quem deu o golpe final e com quanto HP você \
+             estava; o clique abre os últimos segundos, com golpes, curas e o HP depois de cada um.",
+            &mut self.config.relatorio_morte,
+            acento,
+        );
+        if !self.config.relatorio_morte {
+            return;
+        }
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            frase(ui, "Card por");
+            let s = self.config.card_morte_s;
+            if passo(ui, "−", s > CARD_MORTE_MIN_S) {
+                self.config.card_morte_s = (s - 5).max(CARD_MORTE_MIN_S);
+            }
+            valor(ui, &format!("{s} s"), 40.0);
+            if passo(ui, "+", s < CARD_MORTE_MAX_S) {
+                self.config.card_morte_s = (s + 5).min(CARD_MORTE_MAX_S);
+            }
+        });
+        ui.horizontal(|ui| {
+            frase(ui, "Mostra os");
+            let s = self.config.janela_morte_s;
+            if passo(ui, "−", s > JANELA_MORTE_MIN_S) {
+                self.config.janela_morte_s = (s - 5).max(JANELA_MORTE_MIN_S);
+            }
+            valor(ui, &format!("{s} s"), 40.0);
+            if passo(ui, "+", s < JANELA_MORTE_MAX_S) {
+                self.config.janela_morte_s = (s + 5).min(JANELA_MORTE_MAX_S);
+            }
+            frase(ui, "antes da morte");
+        });
+        if !self.placar.voce_reconhecido {
+            dica(ui, "O relatório precisa saber quem é você: abra o Axon antes de entrar no mundo.");
+        }
     }
 
     pub(super) fn pagina_visual(&mut self, ui: &mut Ui) {
@@ -286,6 +332,8 @@ mod testes {
         c.resumo_em_linhas = true;
         assert_eq!(resumo_jogadores(&c), "/s, só o seu dano, nomes ocultos");
         assert_eq!(resumo_luta(&c), "luta nova em 15 s, resumo em linhas");
+        c.relatorio_morte = false;
+        assert_eq!(resumo_luta(&c), "luta nova em 15 s, resumo em linhas, sem relatório de morte");
         c.numeros = [false; 3];
         assert!(resumo_jogadores(&c).starts_with("sem números"));
     }

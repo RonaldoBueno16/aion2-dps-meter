@@ -11,6 +11,7 @@ mod drops;
 mod faixa;
 mod item;
 mod lutas;
+mod morte;
 mod recolher;
 mod visual;
 
@@ -34,7 +35,9 @@ use nucleo::captura::socket_bruto::CapturaSocketBruto;
 use nucleo::formato::{f, n, p};
 use nucleo::medicao::catalogo::{self, Busca, CatalogoSkills, InfoRegiao};
 use nucleo::medicao::dados_jogo;
-use nucleo::medicao::medidor::{Alvo, LinhaBuff, LinhaJogador, LinhaSkill, Medidor, PerfilJogador, Placar, Tabela};
+use nucleo::medicao::medidor::{
+    Alvo, LinhaBuff, LinhaJogador, LinhaSkill, Medidor, PerfilJogador, Placar, RelatorioMorte, Tabela,
+};
 use nucleo::medicao::sessao::Sessao;
 use nucleo::protocolo::combate::ChefesDeCampo;
 use nucleo::{Hora, TICKS_POR_SEGUNDO};
@@ -86,6 +89,8 @@ enum Tela {
     Configuracoes(configuracoes::Pagina),
     Lutas,
     Chefes,
+    /// O relatório de uma morte sua, pelo número.
+    Morte(u64),
 }
 
 /// Buffs mostrados embaixo das skills de um jogador expandido.
@@ -185,6 +190,14 @@ pub struct Overlay {
     estado_config: configuracoes::EstadoConfig,
     /// Faixas de alerta na tela e desde quando (somem em `banner_s` ou no ✕).
     faixas: Vec<(alertas::Alerta, Instant)>,
+    /// Sua última morte (com "Ocultar nomes" já aplicado) e desde quando o card dela está na tela: o
+    /// tempo conta da leitura, e não da hora da morte (no replay, a captura é de outro dia). None no ✕.
+    morte: Option<Arc<RelatorioMorte>>,
+    card_morte: Option<Instant>,
+    /// Número da última morte que já abriu o card.
+    morte_vista: u64,
+    /// O relatório da tela Morte.
+    relatorio: Option<Arc<RelatorioMorte>>,
     /// Ícone ao lado do relógio; None se o Windows não deixou criar.
     bandeja: Option<Bandeja>,
     /// O que foi pedido à janela por último: o clique passa por ela até o jogo (atalho ou menu da
@@ -214,7 +227,17 @@ impl Overlay {
         cc.egui_ctx.set_zoom_factor(config.zoom);
 
         let sessao = Arc::new(Mutex::new(Sessao::default()));
-        carregar_memoria(&mut travar(&sessao).medidor);
+        {
+            let mut s = travar(&sessao);
+            let medidor = &mut s.medidor;
+            carregar_memoria(medidor);
+            medidor.relatorio_morte = config.relatorio_morte;
+            medidor.janela_morte = i64::from(config.janela_morte_s) * TICKS_POR_SEGUNDO;
+            // Só no debug: o id tratado como você no replay (a morte de outro jogador vira a sua).
+            if let Some(id) = opcoes_debug.iter().skip_while(|a| *a != "--voce").nth(1).and_then(|v| v.parse().ok()) {
+                medidor.forcar_voce(id);
+            }
+        }
         let replay = arquivo_replay();
         // Ao vivo, o overlay fica dentro da área do jogo e os atalhos seguem o jogo; o replay de debug
         // roda sem ele.
@@ -295,6 +318,10 @@ impl Overlay {
             amostra: None,
             estado_config: configuracoes::EstadoConfig::default(),
             faixas: Vec::new(),
+            morte: None,
+            card_morte: None,
+            morte_vista: 0,
+            relatorio: None,
             bandeja: None,
             atravessando: false,
             atualizacao: if tem("--nova-versao") { Atualizacao::falsa() } else { Atualizacao::iniciar() },
@@ -340,12 +367,39 @@ impl Overlay {
         if self.tela == Tela::Lutas {
             self.lutas = lutas.iter().map(|luta| ResumoLuta::de(luta, self.config.ocultar_nomes)).collect();
         }
+        let mut ultima = sessao.medidor.ultima_morte();
+        // A morte com a luta já fechada só existe na última; as outras, nas lutas.
+        let mut relatorio = match self.tela {
+            Tela::Morte(numero) => ultima
+                .iter()
+                .chain(&self.placar.mortes)
+                .chain(lutas.iter().flat_map(|l| &l.placar.mortes))
+                .find(|r| r.numero == numero)
+                .cloned(),
+            _ => None,
+        };
         self.fluxo = sessao.fluxo.clone();
         self.ping = sessao.ping();
         self.odyle = sessao.medidor.odyle;
         self.chefes = sessao.medidor.chefes_de_campo.clone();
         let memoria = matches!(self.tela, Tela::Configuracoes(_)).then(|| sessao.medidor.exportar_memoria());
         drop(sessao);
+        if self.config.ocultar_nomes {
+            for r in ultima.iter_mut().chain(relatorio.iter_mut()) {
+                morte::ocultar_na_morte(Arc::make_mut(r));
+            }
+        }
+        if let Some(r) = &ultima
+            && r.numero > self.morte_vista
+        {
+            self.morte_vista = r.numero;
+            self.card_morte = Some(Instant::now());
+        }
+        self.morte = ultima;
+        if matches!(self.tela, Tela::Morte(_)) && relatorio.is_none() {
+            self.tela = Tela::Medidor; // a luta dela saiu das 20 guardadas
+        }
+        self.relatorio = relatorio;
         self.lido_em = Instant::now();
         let totais = self.placar.dano.total + self.placar.dano_recebido.total + self.placar.cura.total;
         let assinatura = (self.placar.duracao, totais.to_bits());
@@ -388,6 +442,12 @@ impl Overlay {
     /// Config mudou: a inatividade vale na hora para o medidor; o zoom, no próximo quadro.
     fn aplicar_config(&mut self) {
         alertas::definir_regras(&self.config.alertas);
+        {
+            let mut s = travar(&self.sessao);
+            let medidor = &mut s.medidor;
+            medidor.relatorio_morte = self.config.relatorio_morte;
+            medidor.janela_morte = i64::from(self.config.janela_morte_s) * TICKS_POR_SEGUNDO;
+        }
         if self.replay {
             return;
         }
@@ -484,6 +544,7 @@ impl Overlay {
             Tela::Configuracoes(pagina) => return self.tela_configuracoes(ui, pagina),
             Tela::Lutas => return self.tela_lutas(ui),
             Tela::Chefes => return self.tela_chefes(ui),
+            Tela::Morte(_) => return self.tela_morte(ui),
             Tela::Medidor => {}
         }
         let tabela = self.tabela();
@@ -504,6 +565,7 @@ impl Overlay {
             self.barra_do_alvo(ui, &alvo);
             ui.add_space(6.0);
         }
+        self.card_da_morte(ui);
         self.abas(ui);
         ui.add_space(4.0);
         self.linhas(ui, &tabela);
@@ -779,6 +841,9 @@ impl Overlay {
             self.linha_jogador(ui, j, posicao, maior, &tres);
             if self.expandidos.contains(&(self.aba, j.id)) {
                 self.ficha(ui, j);
+                if self.aba == Aba::Tank && j.voce {
+                    self.mortes_na_linha(ui);
+                }
                 for s in &j.skills {
                     self.linha_skill(ui, s, j.classe, &tres);
                 }
@@ -1417,7 +1482,13 @@ impl Overlay {
 
             // HP e "derrota em" antes do nome: sem espaço, a reticência corta o nome.
             let mut job = LayoutJob::default();
+            let caveira = self.morte_do_card().map(|r| morte::texto_compacto(&r));
             match &self.placar.alvo {
+                // A sua morte toma o lugar do alvo pelo tempo do card.
+                _ if caveira.is_some() => {
+                    let texto_morte = caveira.as_deref().unwrap_or_default();
+                    trecho(&mut job, texto_morte, 12.0, true, Color32::from_rgb(0xFF, 0x8B, 0x8B));
+                }
                 Some(alvo) => {
                     if alvo.morto {
                         trecho(&mut job, "Derrotado  ", 10.0, true, visual::DOURADO);
@@ -1850,12 +1921,16 @@ fn nome_do_alvo(alvo: &Alvo) -> String {
     }
 }
 
-/// "Ocultar nomes": os outros jogadores pelo nome da classe; o seu continua.
+/// "Ocultar nomes": os outros jogadores pelo nome da classe; o seu continua. Vale também nos
+/// relatórios das suas mortes.
 fn ocultar_nomes(placar: &mut Placar) {
     for tabela in [&mut placar.dano, &mut placar.dano_recebido, &mut placar.cura] {
         for j in tabela.jogadores.iter_mut().filter(|j| !j.voce) {
             j.nome = nome_oculto(j.classe);
         }
+    }
+    for r in &mut placar.mortes {
+        morte::ocultar_na_morte(Arc::make_mut(r));
     }
 }
 
@@ -2364,6 +2439,15 @@ fn detalhe_dps(golpes: i32, costas: i32) -> String {
 
 /// "HH:mm" no fuso do Windows (com horário de verão) de uma hora da captura, que vem em UTC.
 fn hora_local(hora: Hora) -> String {
+    relogio(hora).map_or_else(|| "--:--".into(), |t| format!("{:02}:{:02}", t.wHour, t.wMinute))
+}
+
+/// "14:32:05", para a hora da morte.
+fn hora_local_s(hora: Hora) -> String {
+    relogio(hora).map_or_else(|| "--:--:--".into(), |t| format!("{:02}:{:02}:{:02}", t.wHour, t.wMinute, t.wSecond))
+}
+
+fn relogio(hora: Hora) -> Option<windows_sys::Win32::Foundation::SYSTEMTIME> {
     use windows_sys::Win32::Foundation::{FILETIME, SYSTEMTIME};
     use windows_sys::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
 
@@ -2376,7 +2460,7 @@ fn hora_local(hora: Hora) -> String {
         FileTimeToSystemTime(&arquivo, &mut utc) != 0
             && SystemTimeToTzSpecificLocalTime(std::ptr::null(), &utc, &mut local) != 0
     };
-    if ok { format!("{:02}:{:02}", local.wHour, local.wMinute) } else { "--:--".into() }
+    ok.then_some(local)
 }
 
 /// "mm:ss" do TimeSpan: o componente de minutos volta a 00 depois de 1 h.

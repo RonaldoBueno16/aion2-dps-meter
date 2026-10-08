@@ -23,6 +23,12 @@ pub const CHEFES_MARCADOS_MAX: usize = 100;
 /// Quanto a faixa do alerta fica no overlay, em segundos.
 pub const BANNER_MIN_S: u32 = 5;
 pub const BANNER_MAX_S: u32 = 120;
+/// Quanto o card "Você morreu" fica no medidor, em segundos.
+pub const CARD_MORTE_MIN_S: u32 = 5;
+pub const CARD_MORTE_MAX_S: u32 = 60;
+/// Quantos segundos antes da morte o relatório mostra (o medidor guarda até 30).
+pub const JANELA_MORTE_MIN_S: u32 = 5;
+pub const JANELA_MORTE_MAX_S: u32 = 30;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -57,6 +63,10 @@ pub struct Config {
     /// Eventos embaixo do rodapé: todos, um por linha; desligado, só a linha com os próximos.
     pub eventos_expandidos: bool,
     pub alertas: Alertas,
+    /// Relatório da sua morte: o card no medidor e a tela com os últimos segundos.
+    pub relatorio_morte: bool,
+    pub card_morte_s: u32,
+    pub janela_morte_s: u32,
 }
 
 /// Alertas de evento e de chefe de campo marcado (antes e na hora).
@@ -153,6 +163,9 @@ impl Default for Config {
             compacta: false,
             eventos_expandidos: false,
             alertas: Alertas::default(),
+            relatorio_morte: true,
+            card_morte_s: 15,
+            janela_morte_s: 10,
         }
     }
 }
@@ -182,6 +195,8 @@ impl Config {
         self.transparencia = self.transparencia.min(TRANSPARENCIA_MAX);
         self.atualizacao_ms = self.atualizacao_ms.clamp(ATUALIZACAO_MIN, ATUALIZACAO_MAX);
         self.alertas = self.alertas.dentro_das_faixas();
+        self.card_morte_s = self.card_morte_s.clamp(CARD_MORTE_MIN_S, CARD_MORTE_MAX_S);
+        self.janela_morte_s = self.janela_morte_s.clamp(JANELA_MORTE_MIN_S, JANELA_MORTE_MAX_S);
         self
     }
 
@@ -231,8 +246,11 @@ mod testes {
         // Sem o campo (config da 0.3.x): o fundo de antes.
         assert_eq!(Config::default().alfa_do_fundo(), 0xD9);
         assert_eq!(Config { transparencia: 0, ..Config::default() }.alfa_do_fundo(), 0xFF);
-        // Config de antes da 0.14.0: os alertas com o padrão.
+        // Config de antes da 0.14.0: os alertas e o relatório de morte com o padrão.
         assert_eq!(c.alertas, Alertas::default());
+        assert_eq!((c.relatorio_morte, c.card_morte_s, c.janela_morte_s), (true, 15, 10));
+        let torta = Config { card_morte_s: 1, janela_morte_s: 90, ..Config::default() }.dentro_das_faixas();
+        assert_eq!((torta.card_morte_s, torta.janela_morte_s), (CARD_MORTE_MIN_S, JANELA_MORTE_MAX_S));
     }
 
     #[test]

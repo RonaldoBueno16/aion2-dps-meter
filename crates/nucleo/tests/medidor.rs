@@ -922,3 +922,15 @@ fn luta_que_acabou_com_a_morte_guarda_o_relatorio() {
     // A luta nova começa sem a morte.
     assert!(m.obter_placar().mortes.is_empty());
 }
+
+#[test]
+fn voce_forcado_volta_depois_da_conexao_nova() {
+    const EU: u32 = 16201;
+    let mut m = Medidor::default();
+    m.forcar_voce(EU);
+    m.nova_conexao();
+    m.registrar(golpe_em(EU, MOB, 1235300, 900), T0);
+    m.registrar_morte(EU, MOB, 1235300, 0, "", T0 + segundos(0.5));
+    assert_eq!(m.ultima_morte().map(|r| (r.morto, r.dano_final)), Some((EU, Some(900))));
+    assert!(m.obter_placar().voce_reconhecido);
+}

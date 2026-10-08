@@ -3,7 +3,7 @@
 //! e skills; "Ao vivo" no cabeçalho volta.
 
 use eframe::egui::text::LayoutJob;
-use eframe::egui::{Align, CursorIcon, Layout, RichText, Sense, Ui, pos2, vec2};
+use eframe::egui::{Align, Color32, CursorIcon, Layout, RichText, Sense, Ui, pos2, vec2};
 use nucleo::Hora;
 use nucleo::formato::p;
 use nucleo::medicao::medidor::{LUTAS_GUARDADAS, LutaPassada};
@@ -24,6 +24,8 @@ pub(super) struct ResumoLuta {
     primeiro: Option<(String, &'static str, f64)>,
     /// Nome do alvo da luta (o chefe ou o mob que mais apanhou), se o questlog tiver.
     alvo: Option<String>,
+    /// Quantas vezes você morreu nela.
+    mortes: usize,
 }
 
 impl ResumoLuta {
@@ -40,6 +42,7 @@ impl ResumoLuta {
                 (nome, j.classe, j.porcentagem)
             }),
             alvo: luta.placar.alvo.as_ref().map(|a| a.nome.clone()).filter(|nome| !nome.is_empty()),
+            mortes: luta.placar.mortes.len(),
         }
     }
 }
@@ -96,6 +99,11 @@ fn linha_luta(ui: &mut Ui, luta: &ResumoLuta, vista: bool) -> bool {
         trecho(&mut job, nome, 12.0, false, cor_da_classe(classe));
         trecho(&mut job, &format!(" {}", p(*parte, 0)), 12.0, false, branco(0xBB));
     }
+    match luta.mortes {
+        0 => {}
+        1 => trecho(&mut job, "   ☠", 11.0, true, Color32::from_rgb(0xFF, 0x8B, 0x8B)),
+        m => trecho(&mut job, &format!("   ☠{m}"), 11.0, true, Color32::from_rgb(0xFF, 0x8B, 0x8B)),
+    }
     let jogadores = if luta.jogadores == 1 { "1 jogador".to_string() } else { format!("{} jogadores", luta.jogadores) };
     let mut direita = LayoutJob::default();
     match &luta.alvo {
@@ -111,7 +119,11 @@ fn linha_luta(ui: &mut Ui, luta: &ResumoLuta, vista: bool) -> bool {
     let (rect, resposta) = ui.allocate_exact_size(vec2(largura, altura), Sense::click());
     let resposta = resposta
         .on_hover_cursor(CursorIcon::PointingHand)
-        .on_hover_text(format!("Ver o placar desta luta ({jogadores})"));
+        .on_hover_text(if luta.mortes > 0 {
+            format!("Ver o placar desta luta ({jogadores}). ☠: você morreu nela; o card da morte abre o relatório.")
+        } else {
+            format!("Ver o placar desta luta ({jogadores})")
+        });
     let fundo = if resposta.hovered() {
         Some(branco(0x33))
     } else if vista {

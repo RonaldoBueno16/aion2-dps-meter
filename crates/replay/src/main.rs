@@ -1,8 +1,8 @@
 //! Dois modos com o mesmo núcleo do medidor:
-//!   captura.pcapng [--hex N] [--op 3804] [--procurar-quedas] [--entidade ID] [--lutas]
+//!   captura.pcapng [--hex N] [--op 3804] [--procurar-quedas] [--entidade ID] [--lutas] [--voce ID]
 //!       reprocessa uma captura: sincronização, LZ4, opcodes, conferência com HP e placar. Com
 //!       --lutas, lista também as lutas como o overlay ao vivo as separa (15 s sem dano ou saída
-//!       de combate dos mobs).
+//!       de combate dos mobs); com --voce, trata o id como você e imprime o relatório da morte dele.
 //!   ao-vivo [segundos]
 //!       captura por raw socket (precisa de administrador) e imprime o placar.
 
@@ -18,7 +18,7 @@ use nucleo::captura::segmento::SegmentoTcp;
 use nucleo::formato::{f, hex, n, n_int, p};
 use nucleo::medicao::catalogo::CatalogoSkills;
 use nucleo::medicao::dados_jogo;
-use nucleo::medicao::medidor::{Placar, Tabela};
+use nucleo::medicao::medidor::{Placar, RelatorioMorte, Tabela};
 use nucleo::medicao::sessao::Sessao;
 use nucleo::protocolo::combate::{self, EventoDano};
 use nucleo::protocolo::desempacotador::Desempacotador;
@@ -46,6 +46,7 @@ fn main() {
 
     let valor_de = |opcao: &str| args.iter().skip_while(|a| *a != opcao).nth(1).cloned();
     let (hex_opcao, op_opcao, entidade_opcao) = (valor_de("--hex"), valor_de("--op"), valor_de("--entidade"));
+    let voce_opcao = valor_de("--voce");
     let caminho = args
         .iter()
         .find(|a| {
@@ -53,6 +54,7 @@ fn main() {
                 && Some(*a) != hex_opcao.as_ref()
                 && Some(*a) != op_opcao.as_ref()
                 && Some(*a) != entidade_opcao.as_ref()
+                && Some(*a) != voce_opcao.as_ref()
         })
         .cloned()
         .unwrap_or_else(|| "captura.pcapng".into());
@@ -105,13 +107,16 @@ fn main() {
     imprimir_placar(&replay.medidor.obter_placar());
 
     if args.iter().any(|a| a == "--lutas") {
-        imprimir_lutas(&quadros);
+        imprimir_lutas(&quadros, voce_opcao.map(|v| v.parse().expect("--voce numérico")));
     }
 }
 
 /// As lutas com o fim do overlay ao vivo (padrões do Medidor), da mais velha para a mais nova.
-fn imprimir_lutas(quadros: &[pcapng::QuadroCapturado]) {
+fn imprimir_lutas(quadros: &[pcapng::QuadroCapturado], voce: Option<u32>) {
     let mut sessao = Sessao::default();
+    if let Some(id) = voce {
+        sessao.medidor.forcar_voce(id);
+    }
     for quadro in quadros {
         if let Some(seg) = SegmentoTcp::extrair(&quadro.dados, quadro.tipo_enlace) {
             sessao.ao_segmento(&seg, quadro.hora);
@@ -129,8 +134,12 @@ fn imprimir_lutas(quadros: &[pcapng::QuadroCapturado]) {
         let alvo = luta.placar.alvo.as_ref().map_or(String::new(), |a| {
             format!(", alvo #{}{}", a.entidade, if a.chefe { " (chefe)" } else { "" })
         });
+        let mortes = match luta.placar.mortes.len() {
+            0 => String::new(),
+            m => format!(", ☠{m}"),
+        };
         println!(
-            "  #{:<3} de {:>6} s a {:>6} s ({:>5} s): dano {}, recebido {}, cura {}, {} jogadores{primeiro}{alvo}",
+            "  #{:<3} de {:>6} s a {:>6} s ({:>5} s): dano {}, recebido {}, cura {}, {} jogadores{primeiro}{alvo}{mortes}",
             luta.numero,
             n(segundos(luta.inicio - comeco), 1),
             n(segundos(luta.fim - comeco), 1),
@@ -141,6 +150,46 @@ fn imprimir_lutas(quadros: &[pcapng::QuadroCapturado]) {
             dano.jogadores.len()
         );
     }
+    if let Some(r) = sessao.medidor.ultima_morte() {
+        imprimir_morte(&r, comeco);
+    }
+}
+
+/// O relatório da sua morte como o overlay mostra, uma linha por evento.
+fn imprimir_morte(r: &RelatorioMorte, comeco: Hora) {
+    let ou = |v: Option<u64>| v.map_or("?".to_string(), |v| n(v as f64, 0));
+    println!();
+    println!(
+        "=== Morte #{} aos {} s: #{} por {} (#{}, NPC {}), {} {}, dano {}, HP antes {}",
+        r.numero,
+        n(segundos(r.hora - comeco), 1),
+        r.morto,
+        r.nome_matador,
+        r.matador,
+        r.npc_matador,
+        r.skill_final,
+        r.nome_skill_final,
+        ou(r.dano_final),
+        ou(r.hp_antes_final)
+    );
+    for l in &r.linhas {
+        println!(
+            "  {:>6} s  {:<24} {:<28} {:>8}  HP {:>7}{}",
+            f(l.antes_s, 3),
+            l.quem,
+            l.nome_skill,
+            l.valor.map_or("sem valor".to_string(), |v| n(v as f64, 0)),
+            ou(l.hp_depois),
+            if l.golpe_final { "  ← golpe final" } else { "" }
+        );
+    }
+    println!(
+        "  recebido {}, maior {}, {} monstros, curado {}",
+        n(r.recebido as f64, 0),
+        n(r.maior as f64, 0),
+        r.monstros,
+        n(r.curado as f64, 0)
+    );
 }
 
 fn ao_vivo(duracao: u64) {
