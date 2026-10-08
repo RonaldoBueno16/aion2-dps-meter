@@ -53,7 +53,7 @@ eles são preenchimento). Na captura, o bloco descomprimiu com o tamanho exato d
 | `0x3805` | Dano periódico (DoT) | alvo e autor conferidos no world boss de 2026-10-03 (seção 4); valor não conferido na tela |
 | `0x3801`, `0x3802`, `0x3803`, `0x3806` | Ciclo de uso de skill (autor, skill, posições em float). Sem dano | confirmado |
 | `0x8D00` | HP atual de entidade | confirmado para mobs e para o jogador (seção 5) |
-| `0x8D04` | Morte de entidade: morto, skill que matou, matador e nome dele | confirmado (seção 5) |
+| `0x8D04` | Morte de entidade: morto, skill que matou, matador, nome dele e, no abate por mob, o código do NPC do matador | confirmado; o código do NPC visto uma vez (seção 5) |
 | `0x3641` | Spawn de entidade: código do NPC (nome e retrato pelo questlog); tipo `0x5F` = invocação, pet ou armadilha; dono também no marcador `07 02`; HP atual e máximo | confirmado (seções 7 e 7c) |
 | `0x3633` | Seu personagem (id, nome, level, power), só no login | confirmado (seção 7b) |
 | `0x561C` | Power mudou: `[varint entidade][u32 power]...` (o `0x561D` traz o mesmo valor duas vezes, sem entidade) | confirmado uma vez com o seu personagem (seção 7b) |
@@ -62,10 +62,11 @@ eles são preenchimento). Na captura, o bloco descomprimiu com o tamanho exato d
 | `0xE005` | Barra de um chefe: `[varint entidade][03 01][u32 máximo][u32 atual][02]`; no chefe de 2026-10-06, 1200 → 6 em 45 s, caindo aos saltos junto com os golpes, e `00 03 02` no fim (barra quebrada, hipótese) | lido numa captura, não usado |
 | `0x382A`, `0x382B`, `0x382C` | Buff novo, renovado e removido | confirmado (seção 5c) |
 | `0x382D` | Ligado a buffs (1.909 de 1.962 no world boss) | não fechou (seção 5c) |
-| `0x610B` | Tickets de conteúdo no login, entre eles a Energia Odyle | confirmado (seção 7d) |
+| `0x610B` | Tickets de conteúdo no login, entre eles a Energia Odyle e (hipótese) as entradas de dungeon | confirmado o formato (seção 7d) |
 | `0x610C` | Um ticket de conteúdo mudou (ex.: essência OD usada) | confirmado com a Odyle (seção 7d) |
 | `0x9101` | Chefes de campo da região: vivo ou morto e uma hora (de renascer ou de quando nasceu), a cada poucos segundos | confirmado (seção 7e) |
 | `0x3603` | Hora, a cada 10 s: `[u16 0][u64 relógio][u64 hora do servidor em ms Unix]` | lido nas capturas, não usado |
+| `0xE223`, `0x8D1C`, `0xE256`, `0x568E` | Horas de reset: o próximo diário (04:00) e a janela semanal (quarta 04:00) | lido nos logins, não usado (seção 7f) |
 | `0x3620`, `0x3649`, `0x3847`, `0x9702` | vínculo de sessão, atributos, cooldown, grupo | não usados |
 
 Mais frequentes na captura e sem uso: `0x371D` (2494 em 60 s), `0x371C`, `0x371B`, `0x371A` (provavelmente movimento).
@@ -135,40 +136,51 @@ Por isso o medidor só reconhece jogador pela skill no golpe direto (`0x3804`).
 
 ## 5. HP `0x8D00` e morte `0x8D04`
 
-```
-varint  entidade
-varint, varint, varint    (mobs: 02 01 00)
-u64     HP atual
-```
-
-Para o jogador o formato é outro e a leitura acima dá lixo:
+Um formato só, para mob e para jogador (conferido em 2026-10-08: a leitura fecha no último byte
+em 16.316 de 16.316 pacotes das 11 capturas):
 
 ```
 varint  entidade
-u8      tipo
-u8      n
-n ×     [u8 chave][u32 valor]
+u8      bits
+bit 0:  u8 n, n × [u8 chave][u32 valor]     (chaves 1, 3, 4, 6 e 8, sem significado conferido)
+bit 1:  u8 n, n × [u8 chave][u64 valor]     (chave 0 = HP; chave 7 em 70 pacotes, desconhecida)
 ```
 
-Chave 0 = HP (cerca de 3.300 no personagem testado). Sem identificação: chave 1 (oscila
-entre 1.500 e 1.800), chave 3 (cai 500 a cada 0,1 s) e chave 6 (sobe cerca de 4.000/s).
+Bits 1 em 3.394 pacotes, 2 em 12.642 e 3 em 280. O mob vem com bits 2, n 1 e a chave 0 (o
+`02 01 00` + u64 que o medidor lia até a 0.13.1, achando que era um formato só de mob). Os outros
+jogadores recebem bits 2, com o HP. Só um id por conexão recebe o bit 0, e nos 6 dumps com login
+ele é o seu (o id do `0x3633`). Com outro bit ligado o tamanho é desconhecido, e o medidor
+descarta o pacote.
+
+A chave 0 é o HP também em jogador: a queda entre dois `0x8D00` em volta de um golpe de monstro
+foi igual ao dano em 89 de 93 golpes em você e em 565 de 899 em outros jogadores. Nos outros, o HP
+caiu menos em 337 (cura ou escudo no meio, hipótese) e mais em 1.
 
 Morte `0x8D04`:
 
 ```
 varint  morto
 u32     skill que matou
-varint  matador
-u16     servidor
+varint  matador                    (0 em 279 de 372: armadilha ou invocação que expirou)
+u16     servidor                   (1000..9999 nos 92 abates por jogador; 0 no abate por mob)
 u8      tamanho + UTF-8   nome do matador
 u8      tamanho + UTF-8   legião
+u16     desconhecido               (2 nos 64 com legião, 0 nos 29 sem)
+varint  código do NPC do matador   (0 nos 92 abates por jogador; 2400425 no abate por mob)
+6 bytes desconhecidos              (00 00 00 00 01 00; o último veio 02 em 2 pacotes)
 ```
+
+O código do NPC do matador é o mesmo do spawn `0x3641`: visto uma vez, na morte de um jogador
+para o Arconte da Alma Perdida Axios (2400425) no world boss de 2026-10-03. Com ele, o relatório
+de morte dá o nome e o retrato do mob mesmo sem o spawn dele. O `0x8D04` não traz o dano do golpe
+final: nos 93 abates com matador, ele chegou no máximo 0,057 s depois do último golpe (mediana
+0,05 s), e o golpe do matador com a mesma skill estava nos 2 s anteriores em 88 de 93. O
+relatório tira o golpe final daí.
 
 Sem matador (armadilha que expirou) vem tudo zerado. Mob que mata também pode trazer nome,
 então o medidor só aproveita o nome quando a skill é de classe e o abate traz servidor, ou
-quando o matador já é jogador conhecido. O servidor veio 1000..9999 nos 73 abates de jogador
-das capturas (2401) e 0 no abate do world boss. A tabela de ameaça (aggro) fica no servidor e não aparece em nenhum pacote; o
-pacote de troca de alvo do mob também não foi achado.
+quando o matador já é jogador conhecido. A tabela de ameaça (aggro) fica no servidor e não
+aparece em nenhum pacote; o pacote de troca de alvo do mob também não foi achado.
 
 ## 5b. Estado de combate `0x8D21` (confirmado)
 
@@ -249,8 +261,9 @@ Esse fator muda de mob para mob (medido em 2026-10-05): 18,82 nos 8 mobs daquela
 9,49 no world boss. Dentro do mesmo mob ele é estável: golpe isolado sem lista dá queda / (F ×
 dano) - 1 = 0,000 na mediana (n=424).
 
-- Dano em **jogador** não tem esse fator: um golpe de mob com campo 166 tirou exatamente
-  166 do HP do jogador (chave 0 do `0x8D00`), conferido nesse golpe só.
+- Dano em **jogador** não tem esse fator: a queda do HP (chave 0 do `0x8D00`) foi igual ao
+  campo do golpe de monstro em 89 de 93 golpes em você e em 565 de 899 em outros jogadores
+  (seção 5). Até a 0.13.1 isso estava conferido num golpe só (campo 166, queda 166).
 - Até a 0.5.1 o medidor multiplicava o campo por `18,82` para mostrar HP do mob. Saiu
   porque não bate com o número da tela; como era igual para todos, ranking e
   porcentagens não mudam.
@@ -362,7 +375,7 @@ este máximo; sem o spawn (Axon aberto com o mob já na tela), não há máximo 
 mais velha e a mais nova e o HP caindo, a queda por segundo nesse trecho dá o tempo até zerar.
 É HP sobre HP: a relação entre HP e dano muda de mob para mob (seção 6).
 
-## 7d. Tickets de conteúdo `0x610B` e `0x610C` (Energia Odyle)
+## 7d. Tickets de conteúdo `0x610B` e `0x610C` (Energia Odyle e entradas de dungeon)
 
 `0x610B` chega no login com a lista inteira:
 
@@ -370,14 +383,23 @@ mais velha e a mais nova e o HP caindo, a queda por segundo nesse trecho dá o t
 varint  n
 n ×     u8      tipo
         u32     id
-        8 bytes (só com tipo & 0x01; sem uso)
+        8 bytes (só com tipo & 0x01; u64 LE 25.200.000 nas 9 entradas desse tipo, nos 3 logins)
         varint  valor (só com tipo & 0x04)
         varint  extra (só com tipo & 0x08)
 ```
 
-Nas duas listas capturadas (logins de 2026-10-02 e 2026-10-05, 73 entradas cada) a leitura
-fecha no último byte. Tipos vistos: `0x00`, `0x01`, `0x04` e `0x0C`; outro bit deixa o tamanho
-da entrada desconhecido, e o medidor descarta a lista. Os ids vêm em faixas (1 a 15 sem o 2 e
+Nas três listas capturadas (logins de 2026-10-02 às 00:57 e às 01:25, este no arquivo
+`captura-2026-10-03-b`, e de 2026-10-05 às 14:27; 73 entradas cada) a leitura fecha no último
+byte. Tipos: `0x00` ×13, `0x01` ×9 e `0x04` ×51 (×50 e um `0x0C` na de 10-05); outro bit deixa o
+tamanho da entrada desconhecido, e o medidor descarta a lista. 25.200.000 ms = 7 h = 07:00 UTC, a
+hora do reset (hipótese).
+
+Entradas de dungeon de grupo (hipótese, a conferir com a tela do jogo): id ÷ 100 = id da dungeon
+no questlog (60.001.201 → 600012, Desfiladeiro de Urugugu, normal). Os 21 ids de 60.000.101 a
+60.015.101 caem em dungeons de grupo do `getDungeons`, e a dificuldade do questlog separa os
+valores entre 10-02 e 10-05 sem exceção: fácil 7 → 7 (11 tickets), normal de tier 1 a 3 2 → 10
+(6), normal de tier 4 7 → 7 (2), difícil 2 → 4 (2). Entre essas listas houve 4 resets diários e
+nenhum semanal. Os outros 51 ids não têm fonte de nome. Os ids vêm em faixas (1 a 15 sem o 2 e
 o 5, 101 a 103, 201 a 206, 10.000.001 a 10.000.012, 60.000.001 a 60.015.101, 70.000.001, 80.000.001,
 90.000.001 a 90.000.006); os de 60.000.002 em diante têm valores pequenos (1 a 35), com cara de
 entradas de conteúdo; vários passaram de 2 para 10 entre os dois logins.
@@ -394,7 +416,9 @@ servidor não mandou nem `0x610B` nem `0x610C`.
   ticket 60.000.001, valor 550 e extra 310, resto `01 0A000000`.
 
 O primeiro byte não é contagem (com `00` ainda vem uma entrada), e o medidor ignora o valor dele
-e o resto. O gasto de Odyle em dungeon ainda não foi capturado.
+e o resto. O resto `01 0A000000` do uso de essência OD (+10 na carregada) parece
+`[u8 motivo][u32 quantidade]` (hipótese, uma amostra). O gasto de Odyle em dungeon ainda não foi
+capturado.
 
 O `0x3656` (`[u64][u64]`, chega no login junto com o `0x610B`) não é a Odyle: o primeiro número
 sobe até igualar o segundo (15.578 → 19.501; 33.762 → 33.862) e não bate com a tela.
@@ -435,6 +459,30 @@ em 2026-10-03, vieram com 0 em 2026-10-05 e com hora de novo em 2026-10-06).
   a mesma contagem, o medidor mostra "Chefe 21".
 
 O medidor mostra vivo ou morto e a hora; a posição não aparece. Só Altgard foi capturada.
+
+## 7f. Horas de reset `0xE223`, `0x8D1C`, `0xE256` e `0x568E` (conferido nos logins)
+
+O servidor manda a hora do próximo reset diário e a janela semanal, o que confirma com dado do
+servidor a tabela de eventos do overlay (diário às 04:00 de Brasília, semanal na quarta às 04:00).
+Nenhuma captura cruza as 04:00, então não se sabe se chega `0x610C` no reset.
+
+```
+0xE223 (login): [u64 ms Unix do próximo reset diário][4 bytes 00]
+                nos 3 logins, sempre 04:00 de Brasília
+0x8D1C (login de 10-02): [9 bytes 00][u64 ms][u8 00][u64 ms], os dois = próximo reset diário
+0xE256 (login):
+  u8      n grupos
+  n ×     u32 grupo, u8 tipo, u64 início ms, u64 fim ms, u8 m
+          m × u32 grupo (repete), u32 id, [u8 máscara], u32 (0 nos 3 logins)
+0x568E (fora do login): [u16 0][u8 n], n × [u32 id][u32 0][u64 ms]
+```
+
+- `0xE256`: a máscara vem na entrada de índice múltiplo de 8, contando o pacote inteiro (0, 8,
+  16...); antes ou depois do último u32 não dá para saber (tudo 0). Tipo 1: janela diária; tipo 2:
+  semanal (quarta 04:00:01 até quarta 04:00:00,999); tipos 3 e 4: de 2026-07-15 a 2099. Os 10 ids
+  do tipo 2 vieram com os contadores zerados nos 3 logins.
+- `0x568E`: prazos na quarta às 04:00, no dia 1 do mês às 04:00 e em 2099.
+- Nenhum dos dois tem nome nem significado conhecido: candidatos a contador semanal, sem uso.
 
 ## 8. Captura ao vivo (confirmado)
 
