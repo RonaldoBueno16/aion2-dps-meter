@@ -1,6 +1,7 @@
 //! Preferências do overlay, em %LOCALAPPDATA%\Aion2Meter\config.json. Campo que faltar no arquivo
 //! (versão anterior) fica com o padrão; valor fora da faixa é trazido para dentro dela.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use nucleo::medicao::catalogo;
@@ -16,6 +17,12 @@ pub const TRANSPARENCIA_MAX: u32 = 90;
 /// Releitura do placar, em ms. Abaixo de 100 ms o número muda mais rápido do que dá para ler.
 pub const ATUALIZACAO_MIN: u32 = 100;
 pub const ATUALIZACAO_MAX: u32 = 1000;
+/// Antecedência dos alertas, em minutos (0 = só na hora).
+pub const ANTES_MAX_MIN: u32 = 60;
+pub const CHEFES_MARCADOS_MAX: usize = 100;
+/// Quanto a faixa do alerta fica no overlay, em segundos.
+pub const BANNER_MIN_S: u32 = 5;
+pub const BANNER_MAX_S: u32 = 120;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -49,6 +56,83 @@ pub struct Config {
     pub compacta: bool,
     /// Eventos embaixo do rodapé: todos, um por linha; desligado, só a linha com os próximos.
     pub eventos_expandidos: bool,
+    pub alertas: Alertas,
+}
+
+/// Alertas de evento e de chefe de campo marcado (antes e na hora).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Alertas {
+    /// Chave geral: o menu da bandeja e a página Alertas.
+    pub ligados: bool,
+    /// Id do evento (`eventos::EVENTOS`) → minutos antes. Id que saiu da tabela é ignorado.
+    pub eventos: BTreeMap<String, u32>,
+    /// Chefes de campo marcados, pelo id do 0x9101 (região × 100 + número: 111021).
+    pub chefes: BTreeSet<u32>,
+    /// Minutos antes do renascer, um valor para todos os chefes marcados.
+    pub chefes_antes_min: u32,
+    /// Também no início do evento e no renascer. Com antecedência 0 o "na hora" sai sempre.
+    pub na_hora: bool,
+    pub som: bool,
+    /// "nunca", "sem_banner" (só quando a faixa não aparece) ou "sempre". Texto, e não enum: um valor
+    /// desconhecido derrubaria a config inteira na leitura.
+    pub balao: String,
+    /// Segundos que a faixa fica no overlay.
+    pub banner_s: u32,
+    pub so_com_jogo_aberto: bool,
+}
+
+/// Quando o balão da bandeja sai.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Balao {
+    Nunca,
+    SemBanner,
+    Sempre,
+}
+
+impl Balao {
+    pub const TODOS: [Balao; 3] = [Balao::Nunca, Balao::SemBanner, Balao::Sempre];
+
+    pub fn texto(self) -> &'static str {
+        match self {
+            Balao::Nunca => "nunca",
+            Balao::SemBanner => "sem_banner",
+            Balao::Sempre => "sempre",
+        }
+    }
+}
+
+impl Default for Alertas {
+    fn default() -> Self {
+        Self {
+            ligados: true,
+            eventos: BTreeMap::new(),
+            chefes: BTreeSet::new(),
+            chefes_antes_min: 5,
+            na_hora: true,
+            som: true,
+            balao: Balao::SemBanner.texto().into(),
+            banner_s: 20,
+            so_com_jogo_aberto: false,
+        }
+    }
+}
+
+impl Alertas {
+    pub fn balao(&self) -> Balao {
+        Balao::TODOS.into_iter().find(|b| b.texto() == self.balao).unwrap_or(Balao::SemBanner)
+    }
+
+    fn dentro_das_faixas(mut self) -> Self {
+        for minutos in self.eventos.values_mut() {
+            *minutos = (*minutos).min(ANTES_MAX_MIN);
+        }
+        self.chefes = std::mem::take(&mut self.chefes).into_iter().take(CHEFES_MARCADOS_MAX).collect();
+        self.chefes_antes_min = self.chefes_antes_min.min(ANTES_MAX_MIN);
+        self.balao = self.balao().texto().into();
+        self.banner_s = self.banner_s.clamp(BANNER_MIN_S, BANNER_MAX_S);
+        self
+    }
 }
 
 impl Default for Config {
@@ -68,6 +152,7 @@ impl Default for Config {
             resumo_em_linhas: false,
             compacta: false,
             eventos_expandidos: false,
+            alertas: Alertas::default(),
         }
     }
 }
@@ -96,6 +181,7 @@ impl Config {
         self.zoom = if self.zoom.is_finite() { arredondar_zoom(self.zoom) } else { 1.0 };
         self.transparencia = self.transparencia.min(TRANSPARENCIA_MAX);
         self.atualizacao_ms = self.atualizacao_ms.clamp(ATUALIZACAO_MIN, ATUALIZACAO_MAX);
+        self.alertas = self.alertas.dentro_das_faixas();
         self
     }
 
@@ -145,5 +231,29 @@ mod testes {
         // Sem o campo (config da 0.3.x): o fundo de antes.
         assert_eq!(Config::default().alfa_do_fundo(), 0xD9);
         assert_eq!(Config { transparencia: 0, ..Config::default() }.alfa_do_fundo(), 0xFF);
+        // Config de antes da 0.14.0: os alertas com o padrão.
+        assert_eq!(c.alertas, Alertas::default());
+    }
+
+    #[test]
+    fn alertas_tortos_voltam_para_a_faixa_sem_perder_o_resto() {
+        let lida: Config = serde_json::from_str(
+            r#"{"zoom":1.5,"alertas":{"eventos":{"nahma":10,"shugo":500,"sumiu":3},"chefes_antes_min":90,
+                "balao":"as_vezes","banner_s":1,"na_hora":false}}"#,
+        )
+        .unwrap();
+        let c = lida.dentro_das_faixas();
+        assert_eq!(c.zoom, 1.5);
+        let a = &c.alertas;
+        assert_eq!(a.eventos.get("nahma"), Some(&10));
+        assert_eq!(a.eventos.get("shugo"), Some(&ANTES_MAX_MIN));
+        assert_eq!(a.chefes_antes_min, ANTES_MAX_MIN);
+        assert_eq!((a.balao(), a.balao.as_str()), (Balao::SemBanner, "sem_banner"));
+        assert_eq!(a.banner_s, BANNER_MIN_S);
+        assert!(!a.na_hora);
+        assert!(a.ligados && a.som && !a.so_com_jogo_aberto);
+
+        let muitos = Alertas { chefes: (0..150).collect(), ..Alertas::default() }.dentro_das_faixas();
+        assert_eq!(muitos.chefes.len(), CHEFES_MARCADOS_MAX);
     }
 }

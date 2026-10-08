@@ -36,6 +36,8 @@ const INTEIRO: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 pub const ROSTO: [f32; 4] = [0.22, 0.10, 0.78, 0.66];
 
 pub struct Evento {
+    /// Estável, para o config.json (o nome é texto de tela e pode mudar).
+    pub id: &'static str,
     pub nome: &'static str,
     /// Sem ícone (os resets), a linha recolhida mostra o nome.
     pub icone: Option<Icone>,
@@ -56,6 +58,7 @@ pub enum Estado {
 /// Na ordem de desempate da lista (mesmo tempo até começar).
 pub const EVENTOS: &[Evento] = &[
     Evento {
+        id: "fenda",
         nome: "Fenda Espaço-Temporal",
         // Bilhete de Entrada da Fenda Espaço-Temporal.
         icone: Some(Icone { nome: "Icon_Item_Currency_AbyssTicekt_A_c_001", recorte: INTEIRO }),
@@ -65,6 +68,7 @@ pub const EVENTOS: &[Evento] = &[
                aberto 10 min; lá dentro o evento dura 1 h.",
     },
     Evento {
+        id: "shugo",
         // Como na Chave de Recompensa da Shugo Festa e no Comerciante de Shugo Festa.
         nome: "Shugo Festa",
         // Retrato do Shugo Gerente do Festival.
@@ -76,6 +80,7 @@ pub const EVENTOS: &[Evento] = &[
                mapa; o festival inteiro leva uns 10 min. A contagem do jogo é a que vale.",
     },
     Evento {
+        id: "invasao",
         nome: "Invasão Dimensional",
         // Baú de Mérito Dimensional, a recompensa dela.
         icone: Some(Icone { nome: "Icon_Item_Currency_Box_Field_Event_unc_Misc_001", recorte: INTEIRO }),
@@ -85,6 +90,7 @@ pub const EVENTOS: &[Evento] = &[
                dura 10 min.",
     },
     Evento {
+        id: "kairah",
         nome: "Vigilante Kairah",
         icone: Some(Icone { nome: "UT_256_MOB_BeritraD_01", recorte: ROSTO }),
         quando: Quando::Ciclo { inicio: HORA, intervalo: 3 * HORA },
@@ -93,6 +99,7 @@ pub const EVENTOS: &[Evento] = &[
                30 min. Horário não confirmado: o aion2rifttimer marca assim.",
     },
     Evento {
+        id: "cerco",
         nome: "Cerco de Artefato",
         // Prova de Herói: Reshanta Inferior, onde o cerco acontece.
         icone: Some(Icone { nome: "icon_abyss_boss_coin_2", recorte: INTEIRO }),
@@ -101,6 +108,7 @@ pub const EVENTOS: &[Evento] = &[
         dica: "Cerco de Artefato: segunda, quinta e sábado às 21h; 30 min.",
     },
     Evento {
+        id: "chefes_cerco",
         nome: "Chefes do Cerco",
         // Retrato do Executor Argo, um deles.
         icone: Some(Icone { nome: "UT_256_MOB_EleKing_01_V02", recorte: [0.15, 0.10, 0.85, 0.80] }),
@@ -110,6 +118,7 @@ pub const EVENTOS: &[Evento] = &[
                21h30; 30 min.",
     },
     Evento {
+        id: "nahma",
         nome: "Senhor Guardião Nahma",
         icone: Some(Icone { nome: "UT_256_MOB_AbBoss_01", recorte: ROSTO }),
         quando: Quando::Semanal { dias: &[5, 0], inicio: 21 * HORA },
@@ -117,6 +126,7 @@ pub const EVENTOS: &[Evento] = &[
         dica: "Senhor Guardião Nahma: sexta e domingo às 21h; 30 min.",
     },
     Evento {
+        id: "reset_diario",
         nome: "Reset diário",
         icone: None,
         quando: Quando::Ciclo { inicio: 4 * HORA, intervalo: DIA },
@@ -124,6 +134,7 @@ pub const EVENTOS: &[Evento] = &[
         dica: "Reset diário: todo dia às 04h (07h UTC).",
     },
     Evento {
+        id: "reset_semanal",
         nome: "Reset semanal",
         icone: None,
         quando: Quando::Semanal { dias: &[3], inicio: 4 * HORA },
@@ -139,10 +150,23 @@ fn local(hora: Hora) -> i64 {
 
 /// Estado do evento na hora dada (relógio do PC).
 pub fn estado(evento: &Evento, hora: Hora) -> Estado {
-    let local = local(hora);
+    let (desde, ate) = desde_e_ate(evento, local(hora));
+    if desde < evento.aberto { Estado::Aberto(evento.aberto - desde) } else { Estado::Fechado(ate) }
+}
+
+/// Último início e próximo início, em segundos unix, com o evento aberto ou fechado. No instante do
+/// início, o último é agora. O alerta usa isto e não o `estado`: aberto, o que falta é para fechar,
+/// e os resets nunca abrem.
+pub fn inicios(evento: &Evento, hora: Hora) -> (i64, i64) {
+    let agora = hora.div_euclid(TICKS_POR_SEGUNDO);
+    let (desde, ate) = desde_e_ate(evento, local(hora));
+    (agora - desde, agora + ate)
+}
+
+/// Segundos desde o último início e até o próximo, com a hora local em segundos.
+fn desde_e_ate(evento: &Evento, local: i64) -> (i64, i64) {
     let desde = |inicio: i64, periodo: i64| (local - inicio).rem_euclid(periodo);
-    // Tempo desde o último início e até o próximo.
-    let (desde, ate) = match evento.quando {
+    match evento.quando {
         Quando::Ciclo { inicio, intervalo } => {
             let d = desde(inicio, intervalo);
             (d, intervalo - d)
@@ -152,8 +176,7 @@ pub fn estado(evento: &Evento, hora: Hora) -> Estado {
             .iter()
             .map(|dia| desde((dia - 4).rem_euclid(7) * DIA + inicio, SEMANA))
             .fold((SEMANA, SEMANA), |(d, a), cada| (d.min(cada), a.min(SEMANA - cada))),
-    };
-    if desde < evento.aberto { Estado::Aberto(evento.aberto - desde) } else { Estado::Fechado(ate) }
+    }
 }
 
 /// Início da vez aberta ou da próxima: "21:00" se for hoje, "qui 21:00" se não.
@@ -303,6 +326,26 @@ mod testes {
         assert_eq!(estado(semanal, utc(TERCA_4H)), Estado::Fechado(86400));
         assert_eq!(estado(semanal, utc(QUARTA_4H - 1)), Estado::Fechado(1));
         assert_eq!(estado(semanal, utc(QUARTA_4H)), Estado::Fechado(7 * 86400));
+    }
+
+    #[test]
+    fn inicios_valem_com_o_evento_aberto_e_nos_resets() {
+        // Nahma aberto no domingo às 21:25: o último início é 21:00 e o próximo, sexta às 21:00.
+        let nahma = evento("Senhor Guardião Nahma");
+        assert_eq!(inicios(nahma, utc(DOMINGO_21H + 25 * 60)), (DOMINGO_21H, DOMINGO_21H + 5 * 86400));
+        // O reset nunca abre: no instante dele, o último é agora; 1 s antes, ele é o próximo.
+        let diario = evento("Reset diário");
+        assert_eq!(inicios(diario, utc(TERCA_4H)), (TERCA_4H, TERCA_4H + 86400));
+        assert_eq!(inicios(diario, utc(TERCA_4H - 1)), (TERCA_4H - 86400, TERCA_4H));
+        assert_eq!(inicios(evento("Shugo Festa"), utc(TERCA_4H + 90)), (TERCA_4H, TERCA_4H + 3600));
+    }
+
+    #[test]
+    fn ids_dos_eventos_sao_unicos() {
+        let mut ids: Vec<&str> = EVENTOS.iter().map(|e| e.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), EVENTOS.len());
     }
 
     #[test]

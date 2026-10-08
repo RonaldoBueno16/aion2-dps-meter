@@ -2,6 +2,7 @@
 // Sem console no build de release; o de debug mantém o console para diagnóstico.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod alertas;
 mod atalho;
 mod atualizacao;
 mod bandeja;
