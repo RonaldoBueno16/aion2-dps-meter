@@ -11,6 +11,8 @@ use nucleo::medicao::dados_jogo;
 use nucleo::protocolo::combate::ChefesDeCampo;
 use nucleo::{Hora, TICKS_POR_SEGUNDO};
 
+use super::desejos::desejos_na_regiao;
+use super::drops::porcentagem;
 use super::{
     IconeDaLinha, LinhaEvento, Overlay, Tela, botao, branco, fonte, hora_local, montar, texto, trecho, visual,
 };
@@ -86,21 +88,31 @@ pub(super) fn chefes_vistos(
 }
 
 /// Os chefes marcados para alerta, com o nome e o retrato da tela Bosses, da última lista de cada
-/// região por onde você passou. Roda no fio da bandeja: o questlog só é pedido, nunca esperado.
+/// região por onde você passou, mais os que derrubam um dos `desejos` (códigos de item) com chance >=
+/// `minima` (A13). Roda no fio da bandeja: o questlog só é pedido (fila normal), nunca esperado.
 pub(crate) fn chefes_marcados(
     por_regiao: &HashMap<u32, (ChefesDeCampo, Hora)>,
     marcados: &BTreeSet<u32>,
+    desejos: &[u32],
+    minima: f64,
     agora: Hora,
 ) -> Vec<ChefeMarcado> {
     let mut saida = Vec::new();
     for (codigo, (lista, recebida)) in por_regiao {
-        if !lista.chefes.iter().any(|c| marcados.contains(&c.id)) {
+        if desejos.is_empty() && !lista.chefes.iter().any(|c| marcados.contains(&c.id)) {
             continue;
         }
         let regiao = dados_jogo::regiao(*codigo);
+        let com_desejo = match &regiao {
+            Some(r) if !desejos.is_empty() => {
+                desejos_na_regiao(r, desejos.iter().copied(), minima, dados_jogo::item_de_fundo).chefes
+            }
+            _ => HashMap::new(),
+        };
         let vistos = chefes_vistos(lista, *recebida, regiao.as_ref(), agora);
         for (chefe, visto) in lista.chefes.iter().zip(vistos.chefes) {
-            if marcados.contains(&chefe.id) {
+            let desejos_dele = visto.codigo.and_then(|c| com_desejo.get(&c));
+            if marcados.contains(&chefe.id) || desejos_dele.is_some() {
                 saida.push(ChefeMarcado {
                     id: chefe.id,
                     nome: visto.nome,
@@ -108,6 +120,7 @@ pub(crate) fn chefes_marcados(
                     vivo: chefe.vivo,
                     hora_ms: chefe.hora_ms,
                     lista_em: *recebida,
+                    desejos: desejos_dele.map(|l| l.iter().map(|(nome, _)| nome.clone()).collect()).unwrap_or_default(),
                 });
             }
         }
@@ -148,7 +161,7 @@ impl Overlay {
         ui.add_space(4.0);
         let explicacao = "Os chefes de campo da região em que você está, como o servidor manda a cada poucos \
                           segundos, com o mapa aberto ou não. O nome vem do questlog. Clique num chefe para ver \
-                          os drops dele ao lado.";
+                          os drops dele ao lado. ★: derruba um item da sua lista de desejos.";
         ui.add(eframe::egui::Label::new(RichText::new(explicacao).font(fonte(10.0, false)).color(branco(0x88))).wrap());
         let Some(vistos) = vistos else {
             ui.add_space(6.0);
@@ -168,7 +181,11 @@ impl Overlay {
         ui.add_space(6.0);
 
         let agora = nucleo::agora();
-        let (mut vivos, mut mortos): (Vec<_>, Vec<_>) = vistos.chefes.iter().partition(|c| c.vivo);
+        let desejos = self.desejos_da_regiao();
+        let do_chefe = |c: &ChefeVisto| desejos.as_ref().and_then(|d| d.chefes.get(&c.codigo?));
+        let so_com_desejo = desejos.is_some() && self.config.desejos_so_com_desejo;
+        let (mut vivos, mut mortos): (Vec<_>, Vec<_>) =
+            vistos.chefes.iter().filter(|c| !so_com_desejo || do_chefe(c).is_some()).partition(|c| c.vivo);
         vivos.sort_by(|a, b| b.nivel.cmp(&a.nivel).then_with(|| a.nome.cmp(&b.nome)));
         mortos.sort_by_key(|c| c.hora_ms);
         ui.horizontal(|ui| {
@@ -178,21 +195,54 @@ impl Overlay {
             if visual::aba(ui, &format!("Mortos ({})", mortos.len()), self.chefes_mortos).clicked() {
                 self.chefes_mortos = true;
             }
+            if desejos.is_some() {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let dica = if so_com_desejo {
+                        "Mostrando só os chefes que derrubam um item da sua lista. Clique para ver todos."
+                    } else {
+                        "Mostrar só os chefes que derrubam um item da sua lista de desejos (com a chance mínima)."
+                    };
+                    if visual::aba(ui, "★ Só com desejo", so_com_desejo).on_hover_text(dica).clicked() {
+                        self.config.desejos_so_com_desejo = !self.config.desejos_so_com_desejo;
+                        self.aplicar_config();
+                    }
+                });
+            }
         });
+        if let Some(d) = &desejos {
+            let aviso = if d.falharam > 0 {
+                Some("O questlog não mandou de onde vêm alguns desejos: sem ★ para eles. Reabra a tela para tentar de novo.")
+            } else if d.faltando > 0 {
+                self.carregando = true;
+                Some("Buscando no questlog de onde vêm os seus desejos...")
+            } else {
+                None
+            };
+            if let Some(aviso) = aviso {
+                ui.add_space(2.0);
+                ui.add(eframe::egui::Label::new(RichText::new(aviso).font(fonte(10.0, false)).color(branco(0x88))).wrap());
+            }
+        }
         ui.add_space(4.0);
         let lista = if self.chefes_mortos { &mortos } else { &vivos };
         if lista.is_empty() {
-            let vazio = if self.chefes_mortos { "Nenhum chefe morto agora." } else { "Nenhum chefe vivo agora." };
+            let vazio = match (self.chefes_mortos, so_com_desejo) {
+                (true, false) => "Nenhum chefe morto agora.",
+                (false, false) => "Nenhum chefe vivo agora.",
+                (true, true) => "Nenhum chefe morto com desejo agora.",
+                (false, true) => "Nenhum chefe vivo com desejo agora.",
+            };
             ui.label(RichText::new(vazio).font(fonte(12.0, false)).color(texto().gamma_multiply(0.6)));
             return;
         }
         for chefe in lista {
-            self.linha_chefe(ui, chefe, agora);
+            self.linha_chefe(ui, chefe, agora, do_chefe(chefe).map(Vec::as_slice));
         }
     }
 
-    /// Retrato, nome e nível e, à direita: morto, a hora e a contagem para renascer; vivo, desde quando.
-    fn linha_chefe(&mut self, ui: &mut Ui, chefe: &ChefeVisto, agora: Hora) {
+    /// Retrato, nome e nível (e a ★ quando derruba um desejo) e, à direita: morto, a hora e a contagem
+    /// para renascer; vivo, desde quando.
+    fn linha_chefe(&mut self, ui: &mut Ui, chefe: &ChefeVisto, agora: Hora, desejos: Option<&[(String, f64)]>) {
         let largura = ui.available_width();
         let sentido = if chefe.codigo.is_some() { Sense::click() } else { Sense::hover() };
         let (linha, resposta) = ui.allocate_exact_size(vec2(largura, 22.0), sentido);
@@ -212,6 +262,9 @@ impl Overlay {
         trecho(&mut job, &chefe.nome, 12.0, false, texto());
         if chefe.nivel > 0 {
             trecho(&mut job, &format!("  {}", chefe.nivel), 10.0, false, branco(0x88));
+        }
+        if desejos.is_some() {
+            trecho(&mut job, "  ★", 11.0, false, visual::DOURADO);
         }
         let nome = montar(ui, job);
         let pintor = ui.painter();
@@ -265,7 +318,11 @@ impl Overlay {
             self.aplicar_config();
         }
         let clique = if chefe.codigo.is_some() { "\n\nClique para ver os drops ao lado." } else { "" };
-        let resposta = resposta.on_hover_text(format!("{dica}\n\n{ORIGEM_CHEFES}{clique}"));
+        let desejo = desejos.map_or_else(String::new, |lista| {
+            let itens: Vec<String> = lista.iter().map(|(nome, chance)| format!("{nome} {}", porcentagem(*chance))).collect();
+            format!("\n\n★ Da sua lista de desejos: {}.", itens.join(", "))
+        });
+        let resposta = resposta.on_hover_text(format!("{dica}{desejo}\n\n{ORIGEM_CHEFES}{clique}"));
         if let Some(codigo) = chefe.codigo
             && resposta.on_hover_cursor(CursorIcon::PointingHand).clicked()
         {

@@ -61,6 +61,8 @@ pub struct ChefeMarcado {
     pub hora_ms: i64,
     /// Quando a lista chegou.
     pub lista_em: Hora,
+    /// Os itens da lista de desejos que ele derruba (A13); vazio no chefe só marcado no 🔔.
+    pub desejos: Vec<String>,
 }
 
 /// O que já saiu e o último estado visto de cada chefe. Só em memória: reabrir o Axon dentro da
@@ -140,16 +142,17 @@ fn alertas_de_chefe(
     let agora_s = agora.div_euclid(TICKS_POR_SEGUNDO);
     let antes = i64::from(regras.chefes_antes_min) * 60;
     let na_hora = regras.na_hora || antes == 0;
-    for chefe in chefes.iter().filter(|c| regras.chefes.contains(&c.id)) {
+    for chefe in chefes.iter().filter(|c| regras.chefes.contains(&c.id) || !c.desejos.is_empty()) {
         let em_dia = agora - chefe.lista_em <= LISTA_ANTIGA;
         let renasce = chefe.hora_ms.div_euclid(1000);
         let lista_das = || format!(" (lista das {})", eventos::horario_unix(chefe.lista_em.div_euclid(TICKS_POR_SEGUNDO), agora));
+        let desejos = if chefe.desejos.is_empty() { String::new() } else { format!(" (★ {})", chefe.desejos.join(", ")) };
         let alerta = |momento, alvo, texto: String| Alerta {
             origem: Origem::Chefe(chefe.id),
             momento,
             alvo,
             titulo: chefe.nome.clone(),
-            texto,
+            texto: format!("{texto}{desejos}"),
             icone: chefe.retrato.clone().map(|r| (r, ROSTO)),
         };
 
@@ -432,7 +435,8 @@ mod testes {
     }
 
     fn gartua(vivo: bool, hora_ms: i64, lista_em: i64) -> ChefeMarcado {
-        ChefeMarcado { id: 111021, nome: "Gartua".into(), retrato: None, vivo, hora_ms, lista_em: hora(lista_em) }
+        let lista_em = hora(lista_em);
+        ChefeMarcado { id: 111021, nome: "Gartua".into(), retrato: None, vivo, hora_ms, lista_em, desejos: Vec::new() }
     }
 
     fn marcando_gartua() -> Alertas {
@@ -492,6 +496,20 @@ mod testes {
         let mut m = Memoria::default();
         let outro = ChefeMarcado { id: 111013, ..gartua(false, GARTUA_R * 1000, GARTUA_R - 300) };
         assert!(rodar(&regras, &[outro], GARTUA_R - 300, &mut m).is_empty());
+    }
+
+    #[test]
+    fn chefe_de_um_desejo_avisa_sem_o_sino_e_diz_o_item() {
+        // A13: o Gartua não está no 🔔, mas derruba as Luvas (desejo com alerta ligado).
+        let regras = Alertas::default();
+        let mut m = Memoria::default();
+        let com_desejo = ChefeMarcado { desejos: vec!["Luvas de Gartua".into()], ..gartua(false, GARTUA_R * 1000, GARTUA_R - 300) };
+        let saida = rodar(&regras, &[com_desejo], GARTUA_R - 300, &mut m);
+        assert_eq!(saida, [(Momento::Antes, "renasce em 5 min (★ Luvas de Gartua)".into())]);
+        // Marcado no 🔔 e com desejo: um alerta só, com o item.
+        let mut m = Memoria::default();
+        let os_dois = ChefeMarcado { desejos: vec!["Luvas de Gartua".into()], ..gartua(false, GARTUA_R * 1000, GARTUA_R - 300) };
+        assert_eq!(rodar(&marcando_gartua(), &[os_dois], GARTUA_R - 300, &mut m).len(), 1);
     }
 
     #[test]

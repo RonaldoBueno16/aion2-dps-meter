@@ -343,6 +343,10 @@ impl Overlay {
             }
             let borda = Color32::from_rgba_unmultiplied(cor.r(), cor.g(), cor.b(), 0xAA);
             ui.painter().rect_stroke(quadrado, 3, Stroke::new(1.0_f32, borda), eframe::egui::StrokeKind::Outside);
+            if self.eh_desejo(peca.codigo) {
+                let estrela = ui.fonts_mut(|f| f.layout_no_wrap("★".into(), super::fonte(10.0, false), visual::DOURADO));
+                visual::com_sombra(ui.painter(), quadrado.right_top() - vec2(estrela.size().x - 2.0, 3.0), estrela);
+            }
             let chance = peca.chance.map_or_else(|| "?".to_string(), porcentagem);
             let mut job = LayoutJob::default();
             trecho(&mut job, &chance, 10.0, true, branco(0xDD));
@@ -477,6 +481,10 @@ impl Overlay {
             }
         }
         let mut direita = LayoutJob::default();
+        let desejo = self.eh_desejo(item.codigo);
+        if desejo {
+            trecho(&mut direita, "★  ", 11.0, false, visual::DOURADO);
+        }
         if let Some((minimo, maximo)) = item.quantidade.filter(|(_, maximo)| *maximo > 1) {
             let quantos = if minimo == maximo { format!("×{maximo}   ") } else { format!("×{minimo} a {maximo}   ") };
             trecho(&mut direita, &quantos, 10.0, false, branco(0x88));
@@ -496,7 +504,8 @@ impl Overlay {
         let raridade = raridade(item.raridade).0.map_or_else(String::new, |r| format!("{r}, "));
         let sem_chance = if item.chance.is_none() { "\nO questlog não dá a chance deste." } else { "" };
         let clique = if ficha { "\n\nClique para ver a ficha." } else { "" };
-        let dica = format!("{}\n{raridade}{chance} no questlog{sem_chance}{clique}", item.nome);
+        let na_lista = if desejo { "\n★ Na sua lista de desejos." } else { "" };
+        let dica = format!("{}\n{raridade}{chance} no questlog{sem_chance}{na_lista}{clique}", item.nome);
         let resposta = resposta.on_hover_text(dica);
         if ficha && resposta.clone().on_hover_cursor(CursorIcon::PointingHand).clicked() {
             self.abrir_ficha(item);

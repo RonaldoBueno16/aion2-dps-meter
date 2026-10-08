@@ -274,11 +274,12 @@ unsafe fn vigiar(janela: HWND) {
         let agora = nucleo::agora();
         let mut saida = Vec::new();
         if jogo::seguindo() {
-            let chefes = if regras.chefes.is_empty() {
+            let (desejos, minima) = alertas::desejos();
+            let chefes = if regras.chefes.is_empty() && desejos.is_empty() {
                 Vec::new()
             } else {
                 let sessao = vigia.sessao.lock().unwrap_or_else(PoisonError::into_inner);
-                janela::chefes_marcados(&sessao.medidor.chefes_por_regiao, &regras.chefes, agora)
+                janela::chefes_marcados(&sessao.medidor.chefes_por_regiao, &regras.chefes, &desejos, minima, agora)
             };
             saida = alertas::vencidos(&regras, &chefes, agora, jogo::aberto(), &mut vigia.memoria);
         }

@@ -3,6 +3,7 @@
 //! página, que volta pelo "‹ Configurações". Tudo vale na hora e fica salvo.
 
 mod alertas;
+mod desejos;
 mod medidor;
 mod recordes;
 mod sistema;
@@ -23,6 +24,7 @@ pub(super) enum Pagina {
     Luta,
     Visual,
     Alertas,
+    Desejos,
     Recordes,
     Atalhos,
     Dados,
@@ -31,7 +33,7 @@ pub(super) enum Pagina {
 /// Os grupos do índice, na ordem da tela. Página nova entra aqui e no `match` de `tela_configuracoes`.
 const GRUPOS: &[(&str, &[Pagina])] = &[
     ("Medidor", &[Pagina::Jogadores, Pagina::Luta, Pagina::Visual]),
-    ("Jogo", &[Pagina::Alertas, Pagina::Recordes]),
+    ("Jogo", &[Pagina::Alertas, Pagina::Desejos, Pagina::Recordes]),
     ("Sistema", &[Pagina::Atalhos, Pagina::Dados]),
 ];
 
@@ -46,6 +48,7 @@ impl Pagina {
             Pagina::Luta => "Luta",
             Pagina::Visual => "Visual",
             Pagina::Alertas => "Alertas",
+            Pagina::Desejos => "Lista de desejos",
             Pagina::Recordes => "Recordes",
             Pagina::Atalhos => "Atalhos",
             Pagina::Dados => "Dados no PC",
@@ -59,6 +62,7 @@ impl Pagina {
             Some("luta") => Pagina::Luta,
             Some("visual") => Pagina::Visual,
             Some("alertas") => Pagina::Alertas,
+            Some("desejos") => Pagina::Desejos,
             Some("recordes") => Pagina::Recordes,
             Some("atalhos") => Pagina::Atalhos,
             Some("dados") => Pagina::Dados,
@@ -116,6 +120,7 @@ impl Overlay {
                 Pagina::Luta => self.pagina_luta(ui),
                 Pagina::Visual => self.pagina_visual(ui),
                 Pagina::Alertas => self.pagina_alertas(ui),
+                Pagina::Desejos => self.pagina_desejos(ui),
                 Pagina::Recordes => self.pagina_recordes(ui),
                 Pagina::Atalhos => self.pagina_atalhos(ui),
                 Pagina::Dados => self.pagina_dados(ui),
@@ -168,6 +173,7 @@ impl Overlay {
             Pagina::Luta => medidor::resumo_luta(&self.config),
             Pagina::Visual => medidor::resumo_visual(&self.config),
             Pagina::Alertas => alertas::resumo_alertas(&self.config),
+            Pagina::Desejos => desejos::resumo_desejos(&self.config),
             Pagina::Recordes => recordes::resumo_recordes(&self.config, self.recordes.as_ref()),
             Pagina::Atalhos => sistema::resumo_atalhos(),
             Pagina::Dados => sistema::resumo_dados(&self.estado_config.arquivos),
@@ -311,6 +317,7 @@ mod testes {
             Pagina::Luta,
             Pagina::Visual,
             Pagina::Alertas,
+            Pagina::Desejos,
             Pagina::Recordes,
             Pagina::Atalhos,
             Pagina::Dados,

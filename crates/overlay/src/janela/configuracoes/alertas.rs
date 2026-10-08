@@ -168,6 +168,8 @@ impl Overlay {
             frase(ui, "de renascer");
         });
         ui.add_space(4.0);
+        dica(ui, "O chefe que derruba um item da lista de desejos com o 🔔 ligado nela também avisa (★).");
+        ui.add_space(4.0);
         let marcados = self.config.alertas.chefes.clone();
         if marcados.is_empty() {
             dica(ui, "Nenhum chefe marcado.");
@@ -176,7 +178,7 @@ impl Overlay {
         // O nome vem da lista da região, se ela já chegou nesta execução; sem ela, o número.
         let conhecidos = {
             let sessao = travar(&self.sessao);
-            chefes_marcados(&sessao.medidor.chefes_por_regiao, &marcados, nucleo::agora())
+            chefes_marcados(&sessao.medidor.chefes_por_regiao, &marcados, &[], 0.0, nucleo::agora())
         };
         for (i, id) in marcados.into_iter().enumerate() {
             if i > 0 {

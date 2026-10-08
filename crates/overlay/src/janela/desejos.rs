@@ -49,6 +49,17 @@ pub(super) fn chance_minima(config: &Config) -> f64 {
     f64::from(config.desejos_chance_minima) / 100.0
 }
 
+/// A chance mínima da config como texto: "0,5%", "0,25%", "2%".
+pub(super) fn chance_da_config(pct: f32) -> String {
+    let texto = nucleo::formato::n(f64::from(pct), 2);
+    let texto = match texto.split_once(',') {
+        Some((inteira, casas)) if casas.trim_end_matches('0').is_empty() => inteira.to_string(),
+        Some((inteira, casas)) => format!("{inteira},{}", casas.trim_end_matches('0')),
+        None => texto,
+    };
+    format!("{texto}%")
+}
+
 /// Para cada chefe da região (código do NPC): os desejos que ele derruba e a chance, direto ou pelo
 /// baú (chance do baú no chefe × chance do item no baú, supondo independentes), só com chance >=
 /// `minima`. Chance que o questlog não dá só entra com a mínima 0.
@@ -673,10 +684,10 @@ impl Overlay {
         let sino = visual::sino(ui, pos2(caixa.min.x - 14.0, meio), desejo.alertar, ui.id().with(("sino_desejo", codigo)));
         let sobre_o_sino = if desejo.alertar {
             format!(
-                "Alerta ligado: {} min antes de renascer um chefe que derruba este item com {}% ou mais, e na hora. \
+                "Alerta ligado: {} min antes de renascer um chefe que derruba este item com {} ou mais, e na hora. \
                  Clique para desligar.",
                 self.config.alertas.chefes_antes_min,
-                nucleo::formato::n(f64::from(self.config.desejos_chance_minima), 1).trim_end_matches(",0")
+                chance_da_config(self.config.desejos_chance_minima)
             )
         } else {
             "Ligar o alerta: avisa quando renasce um chefe que derruba este item.".to_string()
