@@ -146,7 +146,7 @@ impl Overlay {
                     trecho(&mut job, &parte, 10.0, true, cor);
                 }
                 if job.sections.is_empty() {
-                    let motivo = match (r.candidato.tempo, r.candidato.dps) {
+                    let motivo = match (&r.candidato.tempo, &r.candidato.dps) {
                         (Err(motivo), _) => motivo.texto(),
                         (_, Err(motivo)) => motivo.texto(),
                         _ => String::new(),
