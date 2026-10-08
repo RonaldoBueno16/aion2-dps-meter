@@ -123,8 +123,9 @@ Proposta do que é "100% configurável", com recomendação:
 
 ### Perguntas ao dono
 
-- **P1. Disco.** A decisão diz "só os códigos dos itens podem ir para o config.json". Lida ao pé da
-  letra, prioridade e alerta por item ficam de fora e a lista vira `[210540076, 210540129]` com três
+- **P1. Disco.** A proposta inicial da lista de ideias de 2026-10-08 (não é decisão do dono) era
+  "só os códigos dos itens no config.json". Lida ao pé da letra, prioridade e alerta por item ficam
+  de fora e a lista vira `[210540076, 210540129]` com três
   opções globais. Proposta: códigos mais as preferências que o próprio jogador escolhe (prioridade,
   alertar), nenhum dado baixado. Qual das duas?
 - **P2. Teclado.** O overlay não recebe teclado: `WS_EX_NOACTIVATE` é reaplicado a cada quadro
@@ -430,7 +431,7 @@ Proposta (resposta a P1). Tudo o que vai para o disco, e nada mais:
 | `desejos_chance_minima` | f32, em % | 0 a 100 (0 = qualquer) | 0,5 |
 | `desejos_so_com_desejo` | bool | | false |
 
-- Na leitura literal da decisão, `desejos` vira `[210540076, 210540129]` e somem `prioridade` e
+- Na leitura literal dessa proposta inicial, `desejos` vira `[210540076, 210540129]` e somem `prioridade` e
   `alertar`.
 - Não vai: nome, ícone, raridade, chance, código de NPC, região, receita, termo buscado, resultado.
 - Lista por classe (se P3 escolher): `"desejos_por_classe": {"Ranger": [...]}`, sem nome de personagem.
