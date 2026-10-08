@@ -59,7 +59,7 @@ eles são preenchimento). Na captura, o bloco descomprimiu com o tamanho exato d
 | `0x561C` | Power mudou: `[varint entidade][u32 power]...` (o `0x561D` traz o mesmo valor duas vezes, sem entidade) | confirmado uma vez com o seu personagem (seção 7b) |
 | `0x3645` | Outro jogador entrando no campo de visão (id, nome, level, power, equipamento; 1.300 a 1.500 bytes) | confirmado (seção 7b) |
 | `0x8D21` | Estado de combate de entidade (mob ou jogador); num chefe, com prazo para matar | estado confirmado; prazo visto num chefe só (seção 5b) |
-| `0xE005` | Barra de um chefe: `[varint entidade][03 01][u32 máximo][u32 atual][02]`; no chefe de 2026-10-06, 1200 → 16 em 45 s, caindo aos saltos junto com os golpes, e `00 03 02` no fim (barra quebrada, hipótese) | lido numa captura, não usado |
+| `0xE005` | Barra de um chefe: `[varint entidade][03 01][u32 máximo][u32 atual][02]`; no chefe de 2026-10-06, 1200 → 6 em 45 s, caindo aos saltos junto com os golpes, e `00 03 02` no fim (barra quebrada, hipótese) | lido numa captura, não usado |
 | `0x382A`, `0x382B`, `0x382C` | Buff novo, renovado e removido | confirmado (seção 5c) |
 | `0x382D` | Ligado a buffs (1.909 de 1.962 no world boss) | não fechou (seção 5c) |
 | `0x610B` | Tickets de conteúdo no login, entre eles a Energia Odyle | confirmado (seção 7d) |
