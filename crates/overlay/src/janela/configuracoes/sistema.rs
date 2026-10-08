@@ -175,7 +175,11 @@ impl Overlay {
                         self.config = Config::default();
                     }
                     if self.estado_config.esperando("config") {
-                        dica(ui, "Volta tudo ao padrão. Atalhos trocados voltam a Ctrl+H e Ctrl+T na próxima abertura.");
+                        dica(
+                            ui,
+                            "Volta tudo ao padrão, inclusive os alertas e os chefes marcados. Atalhos trocados voltam \
+                             a Ctrl+H e Ctrl+T na próxima abertura.",
+                        );
                     }
                 }
                 "jogadores.json" => {
