@@ -79,7 +79,7 @@ const LOGO: &[u8] = include_bytes!("../assets/axon-64.png");
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tela {
     Medidor,
-    Configuracoes,
+    Configuracoes(configuracoes::Pagina),
     Lutas,
     Chefes,
 }
@@ -177,6 +177,8 @@ pub struct Overlay {
     arraste: Option<([i32; 2], [i32; 4])>,
     /// Sua linha (ou um esboço com o seu nome) para a amostra da tela de configurações.
     amostra: Option<LinhaJogador>,
+    /// O que as páginas das configurações guardam entre quadros (tamanhos medidos, "Apagar?").
+    estado_config: configuracoes::EstadoConfig,
     /// Ícone ao lado do relógio; None se o Windows não deixou criar.
     bandeja: Option<Bandeja>,
     /// O que foi pedido à janela por último: o clique passa por ela até o jogo (atalho ou menu da
@@ -272,7 +274,8 @@ impl Overlay {
                 .unwrap_or(LIMITE_DE_LINHAS),
             config,
             tela: if tem("--config") {
-                Tela::Configuracoes
+                let pagina = opcoes_debug.iter().skip_while(|a| *a != "--config").nth(1);
+                Tela::Configuracoes(configuracoes::Pagina::pelo_nome(pagina.map(String::as_str)))
             } else if tem("--lutas") {
                 Tela::Lutas
             } else if tem("--chefes") {
@@ -284,6 +287,7 @@ impl Overlay {
             janela: manter_sem_ativar(cc),
             arraste: None,
             amostra: None,
+            estado_config: configuracoes::EstadoConfig::default(),
             bandeja: None,
             atravessando: false,
             atualizacao: if tem("--nova-versao") { Atualizacao::falsa() } else { Atualizacao::iniciar() },
@@ -295,7 +299,10 @@ impl Overlay {
         let atalhos =
             [&c.atalho_mostrar, &c.atalho_atravessar, &c.atalho_resumo, &c.atalho_compacta].map(|a| Atalho::ler(a));
         overlay.bandeja = Bandeja::iniciar(overlay.janela, atalhos);
-        overlay.ler_placar();
+        match overlay.tela {
+            Tela::Configuracoes(pagina) => overlay.abrir_configuracoes(pagina),
+            _ => overlay.ler_placar(),
+        }
         Ok(overlay)
     }
 
@@ -324,7 +331,7 @@ impl Overlay {
         self.ping = sessao.ping();
         self.odyle = sessao.medidor.odyle;
         self.chefes = sessao.medidor.chefes_de_campo.clone();
-        let memoria = (self.tela == Tela::Configuracoes).then(|| sessao.medidor.exportar_memoria());
+        let memoria = matches!(self.tela, Tela::Configuracoes(_)).then(|| sessao.medidor.exportar_memoria());
         drop(sessao);
         self.lido_em = Instant::now();
         let totais = self.placar.dano.total + self.placar.dano_recebido.total + self.placar.cura.total;
@@ -457,7 +464,7 @@ impl Overlay {
 
     fn conteudo(&mut self, ui: &mut Ui) {
         match self.tela {
-            Tela::Configuracoes => return self.tela_configuracoes(ui),
+            Tela::Configuracoes(pagina) => return self.tela_configuracoes(ui, pagina),
             Tela::Lutas => return self.tela_lutas(ui),
             Tela::Chefes => return self.tela_chefes(ui),
             Tela::Medidor => {}
@@ -520,8 +527,7 @@ impl Overlay {
                     self.dobra.recolher(self.janela);
                 }
                 if visual::botao_icone(ui, "⚙", 15.0).on_hover_text("Configurações").clicked() {
-                    self.tela = Tela::Configuracoes;
-                    self.ler_placar();
+                    self.abrir_configuracoes(configuracoes::Pagina::Indice);
                 }
                 if visual::botao_icone(ui, "☰", 14.0).on_hover_text("Lutas anteriores").clicked() {
                     self.tela = Tela::Lutas;

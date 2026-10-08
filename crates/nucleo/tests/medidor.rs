@@ -253,6 +253,23 @@ fn valor_desta_conexao_vence_a_memoria_e_atualiza_a_memoria() {
 }
 
 #[test]
+fn esquecer_memoria_apaga_os_perfis_e_o_seu_nome_e_volta_a_guardar() {
+    let mut m = Medidor::default();
+    m.carregar_memoria(Some("Fulano".into()), [("Beltrano".to_string(), PerfilJogador { nivel: 44, poder: 1000 })]);
+    m.registrar(golpe(16173, 17010000, 100), T0);
+    m.definir_jogador(16173, "Beltrano", 0, false); // nome sem nível: o nível viria da memória
+
+    m.esquecer_memoria();
+    let (eu, perfis) = m.exportar_memoria();
+    assert_eq!(eu, None);
+    assert!(perfis.is_empty());
+    assert_eq!(m.obter_placar().dano.jogadores[0].nivel, 0);
+
+    m.definir_jogador(16173, "Beltrano", 45, false);
+    assert_eq!(m.exportar_memoria().1["Beltrano"], PerfilJogador { nivel: 45, poder: 0 });
+}
+
+#[test]
 fn login_desta_conexao_nao_e_trocado_por_nome_guardado() {
     let mut m = Medidor::default();
     m.carregar_memoria(Some("Yoshi".into()), []);

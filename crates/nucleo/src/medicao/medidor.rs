@@ -436,6 +436,13 @@ impl Medidor {
         (self.meu_nome.clone(), self.memoria.clone())
     }
 
+    /// "Apagar" nas configurações: some a memória guardada e o seu nome. O que esta conexão já mandou
+    /// continua valendo; quem aparecer de novo volta a ser guardado.
+    pub fn esquecer_memoria(&mut self) {
+        self.memoria.clear();
+        self.meu_nome = None;
+    }
+
     fn nomear(&mut self, id: u32, nome: &str) {
         self.nomes.insert(id, nome.to_string());
         // Sem 0x3633 nesta conexão, o seu nome guardado identifica você; um 0x3633 nunca é trocado.
