@@ -13,6 +13,7 @@ mod item;
 mod lutas;
 mod morte;
 mod recolher;
+mod recorde;
 mod visual;
 
 pub(crate) use chefes::chefes_marcados;
@@ -36,8 +37,9 @@ use nucleo::formato::{f, n, p};
 use nucleo::medicao::catalogo::{self, Busca, CatalogoSkills, InfoRegiao};
 use nucleo::medicao::dados_jogo;
 use nucleo::medicao::medidor::{
-    Alvo, LinhaBuff, LinhaJogador, LinhaSkill, Medidor, PerfilJogador, Placar, RelatorioMorte, Tabela,
+    Abate, Alvo, LinhaBuff, LinhaJogador, LinhaSkill, Medidor, PerfilJogador, Placar, RelatorioMorte, Tabela,
 };
+use nucleo::medicao::recordes::Resultado;
 use nucleo::medicao::sessao::Sessao;
 use nucleo::protocolo::combate::ChefesDeCampo;
 use nucleo::{Hora, TICKS_POR_SEGUNDO};
@@ -91,6 +93,7 @@ enum Tela {
     Chefes,
     /// O relatório de uma morte sua, pelo número.
     Morte(u64),
+    Recordes,
 }
 
 /// Buffs mostrados embaixo das skills de um jogador expandido.
@@ -198,6 +201,14 @@ pub struct Overlay {
     morte_vista: u64,
     /// O relatório da tela Morte.
     relatorio: Option<Arc<RelatorioMorte>>,
+    /// O recordes.json lido na abertura; None com os recordes desligados.
+    recordes: Option<crate::recordes::Guardados>,
+    /// Cada kill de chefe que contou, por (código, hora da morte), contra o melhor de antes dele.
+    kills: HashMap<(u32, Hora), Resultado>,
+    /// O chefe da luta na tela (a de agora ou a passada aberta), para a faixa do recorde.
+    abate_visto: Option<Abate>,
+    /// Recorde que espera o segundo clique do "Apagar" ((0, "") = todos) e desde quando.
+    apagando_recorde: Option<(u32, String, Instant)>,
     /// Ícone ao lado do relógio; None se o Windows não deixou criar.
     bandeja: Option<Bandeja>,
     /// O que foi pedido à janela por último: o clique passa por ela até o jogo (atalho ou menu da
@@ -256,6 +267,7 @@ impl Overlay {
             }
         };
 
+        let recordes = config.recordes.then(|| crate::recordes::Guardados::abrir(crate::recordes::arquivo()));
         let mut overlay = Self {
             sessao,
             captura,
@@ -322,6 +334,10 @@ impl Overlay {
             card_morte: None,
             morte_vista: 0,
             relatorio: None,
+            recordes,
+            kills: HashMap::new(),
+            abate_visto: None,
+            apagando_recorde: None,
             bandeja: None,
             atravessando: false,
             atualizacao: if tem("--nova-versao") { Atualizacao::falsa() } else { Atualizacao::iniciar() },
@@ -365,8 +381,27 @@ impl Overlay {
             ocultar_nomes(&mut self.placar);
         }
         if self.tela == Tela::Lutas {
-            self.lutas = lutas.iter().map(|luta| ResumoLuta::de(luta, self.config.ocultar_nomes)).collect();
+            let recordes = self.recordes.is_some();
+            self.lutas = lutas
+                .iter()
+                .map(|luta| {
+                    let marca = recorde::marca_da_luta(luta, &self.kills).filter(|_| recordes);
+                    ResumoLuta::de(luta, self.config.ocultar_nomes, marca)
+                })
+                .collect();
         }
+        // Kills para o recorde: o da luta de agora assim que o chefe morre, e os das lutas que acabaram.
+        let abate_vivo = sessao.medidor.abate();
+        let abates: Vec<Abate> = lutas
+            .iter()
+            .filter_map(|l| l.abate.clone())
+            .chain(abate_vivo.clone())
+            .filter(|a| a.morte.is_some_and(|morte| !self.kills.contains_key(&(a.codigo, morte))))
+            .collect();
+        self.abate_visto = match self.vendo {
+            Some((numero, _)) => lutas.iter().find(|l| l.numero == numero).and_then(|l| l.abate.clone()),
+            None => abate_vivo,
+        };
         let mut ultima = sessao.medidor.ultima_morte();
         // A morte com a luta já fechada só existe na última; as outras, nas lutas.
         let mut relatorio = match self.tela {
@@ -384,6 +419,7 @@ impl Overlay {
         self.chefes = sessao.medidor.chefes_de_campo.clone();
         let memoria = matches!(self.tela, Tela::Configuracoes(_)).then(|| sessao.medidor.exportar_memoria());
         drop(sessao);
+        self.avaliar_kills(abates);
         if self.config.ocultar_nomes {
             for r in ultima.iter_mut().chain(relatorio.iter_mut()) {
                 morte::ocultar_na_morte(Arc::make_mut(r));
@@ -447,6 +483,12 @@ impl Overlay {
             let medidor = &mut s.medidor;
             medidor.relatorio_morte = self.config.relatorio_morte;
             medidor.janela_morte = i64::from(self.config.janela_morte_s) * TICKS_POR_SEGUNDO;
+        }
+        // Desligado, o arquivo nem é lido; religado, é lido na hora.
+        match (self.config.recordes, self.recordes.is_some()) {
+            (true, false) => self.recordes = Some(crate::recordes::Guardados::abrir(crate::recordes::arquivo())),
+            (false, true) => self.recordes = None,
+            _ => {}
         }
         if self.replay {
             return;
@@ -545,6 +587,7 @@ impl Overlay {
             Tela::Lutas => return self.tela_lutas(ui),
             Tela::Chefes => return self.tela_chefes(ui),
             Tela::Morte(_) => return self.tela_morte(ui),
+            Tela::Recordes => return self.tela_recordes(ui),
             Tela::Medidor => {}
         }
         let tabela = self.tabela();
@@ -565,6 +608,7 @@ impl Overlay {
             self.barra_do_alvo(ui, &alvo);
             ui.add_space(6.0);
         }
+        self.faixa_de_recorde(ui);
         self.card_da_morte(ui);
         self.abas(ui);
         ui.add_space(4.0);
@@ -2440,6 +2484,11 @@ fn detalhe_dps(golpes: i32, costas: i32) -> String {
 /// "HH:mm" no fuso do Windows (com horário de verão) de uma hora da captura, que vem em UTC.
 fn hora_local(hora: Hora) -> String {
     relogio(hora).map_or_else(|| "--:--".into(), |t| format!("{:02}:{:02}", t.wHour, t.wMinute))
+}
+
+/// "08/10", para a data dos recordes.
+fn data_local(hora: Hora) -> String {
+    relogio(hora).map_or_else(|| "--/--".into(), |t| format!("{:02}/{:02}", t.wDay, t.wMonth))
 }
 
 /// "14:32:05", para a hora da morte.

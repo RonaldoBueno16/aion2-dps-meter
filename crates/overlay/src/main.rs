@@ -11,6 +11,7 @@ mod eventos;
 mod firewall;
 mod janela;
 mod jogo;
+mod recordes;
 
 use eframe::egui;
 

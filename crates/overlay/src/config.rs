@@ -63,6 +63,8 @@ pub struct Config {
     /// Eventos embaixo do rodapé: todos, um por linha; desligado, só a linha com os próximos.
     pub eventos_expandidos: bool,
     pub alertas: Alertas,
+    /// Recordes de chefe no recordes.json. Desligado, o arquivo não é lido nem gravado.
+    pub recordes: bool,
     /// Relatório da sua morte: o card no medidor e a tela com os últimos segundos.
     pub relatorio_morte: bool,
     pub card_morte_s: u32,
@@ -163,6 +165,7 @@ impl Default for Config {
             compacta: false,
             eventos_expandidos: false,
             alertas: Alertas::default(),
+            recordes: true,
             relatorio_morte: true,
             card_morte_s: 15,
             janela_morte_s: 10,
@@ -249,6 +252,7 @@ mod testes {
         // Config de antes da 0.14.0: os alertas e o relatório de morte com o padrão.
         assert_eq!(c.alertas, Alertas::default());
         assert_eq!((c.relatorio_morte, c.card_morte_s, c.janela_morte_s), (true, 15, 10));
+        assert!(c.recordes);
         let torta = Config { card_morte_s: 1, janela_morte_s: 90, ..Config::default() }.dentro_das_faixas();
         assert_eq!((torta.card_morte_s, torta.janela_morte_s), (CARD_MORTE_MIN_S, JANELA_MORTE_MAX_S));
     }

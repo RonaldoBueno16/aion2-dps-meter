@@ -26,10 +26,12 @@ pub(super) struct ResumoLuta {
     alvo: Option<String>,
     /// Quantas vezes você morreu nela.
     mortes: usize,
+    /// Com chefe: recorde novo (★) e o mouse com o resultado ou o motivo de não contar.
+    recorde: Option<(bool, String)>,
 }
 
 impl ResumoLuta {
-    pub(super) fn de(luta: &LutaPassada, ocultar_nomes: bool) -> Self {
+    pub(super) fn de(luta: &LutaPassada, ocultar_nomes: bool, recorde: Option<(bool, String)>) -> Self {
         let dano = &luta.placar.dano;
         Self {
             numero: luta.numero,
@@ -43,6 +45,7 @@ impl ResumoLuta {
             }),
             alvo: luta.placar.alvo.as_ref().map(|a| a.nome.clone()).filter(|nome| !nome.is_empty()),
             mortes: luta.placar.mortes.len(),
+            recorde,
         }
     }
 }
@@ -54,6 +57,11 @@ impl Overlay {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if botao(ui, "Voltar", true).on_hover_text("Volta ao medidor").clicked() {
                     self.tela = Tela::Medidor;
+                }
+                if self.config.recordes
+                    && botao(ui, "★ Recordes", false).on_hover_text("O seu melhor em cada chefe").clicked()
+                {
+                    self.tela = Tela::Recordes;
                 }
             });
         });
@@ -104,6 +112,9 @@ fn linha_luta(ui: &mut Ui, luta: &ResumoLuta, vista: bool) -> bool {
         1 => trecho(&mut job, "   ☠", 11.0, true, Color32::from_rgb(0xFF, 0x8B, 0x8B)),
         m => trecho(&mut job, &format!("   ☠{m}"), 11.0, true, Color32::from_rgb(0xFF, 0x8B, 0x8B)),
     }
+    if luta.recorde.as_ref().is_some_and(|(novo, _)| *novo) {
+        trecho(&mut job, "   ★", 11.0, true, visual::DOURADO);
+    }
     let jogadores = if luta.jogadores == 1 { "1 jogador".to_string() } else { format!("{} jogadores", luta.jogadores) };
     let mut direita = LayoutJob::default();
     match &luta.alvo {
@@ -119,10 +130,15 @@ fn linha_luta(ui: &mut Ui, luta: &ResumoLuta, vista: bool) -> bool {
     let (rect, resposta) = ui.allocate_exact_size(vec2(largura, altura), Sense::click());
     let resposta = resposta
         .on_hover_cursor(CursorIcon::PointingHand)
-        .on_hover_text(if luta.mortes > 0 {
-            format!("Ver o placar desta luta ({jogadores}). ☠: você morreu nela; o card da morte abre o relatório.")
-        } else {
-            format!("Ver o placar desta luta ({jogadores})")
+        .on_hover_text({
+            let mut dica = format!("Ver o placar desta luta ({jogadores})");
+            if luta.mortes > 0 {
+                dica += ". ☠: você morreu nela; o card da morte abre o relatório";
+            }
+            if let Some((_, recorde)) = &luta.recorde {
+                dica += &format!("\n{recorde}");
+            }
+            dica
         });
     let fundo = if resposta.hovered() {
         Some(branco(0x33))

@@ -68,6 +68,9 @@ fn descricao(nome: &str) -> &'static str {
             "O seu nome e o nível e GS de quem você já viu, para aparecerem na hora na próxima luta."
         }
         "icones" => "Ícones das skills e retratos dos monstros, do site da NCSoft.",
+        "recordes.json" => "Seus recordes de chefe: o código do chefe, a sua classe e números, nenhum nome.",
+        "recordes.json.tmp" => "Cópia de quando os recordes estavam sendo gravados; sobra se o PC desligou no meio.",
+        "recordes.json.corrompido" => "Recordes que não deu para ler, guardados como estavam.",
         _ if nome.starts_with("skills-") => "Nomes das skills, do questlog.gg.",
         _ if nome.starts_with("npcs-") => "Nomes dos monstros e chefes, do questlog.gg.",
         _ => "",
