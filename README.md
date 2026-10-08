@@ -510,7 +510,8 @@ testes → release) fica para quando o Actions voltar; aí a tag sozinha publica
   jogador no world boss de 2026-10-03 (golpe final de 4.926 do Arconte Axios), e o código do NPC
   do matador no `0x8D04` foi visto nessa morte só.
 - **Alertas**: a regra de quando cada alerta sai tem testes; a entrega (faixa, som e balão) ainda
-  não foi conferida com o jogo aberto em tela cheia sem borda.
+  não foi conferida com o jogo aberto em tela cheia sem borda, nem o alerta de um chefe pela lista
+  de desejos (o replay não roda os alertas).
 - **Lista de desejos**: fontes e % do questlog, não conferidas no jogo. A chance pelo baú supõe
   que o baú e o item dentro dele são sorteados à parte. O destaque na tela Bosses depende da ordem
   dos chefes da região (conferida só em Altgard).

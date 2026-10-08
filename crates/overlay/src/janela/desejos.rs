@@ -198,13 +198,11 @@ fn profissao(categoria: &str) -> String {
     letras.next().map_or_else(String::new, |primeira| primeira.to_uppercase().chain(letras).collect())
 }
 
-/// "light" e "dark" do questlog: Elyos e Asmodian (Altgard, do lado dark, é terra Asmodian).
+/// "raça light": como o questlog dá, como a profissão (o nome no jogo não foi conferido).
 fn raca(raca: &str) -> String {
     match raca {
-        "light" => "só Elyos".into(),
-        "dark" => "só Asmodian".into(),
         "all" | "" => String::new(),
-        outra => outra.into(),
+        outra => format!("raça {outra}"),
     }
 }
 
