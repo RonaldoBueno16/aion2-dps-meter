@@ -5,8 +5,12 @@
 //! velho.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock, PoisonError};
+use std::time::Instant;
 
 use nucleo::{Hora, TICKS_POR_SEGUNDO};
+use windows_sys::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
 
 use crate::config::Alertas;
 use crate::eventos::{self, EVENTOS, ROSTO};
@@ -190,6 +194,116 @@ fn minutos_ate(segundos: i64) -> String {
     format!("{} min", (segundos.max(1) + 59) / 60)
 }
 
+/// O que o "Testar alerta" mostra: passa pelo mesmo caminho dos alertas de verdade.
+pub fn alerta_de_teste(agora: Hora) -> Alerta {
+    Alerta {
+        origem: Origem::Teste,
+        momento: Momento::NaHora,
+        alvo: agora.div_euclid(TICKS_POR_SEGUNDO),
+        titulo: "Teste do Axon".into(),
+        texto: "é assim que chega um alerta".into(),
+        icone: None,
+    }
+}
+
+// Entrega. O fio do egui grava as regras; o da bandeja confere a cada segundo, toca o som, mostra o
+// balão e põe as faixas na fila, que o overlay esvazia no quadro seguinte.
+
+static REGRAS: Mutex<Option<Alertas>> = Mutex::new(None);
+static FILA: Mutex<Vec<(Alerta, Instant)>> = Mutex::new(Vec::new());
+static MUDOU_PELA_BANDEJA: AtomicBool = AtomicBool::new(false);
+static PEDIU_TESTE: AtomicBool = AtomicBool::new(false);
+
+/// As regras da config, a cada mudança.
+pub fn definir_regras(regras: &Alertas) {
+    *REGRAS.lock().unwrap_or_else(PoisonError::into_inner) = Some(regras.clone());
+}
+
+pub fn regras() -> Option<Alertas> {
+    REGRAS.lock().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
+pub fn ligados() -> bool {
+    regras().is_some_and(|r| r.ligados)
+}
+
+/// "Alertas" no menu da bandeja: vale na hora; o overlay grava na config no próximo quadro.
+pub fn alternar_ligados() {
+    if let Some(regras) = REGRAS.lock().unwrap_or_else(PoisonError::into_inner).as_mut() {
+        regras.ligados = !regras.ligados;
+        MUDOU_PELA_BANDEJA.store(true, Ordering::Relaxed);
+    }
+}
+
+pub fn mudou_pela_bandeja() -> bool {
+    MUDOU_PELA_BANDEJA.swap(false, Ordering::Relaxed)
+}
+
+/// "Testar alerta": sai no próximo segundo, pelo caminho de sempre.
+pub fn testar() {
+    PEDIU_TESTE.store(true, Ordering::Relaxed);
+}
+
+pub fn pediu_teste() -> bool {
+    PEDIU_TESTE.swap(false, Ordering::Relaxed)
+}
+
+pub fn enfileirar(alertas: Vec<Alerta>) {
+    let agora = Instant::now();
+    FILA.lock().unwrap_or_else(PoisonError::into_inner).extend(alertas.into_iter().map(|a| (a, agora)));
+}
+
+/// As faixas que chegaram, com a hora em que saíram (o overlay escondido não esvazia a fila).
+pub fn retirar() -> Vec<(Alerta, Instant)> {
+    std::mem::take(&mut *FILA.lock().unwrap_or_else(PoisonError::into_inner))
+}
+
+/// Toca o som do alerta sem esperar: na sessão de áudio do próprio Axon (o volume dele no mixer), e
+/// não no de "sons do sistema", que muita gente deixa baixo.
+pub fn tocar() {
+    let wav = som();
+    unsafe { PlaySoundW(wav.as_ptr().cast(), std::ptr::null_mut(), SND_MEMORY | SND_ASYNC | SND_NODEFAULT) };
+}
+
+/// Duas notas curtas (lá e mi, 120 ms cada), PCM 16 bits mono, montadas uma vez na memória: o
+/// PlaySound lê o WAV enquanto toca, então ele precisa viver até o fim do programa.
+fn som() -> &'static [u8] {
+    static SOM: OnceLock<Vec<u8>> = OnceLock::new();
+    SOM.get_or_init(|| montar_wav(&[(880.0, 0.12), (1318.5, 0.12)], 22_050))
+}
+
+fn montar_wav(notas: &[(f32, f32)], taxa: u32) -> Vec<u8> {
+    let mut amostras: Vec<i16> = Vec::new();
+    for &(frequencia, duracao) in notas {
+        let n = (duracao * taxa as f32) as usize;
+        let rampa = (0.01 * taxa as f32) as usize;
+        for i in 0..n {
+            // Sobe e desce em 10 ms nas pontas: sem isso, a nota estala.
+            let envelope = (i.min(n - 1 - i) as f32 / rampa as f32).min(1.0);
+            let onda = (std::f32::consts::TAU * frequencia * i as f32 / taxa as f32).sin();
+            amostras.push((onda * envelope * 0.35 * f32::from(i16::MAX)) as i16);
+        }
+    }
+    let dados = (amostras.len() * 2) as u32;
+    let mut wav = Vec::with_capacity(44 + dados as usize);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + dados).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+    wav.extend_from_slice(&taxa.to_le_bytes());
+    wav.extend_from_slice(&(taxa * 2).to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&dados.to_le_bytes());
+    for amostra in amostras {
+        wav.extend_from_slice(&amostra.to_le_bytes());
+    }
+    wav
+}
+
 /// Título (até 48 caracteres) e texto (até 200) do balão da bandeja; vários alertas viram um balão.
 pub fn texto_do_balao(alertas: &[Alerta]) -> (String, String) {
     let (titulo, texto) = match alertas {
@@ -325,7 +439,7 @@ mod testes {
         assert_eq!(rodar(&regras, &[morto(GARTUA_R - 300)], GARTUA_R - 300, &mut m), [(Momento::Antes, "renasce em 5 min".into())]);
         // Nasceu 2 min antes da hora: "renasceu" na hora em que a lista mudou.
         let vivo = gartua(true, GARTUA_R * 1000 - 136_000, GARTUA_R - 120);
-        assert_eq!(rodar(&regras, &[vivo.clone()], GARTUA_R - 120, &mut m), [(Momento::NaHora, "renasceu".into())]);
+        assert_eq!(rodar(&regras, std::slice::from_ref(&vivo), GARTUA_R - 120, &mut m), [(Momento::NaHora, "renasceu".into())]);
         assert!(rodar(&regras, &[vivo], GARTUA_R, &mut m).is_empty());
         // Morreu de novo: hora nova, chave nova.
         let r2 = GARTUA_R + 3600;
@@ -338,7 +452,7 @@ mod testes {
         let mut m = Memoria::default();
         assert!(rodar(&regras, &[gartua(false, GARTUA_R * 1000, GARTUA_R - 900)], GARTUA_R - 900, &mut m).is_empty());
         let vivo = gartua(true, 0, GARTUA_R - 400);
-        assert_eq!(rodar(&regras, &[vivo.clone()], GARTUA_R - 400, &mut m), [(Momento::NaHora, "renasceu".into())]);
+        assert_eq!(rodar(&regras, std::slice::from_ref(&vivo), GARTUA_R - 400, &mut m), [(Momento::NaHora, "renasceu".into())]);
         assert!(rodar(&regras, &[vivo], GARTUA_R - 300, &mut m).is_empty());
     }
 
@@ -348,9 +462,9 @@ mod testes {
         let mut m = Memoria::default();
         // Lista vista às 17:22 (5 h antes), você em outra região.
         let antiga = gartua(false, GARTUA_R * 1000, GARTUA_R - 17_880);
-        let antes = rodar(&regras, &[antiga.clone()], GARTUA_R - 300, &mut m);
+        let antes = rodar(&regras, std::slice::from_ref(&antiga), GARTUA_R - 300, &mut m);
         assert_eq!(antes, [(Momento::Antes, "renasce em 5 min (lista das 17:22)".into())]);
-        let na_hora = rodar(&regras, &[antiga.clone()], GARTUA_R, &mut m);
+        let na_hora = rodar(&regras, std::slice::from_ref(&antiga), GARTUA_R, &mut m);
         assert_eq!(na_hora, [(Momento::NaHora, "deve ter renascido (lista das 17:22)".into())]);
         assert!(rodar(&regras, &[antiga], GARTUA_R + 30, &mut m).is_empty());
     }
@@ -384,6 +498,19 @@ mod testes {
         assert!(vencidos(&so_com_jogo, &[], hora(TERCA_4H - 600), false, &mut m).is_empty());
         let mut m = Memoria::default();
         assert_eq!(vencidos(&so_com_jogo, &[], hora(TERCA_4H - 600), true, &mut m).len(), 1);
+    }
+
+    #[test]
+    fn wav_do_som_tem_cabecalho_e_tamanho_certos() {
+        let wav = montar_wav(&[(880.0, 0.12), (1318.5, 0.12)], 22_050);
+        let amostras = 2 * (0.12 * 22_050.0) as usize;
+        assert_eq!(wav.len(), 44 + amostras * 2);
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(u32::from_le_bytes(wav[4..8].try_into().unwrap()) as usize, wav.len() - 8);
+        assert_eq!(&wav[8..16], b"WAVEfmt ");
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()) as usize, amostras * 2);
+        // Começa e termina no silêncio (a rampa).
+        assert_eq!(i16::from_le_bytes([wav[44], wav[45]]), 0);
     }
 
     #[test]

@@ -2,6 +2,8 @@
 //! poucos segundos, com o mapa aberto ou não (vivo, ou a hora de renascer). Nome, nível e retrato vêm
 //! do questlog, pela ordem dos NPCs nomeados da região (conferida em 3 dos 24 de Altgard).
 
+use std::collections::{BTreeSet, HashMap};
+
 use eframe::egui::{Align, CursorIcon, Layout, Rect, RichText, Sense, Ui, Vec2, pos2, vec2};
 use eframe::egui::text::LayoutJob;
 use nucleo::medicao::catalogo::InfoRegiao;
@@ -12,6 +14,7 @@ use nucleo::{Hora, TICKS_POR_SEGUNDO};
 use super::{
     IconeDaLinha, LinhaEvento, Overlay, Tela, botao, branco, fonte, hora_local, montar, texto, trecho, visual,
 };
+use crate::alertas::ChefeMarcado;
 use crate::eventos;
 
 /// Sem 0x9101 por mais que isso (fora da região, sem conexão), a lista é de antes: quem passou da
@@ -77,6 +80,36 @@ pub(super) fn chefes_vistos(
         .collect();
     let regiao = regiao.map_or_else(|| format!("região {}", lista.regiao), |r| r.nome.clone());
     ChefesDaRegiao { regiao, chefes, antiga_desde: antiga.then_some(recebida) }
+}
+
+/// Os chefes marcados para alerta, com o nome e o retrato da tela Bosses, da última lista de cada
+/// região por onde você passou. Roda no fio da bandeja: o questlog só é pedido, nunca esperado.
+pub(crate) fn chefes_marcados(
+    por_regiao: &HashMap<u32, (ChefesDeCampo, Hora)>,
+    marcados: &BTreeSet<u32>,
+    agora: Hora,
+) -> Vec<ChefeMarcado> {
+    let mut saida = Vec::new();
+    for (codigo, (lista, recebida)) in por_regiao {
+        if !lista.chefes.iter().any(|c| marcados.contains(&c.id)) {
+            continue;
+        }
+        let regiao = dados_jogo::regiao(*codigo);
+        let vistos = chefes_vistos(lista, *recebida, regiao.as_ref(), agora);
+        for (chefe, visto) in lista.chefes.iter().zip(vistos.chefes) {
+            if marcados.contains(&chefe.id) {
+                saida.push(ChefeMarcado {
+                    id: chefe.id,
+                    nome: visto.nome,
+                    retrato: visto.retrato,
+                    vivo: chefe.vivo,
+                    hora_ms: chefe.hora_ms,
+                    lista_em: *recebida,
+                });
+            }
+        }
+    }
+    saida
 }
 
 /// Segundos até renascer, sem passar de zero. A hora vem do pacote: saturando, um valor absurdo não

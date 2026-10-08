@@ -5,35 +5,47 @@
 //! Fica numa thread própria, com uma janela oculta para receber os cliques, o temporizador e os
 //! atalhos globais: com o overlay escondido, o egui para de desenhar e não teria como trazê-lo de
 //! volta. O RegisterHotKey só vale na thread da janela que recebe o WM_HOTKEY, por isso fica aqui.
+//! Os alertas também: um segundo temporizador confere a cada segundo, com o overlay escondido ou não.
 
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc;
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, mpsc};
 use std::thread::JoinHandle;
+
+use eframe::egui;
+use nucleo::medicao::sessao::Sessao;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey};
-use windows_sys::Win32::UI::Shell::{NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW};
+use windows_sys::Win32::UI::Shell::{
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_REALTIME, NIF_TIP, NIIF_LARGE_ICON, NIIF_NOSOUND, NIIF_RESPECT_QUIET_TIME,
+    NIIF_USER, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW, QUNS_NOT_PRESENT, QUNS_PRESENTATION_MODE,
+    SHQueryUserNotificationState, Shell_NotifyIconW,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, ChangeWindowMessageFilterEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
     DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetCursorPos, GetMessageW, GetSystemMetrics, GetWindowLongPtrW,
     GetWindowRect, IMAGE_ICON, IsWindowVisible, LR_DEFAULTCOLOR, LoadImageW, MF_CHECKED, MF_SEPARATOR, MF_STRING,
     MF_UNCHECKED, MSG, MSGFLT_ALLOW, PostMessageW, PostQuitMessage,
-    RegisterClassW, RegisterWindowMessageW, SM_CXSMICON, SM_CYSMICON, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
+    RegisterClassW, RegisterWindowMessageW, SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, SW_HIDE,
+    SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
     SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos,
     ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_CLOSE,
     WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
 };
 
+use crate::alertas::{self, Alerta};
 use crate::atalho::Atalho;
-use crate::jogo;
+use crate::config::{Alertas, Balao};
+use crate::{janela, jogo};
 
 /// Mensagem que o Windows manda à janela oculta quando o ícone é clicado.
 const AVISO: u32 = WM_APP + 1;
 const ALTERNAR: usize = 1;
 const FECHAR: usize = 2;
 const ATRAVESSAR: usize = 3;
+const ALERTAS: usize = 4;
 /// "TaskbarCreated": o Explorer reiniciou e o ícone precisa ser posto de novo.
 static BARRA_RECRIADA: AtomicU32 = AtomicU32::new(0);
 /// A chave da bandeja. Desligado, o overlay não aparece.
@@ -43,6 +55,12 @@ static ATRAVESSANDO: AtomicBool = AtomicBool::new(false);
 /// Fechando: o temporizador para de esconder o overlay.
 static SAINDO: AtomicBool = AtomicBool::new(false);
 const CONFERIR_A_CADA_MS: u32 = 200;
+/// Os temporizadores da janela oculta: o do overlay e dos atalhos, e o dos alertas.
+const TEMPORIZADOR_OVERLAY: usize = 1;
+const TEMPORIZADOR_ALERTAS: usize = 2;
+const ALERTAS_A_CADA_MS: u32 = 1000;
+/// O overlay recolhido na borda: a faixa do alerta não aparece. Quem grava é o overlay, a cada quadro.
+static RECOLHIDO: AtomicBool = AtomicBool::new(false);
 
 /// Os atalhos, na ordem do id do WM_HOTKEY menos 1.
 pub const MOSTRAR: usize = 0;
@@ -63,12 +81,27 @@ pub struct Bandeja {
     fio: Option<JoinHandle<()>>,
 }
 
+/// O que o temporizador dos alertas precisa: a sessão (as listas de chefes de campo) e o egui, para
+/// pedir um quadro quando há faixa nova.
+pub struct Vigia {
+    pub sessao: Arc<Mutex<Sessao>>,
+    pub ctx: egui::Context,
+    pub memoria: alertas::Memoria,
+}
+
+thread_local! {
+    static VIGIA: RefCell<Option<Vigia>> = const { RefCell::new(None) };
+}
+
 impl Bandeja {
     /// `overlay` = HWND da janela do medidor. None se a janela oculta não pôde ser criada.
-    pub fn iniciar(overlay: isize, atalhos: [Option<Atalho>; ATALHOS_TOTAL]) -> Option<Self> {
+    pub fn iniciar(overlay: isize, atalhos: [Option<Atalho>; ATALHOS_TOTAL], vigia: Vigia) -> Option<Self> {
         let _ = ATALHOS.set(atalhos);
         let (avisar, pronta) = mpsc::channel();
-        let fio = std::thread::spawn(move || unsafe { laco(overlay, avisar) });
+        let fio = std::thread::spawn(move || unsafe {
+            VIGIA.set(Some(vigia));
+            laco(overlay, avisar)
+        });
         let janela = pronta.recv().ok().filter(|&j| j != 0)?;
         Some(Self { janela, fio: Some(fio) })
     }
@@ -122,7 +155,8 @@ unsafe fn laco(overlay: isize, avisar: mpsc::Sender<isize>) {
         }
         // Sem Explorer agora: o TaskbarCreated põe o ícone quando ele voltar.
         icone_na_bandeja(janela, NIM_ADD);
-        SetTimer(janela, 1, CONFERIR_A_CADA_MS, None);
+        SetTimer(janela, TEMPORIZADOR_OVERLAY, CONFERIR_A_CADA_MS, None);
+        SetTimer(janela, TEMPORIZADOR_ALERTAS, ALERTAS_A_CADA_MS, None);
         let _ = avisar.send(janela as isize);
 
         let mut mensagem: MSG = std::mem::zeroed();
@@ -142,6 +176,7 @@ unsafe extern "system" fn procedimento(janela: HWND, mensagem: u32, w: WPARAM, l
                 WM_RBUTTONUP => menu(janela, overlay),
                 _ => {}
             },
+            WM_TIMER if w == TEMPORIZADOR_ALERTAS => vigiar(janela),
             WM_TIMER => {
                 atualizar(overlay);
                 conferir_atalhos(janela);
@@ -196,6 +231,8 @@ unsafe fn menu(janela: HWND, overlay: HWND) {
         // (o atalho pode estar ocupado ou desligado).
         let marca = if ATRAVESSANDO.load(Ordering::Relaxed) { MF_CHECKED } else { MF_UNCHECKED };
         AppendMenuW(menu, MF_STRING | marca, ATRAVESSAR, utf16("Clique atravessa o overlay").as_ptr());
+        let marca = if alertas::ligados() { MF_CHECKED } else { MF_UNCHECKED };
+        AppendMenuW(menu, MF_STRING | marca, ALERTAS, utf16("Alertas").as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         AppendMenuW(menu, MF_STRING, FECHAR, utf16("Fechar Axon").as_ptr());
         let mut cursor = POINT { x: 0, y: 0 };
@@ -216,10 +253,106 @@ unsafe fn menu(janela: HWND, overlay: HWND) {
         match escolha as usize {
             ALTERNAR => alternar(overlay),
             ATRAVESSAR => alternar_clique(),
+            ALERTAS => alertas::alternar_ligados(),
             FECHAR => fechar(overlay),
             _ => {}
         }
     }
+}
+
+/// O overlay está recolhido na borda (a faixa do alerta não aparece).
+pub fn definir_recolhido(recolhido: bool) {
+    RECOLHIDO.store(recolhido, Ordering::Relaxed);
+}
+
+/// A cada segundo: os alertas que vencem agora e o "Testar alerta". No replay (sem seguir o jogo),
+/// só o teste.
+unsafe fn vigiar(janela: HWND) {
+    VIGIA.with_borrow_mut(|vigia| {
+        let Some(vigia) = vigia else { return };
+        let Some(regras) = alertas::regras() else { return };
+        let agora = nucleo::agora();
+        let mut saida = Vec::new();
+        if jogo::seguindo() {
+            let chefes = if regras.chefes.is_empty() {
+                Vec::new()
+            } else {
+                let sessao = vigia.sessao.lock().unwrap_or_else(PoisonError::into_inner);
+                janela::chefes_marcados(&sessao.medidor.chefes_por_regiao, &regras.chefes, agora)
+            };
+            saida = alertas::vencidos(&regras, &chefes, agora, jogo::aberto(), &mut vigia.memoria);
+        }
+        if alertas::pediu_teste() {
+            saida.push(alertas::alerta_de_teste(agora));
+        }
+        if !saida.is_empty() {
+            unsafe { entregar(janela, &regras, saida, &vigia.ctx) };
+        }
+    });
+}
+
+/// Som, balão e faixa. Com a tela bloqueada ou o modo apresentação, nem som nem balão: a faixa
+/// fica para quando o overlay voltar a desenhar.
+unsafe fn entregar(janela: HWND, regras: &Alertas, saida: Vec<Alerta>, ctx: &egui::Context) {
+    let mut estado = 0;
+    let ausente = unsafe { SHQueryUserNotificationState(&mut estado) } == 0
+        && matches!(estado, QUNS_NOT_PRESENT | QUNS_PRESENTATION_MODE);
+    let som = regras.som && !ausente;
+    if som {
+        alertas::tocar();
+    }
+    let faixa_aparece = LIGADO.load(Ordering::Relaxed) && !RECOLHIDO.load(Ordering::Relaxed);
+    let balao = !ausente
+        && match regras.balao() {
+            Balao::Nunca => false,
+            Balao::SemBanner => !faixa_aparece,
+            Balao::Sempre => true,
+        };
+    if balao {
+        let (titulo, texto) = alertas::texto_do_balao(&saida);
+        unsafe { balao_na_bandeja(janela, &titulo, &texto, som) };
+    }
+    alertas::enfileirar(saida);
+    ctx.request_repaint();
+}
+
+/// O balão do ícone. NIF_REALTIME: se o Windows não puder mostrar agora ("Não incomodar"), descarta
+/// em vez de mostrar depois, com a hora errada. Sem som próprio quando o do Axon já tocou.
+unsafe fn balao_na_bandeja(janela: HWND, titulo: &str, texto: &str, mudo: bool) {
+    unsafe {
+        let mut dados: NOTIFYICONDATAW = std::mem::zeroed();
+        dados.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
+        dados.hWnd = janela;
+        dados.uID = 1;
+        dados.uFlags = NIF_INFO | NIF_REALTIME;
+        copiar_terminado(&mut dados.szInfoTitle, titulo);
+        copiar_terminado(&mut dados.szInfo, texto);
+        dados.dwInfoFlags = NIIF_USER | NIIF_LARGE_ICON | NIIF_RESPECT_QUIET_TIME | if mudo { NIIF_NOSOUND } else { 0 };
+        dados.hBalloonIcon = icone_grande() as _;
+        Shell_NotifyIconW(NIM_MODIFY, &dados);
+    }
+}
+
+/// O ícone do exe no tamanho grande do sistema, que o NIIF_LARGE_ICON pede; carregado uma vez.
+unsafe fn icone_grande() -> isize {
+    static ICONE: AtomicIsize = AtomicIsize::new(0);
+    let carregado = ICONE.load(Ordering::Relaxed);
+    if carregado != 0 {
+        return carregado;
+    }
+    let icone = unsafe {
+        let (largura, altura) = (GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
+        LoadImageW(GetModuleHandleW(std::ptr::null()), 1 as _, IMAGE_ICON, largura, altura, LR_DEFAULTCOLOR)
+    } as isize;
+    ICONE.store(icone, Ordering::Relaxed);
+    icone
+}
+
+/// UTF-16 com o zero no fim, cortado no tamanho do campo.
+fn copiar_terminado(destino: &mut [u16], texto: &str) {
+    let letras: Vec<u16> = texto.encode_utf16().take(destino.len() - 1).collect();
+    destino[..letras.len()].copy_from_slice(&letras);
+    destino[letras.len()] = 0;
 }
 
 fn alternar_clique() {

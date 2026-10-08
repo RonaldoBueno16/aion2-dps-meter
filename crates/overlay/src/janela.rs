@@ -8,10 +8,13 @@
 mod chefes;
 mod configuracoes;
 mod drops;
+mod faixa;
 mod item;
 mod lutas;
 mod recolher;
 mod visual;
+
+pub(crate) use chefes::chefes_marcados;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -38,9 +41,10 @@ use nucleo::{Hora, TICKS_POR_SEGUNDO};
 use recolher::{Dobra, Lado};
 use serde::{Deserialize, Serialize};
 
+use crate::alertas;
 use crate::atalho::Atalho;
 use crate::atualizacao::{self, Atualizacao, Estado};
-use crate::bandeja::{self, Bandeja};
+use crate::bandeja::{self, Bandeja, Vigia};
 use crate::config::{self, Config};
 use crate::eventos;
 use crate::jogo;
@@ -179,6 +183,8 @@ pub struct Overlay {
     amostra: Option<LinhaJogador>,
     /// O que as páginas das configurações guardam entre quadros (tamanhos medidos, "Apagar?").
     estado_config: configuracoes::EstadoConfig,
+    /// Faixas de alerta na tela e desde quando (somem em `banner_s` ou no ✕).
+    faixas: Vec<(alertas::Alerta, Instant)>,
     /// Ícone ao lado do relógio; None se o Windows não deixou criar.
     bandeja: Option<Bandeja>,
     /// O que foi pedido à janela por último: o clique passa por ela até o jogo (atalho ou menu da
@@ -288,6 +294,7 @@ impl Overlay {
             arraste: None,
             amostra: None,
             estado_config: configuracoes::EstadoConfig::default(),
+            faixas: Vec::new(),
             bandeja: None,
             atravessando: false,
             atualizacao: if tem("--nova-versao") { Atualizacao::falsa() } else { Atualizacao::iniciar() },
@@ -298,7 +305,13 @@ impl Overlay {
         let c = &overlay.config;
         let atalhos =
             [&c.atalho_mostrar, &c.atalho_atravessar, &c.atalho_resumo, &c.atalho_compacta].map(|a| Atalho::ler(a));
-        overlay.bandeja = Bandeja::iniciar(overlay.janela, atalhos);
+        alertas::definir_regras(&overlay.config.alertas);
+        let vigia = Vigia { sessao: overlay.sessao.clone(), ctx: cc.egui_ctx.clone(), memoria: Default::default() };
+        overlay.bandeja = Bandeja::iniciar(overlay.janela, atalhos, vigia);
+        // Só no debug: um alerta de teste logo na abertura, inclusive no replay.
+        if tem("--testar-alerta") {
+            alertas::testar();
+        }
         match overlay.tela {
             Tela::Configuracoes(pagina) => overlay.abrir_configuracoes(pagina),
             _ => overlay.ler_placar(),
@@ -374,6 +387,7 @@ impl Overlay {
 
     /// Config mudou: a inatividade vale na hora para o medidor; o zoom, no próximo quadro.
     fn aplicar_config(&mut self) {
+        alertas::definir_regras(&self.config.alertas);
         if self.replay {
             return;
         }
@@ -463,6 +477,9 @@ impl Overlay {
     }
 
     fn conteudo(&mut self, ui: &mut Ui) {
+        if self.tela != Tela::Medidor {
+            self.faixas_de_alerta(ui);
+        }
         match self.tela {
             Tela::Configuracoes(pagina) => return self.tela_configuracoes(ui, pagina),
             Tela::Lutas => return self.tela_lutas(ui),
@@ -471,10 +488,12 @@ impl Overlay {
         }
         let tabela = self.tabela();
         if self.config.compacta && !self.pedir_firewall {
+            self.faixas_de_alerta(ui);
             return self.barra_compacta(ui);
         }
         self.cabecalho(ui);
         ui.add_space(8.0);
+        self.faixas_de_alerta(ui);
         if self.pedir_firewall {
             self.aviso_firewall(ui);
             ui.add_space(6.0);
@@ -1631,6 +1650,12 @@ impl eframe::App for Overlay {
         if self.lido_em.elapsed() >= self.intervalo() {
             self.ler_placar();
         }
+        if alertas::mudou_pela_bandeja() {
+            self.config.alertas.ligados = alertas::ligados();
+            self.aplicar_config();
+        }
+        bandeja::definir_recolhido(!self.dobra.aberto());
+        self.receber_faixas();
         let (pediu_resumo, pediu_compacta) = bandeja::pedidos();
         if pediu_resumo {
             self.copiar_resumo(ctx);
