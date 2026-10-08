@@ -28,18 +28,23 @@ const ORIGEM_DROPS: &str = "Drops e % do questlog (base comunitária), não conf
 
 /// O painel aberto: de qual chefe (código do NPC), de que lado e o que está expandido nele.
 pub(super) struct PainelDrops {
-    pub codigo: u32,
+    /// None: o painel abriu direto na ficha de um item (lista de desejos), sem chefe.
+    pub codigo: Option<u32>,
     pub lado: Lado,
     drops: Option<DropsNpc>,
     falhou: bool,
     bau_aberto: bool,
     raridades_abertas: HashSet<u8>,
-    /// Item com a ficha aberta no lugar da lista, e a chance dele aqui.
-    item: Option<(u32, Option<f64>)>,
+    /// Fichas abertas no lugar da lista, a de cima na tela, com a chance do item aqui: a ficha leva ao
+    /// baú ou ao ingrediente, e o "‹" volta uma.
+    fichas: Vec<(u32, Option<f64>)>,
+    /// Na ficha de cima: todos os monstros que derrubam, e as receitas abertas.
+    pub(super) todos_os_npcs: bool,
+    pub(super) receitas_abertas: HashSet<u32>,
 }
 
 impl PainelDrops {
-    pub(super) fn novo(codigo: u32, lado: Lado) -> Self {
+    pub(super) fn novo(codigo: Option<u32>, lado: Lado, fichas: Vec<(u32, Option<f64>)>) -> Self {
         Self {
             codigo,
             lado,
@@ -47,9 +52,26 @@ impl PainelDrops {
             falhou: false,
             bau_aberto: false,
             raridades_abertas: HashSet::new(),
-            item: None,
+            fichas,
+            todos_os_npcs: false,
+            receitas_abertas: HashSet::new(),
         }
     }
+
+    /// O item da ficha de cima, se há ficha aberta.
+    pub(super) fn ficha(&self) -> Option<u32> {
+        self.fichas.last().map(|(item, _)| *item)
+    }
+}
+
+/// Para onde a ficha leva.
+pub(super) enum Navegar {
+    /// Fecha a ficha de cima.
+    Voltar,
+    /// Abre a ficha de outro item (o baú, um ingrediente), com a chance dele aqui.
+    Item(u32, Option<f64>),
+    /// Abre os drops de um chefe de campo.
+    Chefe(u32),
 }
 
 /// Cor da raridade ("grade" do questlog), a que o questlog usa, e o nome que o jogo em português dá
@@ -160,8 +182,11 @@ impl Overlay {
     /// O painel ao lado da janela. `limite`: altura máxima, em pontos (a da área do jogo ou do monitor).
     pub(super) fn painel_drops(&mut self, ui: &mut Ui, limite: f32) {
         let Some(painel) = &self.painel else { return };
-        let codigo = painel.codigo;
-        if painel.drops.is_none() && !painel.falhou {
+        let chefe = painel.codigo;
+        if let Some(codigo) = chefe
+            && painel.drops.is_none()
+            && !painel.falhou
+        {
             let resposta = dados_jogo::drops(codigo);
             if let Some(painel) = &mut self.painel {
                 match resposta {
@@ -171,23 +196,32 @@ impl Overlay {
                 }
             }
         }
-        if self.cabecalho_drops(ui, codigo) {
+        let fechar = match chefe {
+            Some(codigo) => self.cabecalho_drops(ui, codigo),
+            None => cabecalho_da_ficha(ui),
+        };
+        if fechar {
             self.fechar_drops();
             return;
         }
         ui.add_space(6.0);
 
         let Some(painel) = &self.painel else { return };
-        if let Some((item, chance)) = painel.item {
+        if let Some(&(item, chance)) = painel.fichas.last() {
+            let voltar = match (painel.fichas.len(), chefe) {
+                (1, Some(_)) => Some("‹ Drops"),
+                (1, None) => None,
+                _ => Some("‹ Voltar"),
+            };
             let altura = (limite - 90.0).max(120.0);
-            ScrollArea::vertical().id_salt("ficha").max_height(altura).auto_shrink([false, true]).show(ui, |ui| {
+            let mut navegar = None;
+            ScrollArea::vertical().id_salt(("ficha", item)).max_height(altura).auto_shrink([false, true]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::ZERO;
-                if self.ficha_do_item(ui, item, chance)
-                    && let Some(painel) = &mut self.painel
-                {
-                    painel.item = None;
-                }
+                navegar = self.ficha_do_item(ui, item, chance, voltar);
             });
+            if let Some(navegar) = navegar {
+                self.navegar(navegar);
+            }
             return;
         }
         let Some(drops) = painel.drops.clone() else {
@@ -408,8 +442,20 @@ impl Overlay {
 
     /// Abre a ficha do item no lugar da lista.
     fn abrir_ficha(&mut self, item: &ItemDrop) {
-        if let Some(painel) = &mut self.painel {
-            painel.item = Some((item.codigo, item.chance));
+        self.navegar(Navegar::Item(item.codigo, item.chance));
+    }
+
+    fn navegar(&mut self, navegar: Navegar) {
+        let Some(painel) = &mut self.painel else { return };
+        painel.todos_os_npcs = false;
+        painel.receitas_abertas.clear();
+        match navegar {
+            Navegar::Voltar => {
+                painel.fichas.pop();
+            }
+            Navegar::Item(item, chance) => painel.fichas.push((item, chance)),
+            Navegar::Chefe(codigo) if painel.codigo == Some(codigo) => painel.fichas.clear(),
+            Navegar::Chefe(codigo) => *painel = PainelDrops::novo(Some(codigo), painel.lado, Vec::new()),
         }
     }
 
@@ -481,6 +527,25 @@ impl Overlay {
             pintor.rect_filled(barra, 3, cor);
         }
     }
+}
+
+/// Cabeçalho do painel aberto direto numa ficha (lista de desejos): o ✕ fecha (devolve true no clique).
+fn cabecalho_da_ficha(ui: &mut Ui) -> bool {
+    let largura = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(vec2(largura, 22.0), Sense::hover());
+    let mut job = LayoutJob::default();
+    trecho(&mut job, "★ Lista de desejos", 11.0, true, visual::DOURADO);
+    let galley = montar(ui, job);
+    ui.painter().galley(pos2(rect.min.x + 2.0, rect.center().y - galley.size().y / 2.0), galley, texto());
+    let fechar = Rect::from_min_size(pos2(rect.max.x - 24.0, rect.min.y), vec2(24.0, 22.0));
+    let resposta = ui.interact(fechar, ui.id().with("fechar_ficha"), Sense::click());
+    if resposta.hovered() {
+        ui.painter().rect_filled(fechar, 5, branco(0x1F));
+    }
+    let cor = if resposta.hovered() { texto() } else { branco(0xAA) };
+    let x_ = ui.fonts_mut(|f| f.layout_no_wrap("✕".into(), super::fonte(12.0, false), cor));
+    ui.painter().galley(fechar.center() - x_.size() / 2.0, x_, cor);
+    resposta.on_hover_cursor(CursorIcon::PointingHand).on_hover_text("Fechar a ficha").clicked()
 }
 
 /// Título de seção: o texto e um fio até a borda.

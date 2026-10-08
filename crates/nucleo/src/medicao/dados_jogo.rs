@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use super::catalogo::{Atributo, Busca, CatalogoSkills, DetalheItem, DropsNpc, InfoRegiao};
+use super::catalogo::{Atributo, Busca, CatalogoSkills, DetalheItem, DetalheReceita, DropsNpc, InfoRegiao};
 
 // Curas que chegam pelo mesmo opcode do dano e não podem entrar na soma.
 const CURAS: [u32; 8] = [18120000, 18170000, 16770000, 16190000, 17120000, 17800000, 17100000, 17410000];
@@ -137,6 +137,21 @@ pub fn imagem(nome: &str) -> Busca<std::sync::Arc<Vec<u8>>> {
 /// Ficha do item pelo questlog, só na memória.
 pub fn item(codigo: u32) -> Busca<DetalheItem> {
     catalogo().map_or(Busca::Falhou, |c| c.item(codigo))
+}
+
+/// Ficha de um desejo para o alerta, na fila normal (não atrasa o nome do chefe numa luta).
+pub fn item_de_fundo(codigo: u32) -> Busca<DetalheItem> {
+    catalogo().map_or(Busca::Falhou, |c| c.item_de_fundo(codigo))
+}
+
+/// Regiões em que o NPC aparece, pelo questlog, só na memória.
+pub fn regioes_do_npc(codigo: u32) -> Busca<Vec<String>> {
+    catalogo().map_or(Busca::Falhou, |c| c.regioes_do_npc(codigo))
+}
+
+/// Maestria e raça da receita, pelo questlog, só na memória.
+pub fn receita(codigo: u32) -> Busca<DetalheReceita> {
+    catalogo().map_or(Busca::Falhou, |c| c.receita(codigo))
 }
 
 /// Nome em português, formato e ajuda de cada atributo, pelo questlog, só na memória.

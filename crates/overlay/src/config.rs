@@ -29,6 +29,34 @@ pub const CARD_MORTE_MAX_S: u32 = 60;
 /// Quantos segundos antes da morte o relatório mostra (o medidor guarda até 30).
 pub const JANELA_MORTE_MIN_S: u32 = 5;
 pub const JANELA_MORTE_MAX_S: u32 = 30;
+/// Itens na lista de desejos.
+pub const DESEJOS_MAX: usize = 200;
+/// 1 Alta, 2 Média, 3 Baixa.
+pub const PRIORIDADE_PADRAO: u8 = 2;
+
+/// Um item da lista de desejos: só o código do questlog e as escolhas do jogador (nome, ícone e
+/// fontes vêm do questlog a cada execução, só na memória).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Desejo {
+    pub codigo: u32,
+    pub prioridade: u8,
+    /// Avisa quando renasce um chefe que derruba o item (com a chance mínima).
+    pub alertar: bool,
+}
+
+/// A lista de desejos item a item: um item torto (código que não é número, prioridade 300) sai
+/// sozinho ou volta à faixa, sem derrubar a config inteira.
+fn ler_desejos<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Desejo>, D::Error> {
+    let lido = serde_json::Value::deserialize(d)?;
+    let desejos = lido.as_array().into_iter().flatten().filter_map(|v| {
+        Some(Desejo {
+            codigo: v.get("codigo")?.as_u64()?.try_into().ok()?,
+            prioridade: v.get("prioridade").and_then(serde_json::Value::as_u64).map_or(PRIORIDADE_PADRAO, |p| p.clamp(1, 3) as u8),
+            alertar: v.get("alertar").and_then(serde_json::Value::as_bool).unwrap_or(true),
+        })
+    });
+    Ok(desejos.collect())
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -69,6 +97,14 @@ pub struct Config {
     pub relatorio_morte: bool,
     pub card_morte_s: u32,
     pub janela_morte_s: u32,
+    #[serde(deserialize_with = "ler_desejos")]
+    pub desejos: Vec<Desejo>,
+    /// ★ na tela Bosses no chefe que derruba um desejo.
+    pub desejos_destacar: bool,
+    /// Em % (0,5 = 0,5%); 0 = qualquer chance. O questlog dá a chance de 0 a 1.
+    pub desejos_chance_minima: f32,
+    /// Filtro da tela Bosses: só os chefes com desejo.
+    pub desejos_so_com_desejo: bool,
 }
 
 /// Alertas de evento e de chefe de campo marcado (antes e na hora).
@@ -169,6 +205,10 @@ impl Default for Config {
             relatorio_morte: true,
             card_morte_s: 15,
             janela_morte_s: 10,
+            desejos: Vec::new(),
+            desejos_destacar: true,
+            desejos_chance_minima: 0.5,
+            desejos_so_com_desejo: false,
         }
     }
 }
@@ -200,6 +240,14 @@ impl Config {
         self.alertas = self.alertas.dentro_das_faixas();
         self.card_morte_s = self.card_morte_s.clamp(CARD_MORTE_MIN_S, CARD_MORTE_MAX_S);
         self.janela_morte_s = self.janela_morte_s.clamp(JANELA_MORTE_MIN_S, JANELA_MORTE_MAX_S);
+        let mut vistos = std::collections::HashSet::new();
+        self.desejos.retain(|d| vistos.insert(d.codigo));
+        self.desejos.truncate(DESEJOS_MAX);
+        for desejo in &mut self.desejos {
+            desejo.prioridade = desejo.prioridade.clamp(1, 3);
+        }
+        self.desejos_chance_minima =
+            if self.desejos_chance_minima.is_finite() { self.desejos_chance_minima.clamp(0.0, 100.0) } else { 0.5 };
         self
     }
 
@@ -277,5 +325,36 @@ mod testes {
 
         let muitos = Alertas { chefes: (0..150).collect(), ..Alertas::default() }.dentro_das_faixas();
         assert_eq!(muitos.chefes.len(), CHEFES_MARCADOS_MAX);
+    }
+
+    #[test]
+    fn desejos_repetidos_e_tortos_voltam_para_a_faixa() {
+        let lida: Config = serde_json::from_str(
+            r#"{"zoom":1.5,"desejos":[{"codigo":210540076,"prioridade":9,"alertar":false},
+                {"codigo":210540076,"prioridade":1},{"codigo":"x"},{"prioridade":1},{"codigo":210530100}],
+                "desejos_chance_minima":250}"#,
+        )
+        .unwrap();
+        let c = lida.dentro_das_faixas();
+        // O repetido some (fica o primeiro), o torto sai sozinho, o sem prioridade e alerta fica com o padrão.
+        let esperado = [
+            Desejo { codigo: 210540076, prioridade: 3, alertar: false },
+            Desejo { codigo: 210530100, prioridade: PRIORIDADE_PADRAO, alertar: true },
+        ];
+        assert_eq!(c.desejos, esperado);
+        assert_eq!((c.zoom, c.desejos_chance_minima), (1.5, 100.0));
+        // Lista que não é lista: vazia, sem perder o resto.
+        let c: Config = serde_json::from_str(r#"{"zoom":1.5,"desejos":"x"}"#).unwrap();
+        assert_eq!((c.zoom, c.desejos.len()), (1.5, 0));
+        // Config de antes da lista: vazia, ★ ligada, 0,5%, sem filtro.
+        let c = serde_json::from_str::<Config>(r#"{"zoom":1.5}"#).unwrap().dentro_das_faixas();
+        assert!(c.desejos.is_empty() && c.desejos_destacar && !c.desejos_so_com_desejo);
+        assert_eq!(c.desejos_chance_minima, 0.5);
+        // Montada no código: prioridade 0, lista grande demais, chance que não é número.
+        let desejos = (0..250).map(|codigo| Desejo { codigo, prioridade: 0, alertar: true }).collect();
+        let c = Config { desejos, desejos_chance_minima: f32::NAN, ..Config::default() }.dentro_das_faixas();
+        assert_eq!(c.desejos.len(), DESEJOS_MAX);
+        assert!(c.desejos.iter().all(|d| d.prioridade == 1));
+        assert_eq!(c.desejos_chance_minima, 0.5);
     }
 }

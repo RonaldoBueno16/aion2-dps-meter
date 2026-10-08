@@ -1,6 +1,6 @@
 //! Ficha do item no painel de drops, como a dica do jogo: nível, atributos, os da alma, encaixes,
-//! a ajuda e o nível mínimo. Pelo questlog (getItem), com o nome de cada atributo em português que o
-//! statFormat dele traz; tudo só na memória.
+//! a ajuda e o nível mínimo, e embaixo de onde ele vem (desejos.rs). Pelo questlog (getItem), com o
+//! nome de cada atributo em português que o statFormat dele traz; tudo só na memória.
 
 use std::collections::HashMap;
 
@@ -13,7 +13,7 @@ use nucleo::medicao::dados_jogo;
 /// Nomes e formatos dos atributos pelo id.
 type Atributos = HashMap<String, Atributo>;
 
-use super::drops::{porcentagem, raridade};
+use super::drops::{Navegar, porcentagem, raridade};
 use super::{Overlay, branco, montar, pulso, texto, trecho, uma_linha};
 
 const ICONE_INTEIRO: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
@@ -79,20 +79,27 @@ pub(super) fn linhas_da_alma(ficha: &DetalheItem, atributos: Option<&Atributos>)
 }
 
 impl Overlay {
-    /// A ficha no lugar da lista de drops. Devolve true no clique de "‹ Drops".
-    pub(super) fn ficha_do_item(&mut self, ui: &mut Ui, codigo: u32, chance: Option<f64>) -> bool {
-        let voltar = botao_voltar(ui);
+    /// A ficha no lugar da lista de drops. `voltar`: o rótulo do "‹" ("‹ Drops", "‹ Voltar"), sem
+    /// ele quando não há para onde voltar. Devolve para onde o clique leva.
+    pub(super) fn ficha_do_item(
+        &mut self,
+        ui: &mut Ui,
+        codigo: u32,
+        chance: Option<f64>,
+        voltar: Option<&str>,
+    ) -> Option<Navegar> {
+        let mut navegar = voltar.is_some_and(|rotulo| botao_voltar(ui, rotulo)).then_some(Navegar::Voltar);
         ui.add_space(4.0);
         let ficha = match dados_jogo::item(codigo) {
             Busca::Pronto(ficha) => ficha,
             Busca::Buscando => {
                 self.esqueleto_da_ficha(ui);
-                return voltar;
+                return navegar;
             }
             Busca::Falhou => {
                 let aviso = "O questlog não respondeu. Feche e abra o painel para tentar de novo.";
                 super::drops::nota(ui, aviso, branco(0x99));
-                return voltar;
+                return navegar;
             }
         };
         let atributos = match dados_jogo::atributos() {
@@ -110,7 +117,7 @@ impl Overlay {
         let largura = ui.available_width();
         let mut job = LayoutJob::default();
         trecho(&mut job, &ficha.nome, 13.0, true, cor);
-        job.wrap.max_width = largura - 52.0;
+        job.wrap.max_width = largura - 52.0 - 24.0;
         let nome = montar(ui, job);
         let mut job = LayoutJob::default();
         if let Some(r) = nome_raridade {
@@ -133,6 +140,7 @@ impl Overlay {
         let altura_nome = nome.size().y;
         ui.painter().galley(pos2(x, rect.min.y + 2.0), nome, texto());
         ui.painter().galley(pos2(x, rect.min.y + 4.0 + altura_nome), detalhe, texto());
+        self.estrela_do_item(ui, pos2(rect.max.x - 12.0, rect.min.y + 12.0), codigo);
 
         let principais = linhas_principais(&ficha, atributos);
         if !principais.is_empty() {
@@ -168,6 +176,9 @@ impl Overlay {
             ui.add_space(6.0);
             super::drops::nota(ui, descricao, branco(0xCC));
         }
+        if let Some(destino) = self.onde_conseguir(ui, &ficha) {
+            navegar = Some(destino);
+        }
         ui.add_space(6.0);
         let mut rodape = Vec::new();
         if let Some(nivel) = ficha.nivel_minimo.filter(|n| *n > 1) {
@@ -184,7 +195,7 @@ impl Overlay {
         for texto_rodape in rodape {
             super::drops::nota(ui, &texto_rodape, branco(0x99));
         }
-        voltar
+        navegar
     }
 
     fn esqueleto_da_ficha(&mut self, ui: &mut Ui) {
@@ -207,17 +218,18 @@ impl Overlay {
     }
 }
 
-fn botao_voltar(ui: &mut Ui) -> bool {
+fn botao_voltar(ui: &mut Ui, rotulo: &str) -> bool {
     let largura = ui.available_width();
     let (rect, resposta) = ui.allocate_exact_size(vec2(largura, 20.0), Sense::click());
     if resposta.hovered() {
         ui.painter().rect_filled(rect, 3, branco(0x0C));
     }
     let mut job = LayoutJob::default();
-    trecho(&mut job, "‹ Drops", 11.0, true, if resposta.hovered() { texto() } else { branco(0xAA) });
+    trecho(&mut job, rotulo, 11.0, true, if resposta.hovered() { texto() } else { branco(0xAA) });
     let galley = montar(ui, job);
     ui.painter().galley(pos2(rect.min.x + 2.0, rect.center().y - galley.size().y / 2.0), galley, texto());
-    resposta.on_hover_cursor(CursorIcon::PointingHand).on_hover_text("Volta à lista de drops").clicked()
+    let dica = if rotulo == "‹ Drops" { "Volta à lista de drops" } else { "Volta à ficha de antes" };
+    resposta.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(dica).clicked()
 }
 
 /// Nome à esquerda, valor à direita; a ajuda do atributo no mouse.

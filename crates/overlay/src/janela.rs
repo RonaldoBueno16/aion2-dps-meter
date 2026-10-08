@@ -7,6 +7,7 @@
 
 mod chefes;
 mod configuracoes;
+mod desejos;
 mod drops;
 mod faixa;
 mod item;
@@ -94,6 +95,7 @@ enum Tela {
     /// O relatório de uma morte sua, pelo número.
     Morte(u64),
     Recordes,
+    Desejos,
 }
 
 /// Buffs mostrados embaixo das skills de um jogador expandido.
@@ -167,6 +169,10 @@ pub struct Overlay {
     largura_aplicada: f32,
     /// Só no debug (--drops <código do NPC>): abre o painel no primeiro quadro.
     drops_inicial: Option<u32>,
+    /// Só no debug (--ficha <código do item>): abre a ficha do item ao lado no primeiro quadro.
+    ficha_inicial: Option<u32>,
+    /// Desejo que espera o segundo clique no "Tirar?" da lista, e desde quando.
+    desejo_tirando: Option<(u32, Instant)>,
     logo: Option<Option<TextureHandle>>,
     /// Altura do conteúdo (em pontos) e escala (pixels por ponto) com que o tamanho da janela foi
     /// pedido por último. A escala e não o zoom da config: ela muda também com o DPI do monitor.
@@ -302,6 +308,8 @@ impl Overlay {
             painel: None,
             largura_aplicada: LARGURA,
             drops_inicial: opcoes_debug.iter().skip_while(|a| *a != "--drops").nth(1).and_then(|c| c.parse().ok()),
+            ficha_inicial: opcoes_debug.iter().skip_while(|a| *a != "--ficha").nth(1).and_then(|c| c.parse().ok()),
+            desejo_tirando: None,
             logo: None,
             altura: 0.0,
             escala_aplicada: 0.0,
@@ -321,6 +329,8 @@ impl Overlay {
                 Tela::Lutas
             } else if tem("--chefes") {
                 Tela::Chefes
+            } else if tem("--desejos") {
+                Tela::Desejos
             } else {
                 Tela::Medidor
             },
@@ -349,6 +359,7 @@ impl Overlay {
         let atalhos =
             [&c.atalho_mostrar, &c.atalho_atravessar, &c.atalho_resumo, &c.atalho_compacta].map(|a| Atalho::ler(a));
         alertas::definir_regras(&overlay.config.alertas);
+        overlay.desejos_para_o_alerta();
         let vigia = Vigia { sessao: overlay.sessao.clone(), ctx: cc.egui_ctx.clone(), memoria: Default::default() };
         overlay.bandeja = Bandeja::iniciar(overlay.janela, atalhos, vigia);
         // Só no debug: um alerta de teste logo na abertura, inclusive no replay.
@@ -478,6 +489,7 @@ impl Overlay {
     /// Config mudou: a inatividade vale na hora para o medidor; o zoom, no próximo quadro.
     fn aplicar_config(&mut self) {
         alertas::definir_regras(&self.config.alertas);
+        self.desejos_para_o_alerta();
         {
             let mut s = travar(&self.sessao);
             let medidor = &mut s.medidor;
@@ -495,6 +507,12 @@ impl Overlay {
         }
         travar(&self.sessao).medidor.inatividade = i64::from(self.config.inatividade) * TICKS_POR_SEGUNDO;
         self.config.salvar();
+    }
+
+    /// Os desejos com 🔔 ligado e a chance mínima, para o fio da bandeja (A13).
+    fn desejos_para_o_alerta(&self) {
+        let codigos = self.config.desejos.iter().filter(|d| d.alertar).map(|d| d.codigo).collect();
+        alertas::definir_desejos(codigos, desejos::chance_minima(&self.config));
     }
 
     fn intervalo(&self) -> Duration {
@@ -519,17 +537,32 @@ impl Overlay {
     /// Abre os drops do chefe ao lado da janela, do lado com espaço (abrindo à esquerda, a janela anda
     /// para a esquerda e o medidor fica onde está); fecha, se já são os dele.
     fn alternar_drops(&mut self, codigo: u32, ppp: f32) {
-        match self.painel.as_ref().map(|p| (p.codigo, p.lado)) {
-            Some((aberto, _)) if aberto == codigo => return self.fechar_drops(),
-            Some((_, lado)) => self.painel = Some(drops::PainelDrops::novo(codigo, lado)),
+        if self.painel.as_ref().is_some_and(|p| p.codigo == Some(codigo)) {
+            return self.fechar_drops();
+        }
+        self.abrir_painel(Some(codigo), Vec::new(), ppp);
+    }
+
+    /// Abre a ficha do item no painel ao lado, sem chefe (a lista de desejos); fecha, se já é ela.
+    fn alternar_ficha(&mut self, item: u32, ppp: f32) {
+        if self.painel.as_ref().is_some_and(|p| p.codigo.is_none() && p.ficha() == Some(item)) {
+            return self.fechar_drops();
+        }
+        self.abrir_painel(None, vec![(item, None)], ppp);
+    }
+
+    fn abrir_painel(&mut self, codigo: Option<u32>, fichas: Vec<(u32, Option<f64>)>, ppp: f32) {
+        let lado = match self.painel.as_ref() {
+            Some(painel) => painel.lado,
             None => {
                 let painel = ((drops::VAO + drops::LARGURA_PAINEL) * ppp).round() as i32;
                 let total = (self.largura_janela() * ppp).round() as i32 + painel;
                 let (lado, dx) = recolher::lugar_do_painel(self.janela, painel, total);
                 recolher::ajustar_largura(self.janela, total, dx);
-                self.painel = Some(drops::PainelDrops::novo(codigo, lado));
+                lado
             }
-        }
+        };
+        self.painel = Some(drops::PainelDrops::novo(codigo, lado, fichas));
         // Uma falha antes (sem internet) não impede de tentar de novo ao abrir.
         dados_jogo::repetir_falhas();
         self.imagens_pedidas.clear();
@@ -588,6 +621,7 @@ impl Overlay {
             Tela::Chefes => return self.tela_chefes(ui),
             Tela::Morte(_) => return self.tela_morte(ui),
             Tela::Recordes => return self.tela_recordes(ui),
+            Tela::Desejos => return self.tela_desejos(ui),
             Tela::Medidor => {}
         }
         let tabela = self.tabela();
@@ -660,6 +694,10 @@ impl Overlay {
                 }
                 if visual::botao_icone(ui, "♛", 14.0).on_hover_text("Chefes de campo (vivos e mortos)").clicked() {
                     self.tela = Tela::Chefes;
+                    dados_jogo::repetir_falhas();
+                }
+                if visual::botao_icone(ui, "★", 14.0).on_hover_text("Lista de desejos: de onde vem cada item").clicked() {
+                    self.abrir_desejos();
                 }
                 if visual::botao_icone(ui, "▭", 14.0).on_hover_text("Barra compacta: uma linha só").clicked() {
                     self.alternar_compacta();
@@ -1825,6 +1863,9 @@ impl eframe::App for Overlay {
 
         if let Some(codigo) = self.drops_inicial.take() {
             self.alternar_drops(codigo, ctx.pixels_per_point());
+        }
+        if let Some(item) = self.ficha_inicial.take() {
+            self.alternar_ficha(item, ctx.pixels_per_point());
         }
 
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {

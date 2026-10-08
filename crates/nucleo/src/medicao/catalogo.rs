@@ -146,6 +146,82 @@ pub struct DetalheItem {
     pub pedras_divinas: u32,
     /// exchangeable: Some(true); nonexchangeable: Some(false); o resto (soulbind...) None.
     pub negociavel: Option<bool>,
+    /// De onde vem o item. Num Arc: equipamento genérico chega a 1.357 NPCs, e a ficha é clonada a
+    /// cada quadro.
+    pub fontes: Arc<Fontes>,
+}
+
+/// De onde vem um item, pelas listas reversas do getItem. Lista ausente: nenhuma fonte daquele tipo.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Fontes {
+    /// NPCs que derrubam (itemIsDroppedByNpcs), da maior chance à menor.
+    pub npcs: Vec<FonteNpc>,
+    /// Baús que contêm o item (itemIsContainedInItems), com a chance dentro do baú.
+    pub baus: Vec<ItemDrop>,
+    /// Receitas que produzem o item (itemIsOutputOfRecipes).
+    pub receitas: Vec<Receita>,
+    /// Missão, dungeon, conquista, vendedor, coleta, pedido de suprimento e passe.
+    pub outras: Vec<OutraFonte>,
+}
+
+/// NPC que derruba o item, como o getItem dá (sem dizer se é chefe nem onde fica).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FonteNpc {
+    pub codigo: u32,
+    pub nome: String,
+    pub nivel: i32,
+    pub retrato: Option<String>,
+    /// De 0 a 1; None quando o questlog não dá.
+    pub chance: Option<f64>,
+    pub quantidade: Option<(u32, u32)>,
+}
+
+/// Receita que produz o item: a profissão (mainCategory do questlog, em inglês: "alchemy") e cada
+/// ingrediente com a quantidade.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Receita {
+    pub codigo: u32,
+    pub profissao: String,
+    pub entradas: Vec<(ItemDrop, u32)>,
+}
+
+/// O resto da receita, pelo getRecipe: maestria e raça, como o questlog dá ("beginner", "light").
+#[derive(Clone, Debug, PartialEq)]
+pub struct DetalheReceita {
+    pub maestria: Option<String>,
+    pub nivel_maestria: Option<i64>,
+    pub raca: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TipoFonte {
+    Missao,
+    Dungeon,
+    Conquista,
+    Vendedor,
+    Coleta,
+    Suprimento,
+    Passe,
+}
+
+/// As relações do getItem que dizem de onde vem o item, além de NPC, baú e receita. As que dizem
+/// para que ele serve (itemIsInputOfRecipes, itemIsRequiredBySupplyRequests) ficam de fora.
+const OUTRAS_FONTES: [(&str, TipoFonte); 7] = [
+    ("itemIsRewardOfQuests", TipoFonte::Missao),
+    ("itemIsRewardOfDungeons", TipoFonte::Dungeon),
+    ("itemIsRewardOfAchievements", TipoFonte::Conquista),
+    ("itemIsSoldByNpcs", TipoFonte::Vendedor),
+    ("itemIsObtainedFromGatherables", TipoFonte::Coleta),
+    ("itemIsRewardOfSupplyRequests", TipoFonte::Suprimento),
+    ("itemIsRewardOfDaevaPasses", TipoFonte::Passe),
+];
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutraFonte {
+    pub tipo: TipoFonte,
+    pub codigo: u32,
+    pub nome: String,
+    pub chance: Option<f64>,
 }
 
 /// Atributo pelo questlog (statFormat), com o nome que o jogo dá em português.
@@ -180,6 +256,9 @@ struct Estado {
     regioes: Mutex<HashMap<u32, InfoRegiao>>,
     drops: Mutex<HashMap<u32, DropsNpc>>,
     itens: Mutex<HashMap<u32, DetalheItem>>,
+    /// Regiões de cada NPC (getNpc), só para a ficha: o InfoNpc vai para o disco e isto não.
+    regioes_npc: Mutex<HashMap<u32, Vec<String>>>,
+    receitas: Mutex<HashMap<u32, DetalheReceita>>,
     atributos: Mutex<Option<Arc<HashMap<String, Atributo>>>>,
     /// PNG da CDN pelo nome, só na memória (retratos dos chefes de campo e ícones dos drops).
     imagens: Mutex<HashMap<String, Arc<Vec<u8>>>>,
@@ -231,6 +310,8 @@ impl CatalogoSkills {
             regioes: Mutex::new(HashMap::new()),
             drops: Mutex::new(HashMap::new()),
             itens: Mutex::new(HashMap::new()),
+            regioes_npc: Mutex::new(HashMap::new()),
+            receitas: Mutex::new(HashMap::new()),
             atributos: Mutex::new(None),
             imagens: Mutex::new(HashMap::new()),
             falhas: Mutex::new(HashSet::new()),
@@ -324,6 +405,37 @@ impl CatalogoSkills {
         self.buscar(format!("item:{codigo}"))
     }
 
+    /// A ficha de um desejo para o alerta, na fila normal: na abertura, não passa na frente do nome do
+    /// chefe numa luta. A ficha aberta pelo jogador vai pela urgente (`item`).
+    pub fn item_de_fundo(&self, codigo: u32) -> Busca<DetalheItem> {
+        if let Some(item) = self.estado.itens().get(&codigo) {
+            return Busca::Pronto(item.clone());
+        }
+        let falhas = self.estado.falhas();
+        if falhas.contains(&format!("item:{codigo}")) || falhas.contains(&format!("desejo:{codigo}")) {
+            return Busca::Falhou;
+        }
+        drop(falhas);
+        self.pedir(format!("desejo:{codigo}"));
+        Busca::Buscando
+    }
+
+    /// Regiões em que o NPC aparece, só na memória (pede uma vez; com falha, só depois de `repetir_falhas`).
+    pub fn regioes_do_npc(&self, codigo: u32) -> Busca<Vec<String>> {
+        if let Some(regioes) = self.estado.regioes_npc.lock().unwrap_or_else(|e| e.into_inner()).get(&codigo) {
+            return Busca::Pronto(regioes.clone());
+        }
+        self.buscar(format!("regiao_npc:{codigo}"))
+    }
+
+    /// Maestria e raça da receita, só na memória (pede uma vez; com falha, só depois de `repetir_falhas`).
+    pub fn receita(&self, codigo: u32) -> Busca<DetalheReceita> {
+        if let Some(receita) = self.estado.receitas.lock().unwrap_or_else(|e| e.into_inner()).get(&codigo) {
+            return Busca::Pronto(receita.clone());
+        }
+        self.buscar(format!("receita:{codigo}"))
+    }
+
     /// Nome e formato de cada atributo, só na memória (uma consulta de ~200 KB por execução).
     pub fn atributos(&self) -> Busca<Arc<HashMap<String, Atributo>>> {
         if let Some(atributos) = &*self.estado.atributos.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -380,7 +492,7 @@ impl CatalogoSkills {
         } else if novo {
             // Retrato de mob e emblema de classe (UT_), ícone de item (Icon_ e icon_; os das skills são
             // ICON_), os chefes da região e os drops de um chefe não esperam as skills.
-            let urgente = ["npc:", "regiao:", "drops:", "item:", "atributos", "icone:UT_", "icone:Icon_", "icone:icon_"]
+            let urgente = ["npc:", "regiao", "drops:", "item:", "receita:", "atributos", "icone:UT_", "icone:Icon_", "icone:icon_"]
                 .iter()
                 .any(|p| item.starts_with(p));
             let _ = if urgente { self.urgente.send(item) } else { self.fila.send(item) };
@@ -470,7 +582,37 @@ fn trabalhar(estado: &Estado, urgentes: &Receiver<String>, fila: &Receiver<Strin
             if !baixou {
                 estado.falhas().insert(item.clone());
             }
-        } else if let Some(codigo) = item.strip_prefix("item:") {
+        } else if let Some(codigo) = item.strip_prefix("regiao_npc:") {
+            let regioes = codigo.parse::<u32>().ok().and_then(|id| {
+                let dados = trpc(&http, "getNpc", &format!(r#"{{"id":"{id}","language":"{IDIOMA}"}}"#)).ok()?;
+                Some((id, ler_regioes_npc(&dados)))
+            });
+            match regioes {
+                Some((id, regioes)) => {
+                    estado.regioes_npc.lock().unwrap_or_else(|e| e.into_inner()).insert(id, regioes);
+                }
+                None => {
+                    estado.falhas().insert(item.clone());
+                }
+            }
+        } else if let Some(codigo) = item.strip_prefix("receita:") {
+            let receita = codigo.parse::<u32>().ok().and_then(|id| {
+                let dados = trpc(&http, "getRecipe", &format!(r#"{{"id":"{id}","language":"{IDIOMA}"}}"#)).ok()?;
+                Some((id, ler_receita(&dados)?))
+            });
+            match receita {
+                Some((id, receita)) => {
+                    estado.receitas.lock().unwrap_or_else(|e| e.into_inner()).insert(id, receita);
+                }
+                None => {
+                    estado.falhas().insert(item.clone());
+                }
+            }
+        } else if let Some(codigo) = item.strip_prefix("item:").or_else(|| item.strip_prefix("desejo:")) {
+            // O desejo pedido no fundo pode já ter chegado pela ficha aberta no meio tempo.
+            if codigo.parse::<u32>().is_ok_and(|id| estado.itens().contains_key(&id)) {
+                continue;
+            }
             let ficha = codigo.parse::<u32>().ok().and_then(|id| {
                 let dados = trpc(&http, "getItem", &format!(r#"{{"id":"{id}","language":"{IDIOMA}"}}"#)).ok()?;
                 ler_detalhe(&dados)
@@ -668,7 +810,71 @@ pub fn ler_detalhe(r: &Value) -> Option<DetalheItem> {
         Some("nonexchangeable") => Some(false),
         _ => None,
     };
+    ficha.fontes = Arc::new(ler_fontes(r));
     Some(ficha)
+}
+
+/// As listas reversas do getItem: quem derruba, em que baú vem, que receita faz e o resto.
+fn ler_fontes(r: &Value) -> Fontes {
+    let lista = |campo: &str| r.get(campo).and_then(Value::as_array).into_iter().flatten();
+    let mut npcs: Vec<FonteNpc> = lista("itemIsDroppedByNpcs")
+        .filter_map(|n| {
+            let item = ler_item(n)?;
+            Some(FonteNpc {
+                codigo: item.codigo,
+                nome: item.nome,
+                nivel: n.get("level").and_then(Value::as_i64).map_or(0, |l| l.clamp(0, 999) as i32),
+                retrato: item.icone,
+                chance: item.chance,
+                quantidade: item.quantidade,
+            })
+        })
+        .collect();
+    npcs.sort_by(|a, b| b.chance.unwrap_or(-1.0).total_cmp(&a.chance.unwrap_or(-1.0)));
+    let receitas = lista("itemIsOutputOfRecipes")
+        .filter_map(|x| {
+            let receita = ler_item(x)?;
+            let entradas = x
+                .get("recipeInputItems")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|e| {
+                    let quantidade = e.get("quantity").and_then(Value::as_u64).map_or(1, |q| q.min(u64::from(u32::MAX)) as u32);
+                    Some((ler_item(e)?, quantidade))
+                })
+                .collect();
+            Some(Receita { codigo: receita.codigo, profissao: receita.categoria, entradas })
+        })
+        .collect();
+    let outras = OUTRAS_FONTES
+        .iter()
+        .flat_map(|&(campo, tipo)| {
+            lista(campo).filter_map(move |o| {
+                let item = ler_item(o)?;
+                Some(OutraFonte { tipo, codigo: item.codigo, nome: item.nome, chance: item.chance })
+            })
+        })
+        .collect();
+    Fontes { npcs, baus: ler_itens(r.get("itemIsContainedInItems")), receitas, outras }
+}
+
+/// Resposta do getRecipe: maestria e raça.
+pub fn ler_receita(r: &Value) -> Option<DetalheReceita> {
+    r.get("id")?;
+    let texto = |campo: &str| r.get(campo).and_then(Value::as_str).filter(|t| !t.trim().is_empty()).map(str::to_string);
+    Some(DetalheReceita {
+        maestria: texto("masteryGrade"),
+        nivel_maestria: r.get("masteryLevel").and_then(Value::as_i64),
+        raca: texto("qualificationRace"),
+    })
+}
+
+/// Resposta do getNpc: os nomes das regiões em que o NPC aparece (npcIsFoundInRegions), sem
+/// coordenada.
+pub fn ler_regioes_npc(r: &Value) -> Vec<String> {
+    let regioes = r.get("npcIsFoundInRegions").and_then(Value::as_array).into_iter().flatten();
+    regioes.filter_map(|g| g.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).map(str::to_string)).collect()
 }
 
 /// Resposta do statFormat do questlog: id do atributo → nome, formato, ordem e ajuda.

@@ -219,6 +219,17 @@ pub fn definir_regras(regras: &Alertas) {
     *REGRAS.lock().unwrap_or_else(PoisonError::into_inner) = Some(regras.clone());
 }
 
+static DESEJOS: Mutex<(Vec<u32>, f64)> = Mutex::new((Vec::new(), 0.0));
+
+/// Os desejos com 🔔 ligado e a chance mínima (de 0 a 1), a cada mudança da config.
+pub fn definir_desejos(codigos: Vec<u32>, minima: f64) {
+    *DESEJOS.lock().unwrap_or_else(PoisonError::into_inner) = (codigos, minima);
+}
+
+pub fn desejos() -> (Vec<u32>, f64) {
+    DESEJOS.lock().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
 pub fn regras() -> Option<Alertas> {
     REGRAS.lock().unwrap_or_else(PoisonError::into_inner).clone()
 }

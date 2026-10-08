@@ -196,7 +196,7 @@ impl Overlay {
         let largura = ui.available_width();
         let sentido = if chefe.codigo.is_some() { Sense::click() } else { Sense::hover() };
         let (linha, resposta) = ui.allocate_exact_size(vec2(largura, 22.0), sentido);
-        let aberto = chefe.codigo.is_some() && self.painel.as_ref().map(|p| p.codigo) == chefe.codigo;
+        let aberto = chefe.codigo.is_some() && self.painel.as_ref().and_then(|p| p.codigo) == chefe.codigo;
         if aberto || (resposta.hovered() && chefe.codigo.is_some()) {
             ui.painter().rect_filled(linha, 3, branco(if aberto { 0x22 } else { 0x14 }));
         }
