@@ -27,6 +27,8 @@ pub const CHEFES_DE_CAMPO: u16 = 0x9101;
 pub const PODER_JOGADOR: u16 = 0x561C;
 pub const TICKETS: u16 = 0x610B;
 pub const TICKET_MUDOU: u16 = 0x610C;
+/// Barra de groggy de chefe: achado nas capturas do Axon, 2026-10-06 (PROTOCOLO.md §5d).
+pub const BARRA_GROGGY: u16 = 0xE005;
 pub const COMPRIMIDO: u16 = 0xFFFF;
 
 pub fn nome(opcode: u16) -> &'static str {
@@ -50,6 +52,7 @@ pub fn nome(opcode: u16) -> &'static str {
         GRUPO => "Grupo",
         CHEFES_DE_CAMPO => "ChefesDeCampo",
         PODER_JOGADOR => "PoderJogador",
+        BARRA_GROGGY => "BarraGroggy",
         COMPRIMIDO => "Comprimido",
         _ => "",
     }

@@ -2,8 +2,8 @@ mod comum;
 
 use comum::{T0, quase_igual, segundos};
 use nucleo::medicao::catalogo::InfoNpc;
-use nucleo::medicao::medidor::{LUTAS_GUARDADAS, Medidor, PerfilJogador, TicketVisto};
-use nucleo::protocolo::combate::{Buff, ChefeDeCampo, ChefesDeCampo, EventoDano, TICKET_ODYLE, Ticket};
+use nucleo::medicao::medidor::{Groggy, LUTAS_GUARDADAS, Medidor, PerfilJogador, TicketVisto};
+use nucleo::protocolo::combate::{BarraGroggy, Buff, ChefeDeCampo, ChefesDeCampo, EventoDano, TICKET_ODYLE, Ticket};
 
 const MOB: u32 = 46027;
 
@@ -745,4 +745,58 @@ fn mob_batido_por_multidao_e_chefe_mesmo_sem_nome() {
     quase_igual(300.0, p.dano.total);
     let alvo = p.alvo.unwrap();
     assert_eq!((alvo.entidade, alvo.codigo, alvo.chefe), (BOSS, 0, true));
+}
+
+#[test]
+fn groggy_do_chefe_quebra_conta_e_volta_com_a_barra_cheia() {
+    const CHEFE: u32 = 35518;
+    let mut m = Medidor::default();
+    m.inatividade = i64::MAX;
+    m.fim_pelo_combate = false;
+    m.registrar(golpe_em(CHEFE, 11174, 14340000, 100), T0);
+    m.registrar_estado_combate(CHEFE, true, T0);
+    let valor = |atual| BarraGroggy::Valor { entidade: CHEFE, maximo: 1200, atual };
+    let groggy = |m: &Medidor| m.obter_placar().alvo.and_then(|a| a.groggy);
+    assert_eq!(groggy(&m), None); // chefe sem 0xE005: nada
+
+    m.registrar_barra_groggy(valor(1200), T0);
+    m.registrar_barra_groggy(valor(6), T0 + segundos(45.0));
+    assert_eq!(groggy(&m), Some(Groggy { atual: 6, maximo: 1200, quebrou_em: None, fim: None, quebras: 0 }));
+
+    // Quebrou; o buff do groggy chega 0,05 s depois e diz quanto dura.
+    let t = T0 + segundos(46.0);
+    m.registrar_barra_groggy(BarraGroggy::Quebrou { entidade: CHEFE }, t);
+    m.registrar_fim_groggy(CHEFE, 5000, t + segundos(0.05));
+    let quebrado = Groggy { atual: 0, maximo: 1200, quebrou_em: Some(t), fim: Some(t + segundos(5.05)), quebras: 1 };
+    assert_eq!(groggy(&m), Some(quebrado));
+
+    // Barra cheia: o groggy acabou; a conta de quebras fica.
+    m.registrar_barra_groggy(valor(1200), t + segundos(5.15));
+    assert_eq!(groggy(&m), Some(Groggy { atual: 1200, maximo: 1200, quebrou_em: None, fim: None, quebras: 1 }));
+
+    // Saiu de combate: some até o próximo 0xE005, que começa a conta de novo.
+    m.registrar_estado_combate(CHEFE, false, t + segundos(10.0));
+    assert_eq!(groggy(&m), None);
+    m.registrar_barra_groggy(valor(1200), t + segundos(10.05));
+    assert_eq!(groggy(&m).map(|g| g.quebras), Some(0));
+
+    // A morte apaga.
+    m.registrar_morte(CHEFE, 11174, 14020000, 2401, "Fulano", t + segundos(20.0));
+    assert_eq!(groggy(&m), None);
+
+    // Conexão nova também (os ids mudam).
+    m.registrar_barra_groggy(valor(900), t + segundos(30.0));
+    m.nova_conexao();
+    m.registrar(golpe_em(CHEFE, 11174, 14340000, 100), t + segundos(31.0));
+    assert_eq!(groggy(&m), None);
+}
+
+#[test]
+fn buff_do_groggy_sem_barra_e_barra_de_jogador_sao_ignorados() {
+    let mut m = Medidor::default();
+    m.definir_jogador(11174, "Fulano", 31, true);
+    m.registrar(golpe(11174, 14340000, 100), T0);
+    m.registrar_fim_groggy(MOB, 5000, T0); // mob sem 0xE005
+    m.registrar_barra_groggy(BarraGroggy::Valor { entidade: 11174, maximo: 1200, atual: 600 }, T0);
+    assert_eq!(m.obter_placar().alvo.and_then(|a| a.groggy), None);
 }

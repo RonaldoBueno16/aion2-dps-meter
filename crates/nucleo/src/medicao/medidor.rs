@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::catalogo::InfoNpc;
 use super::dados_jogo;
-use crate::protocolo::combate::{Buff, ChefesDeCampo, EventoDano, TICKET_ODYLE, Ticket};
+use crate::protocolo::combate::{BarraGroggy, Buff, ChefesDeCampo, EventoDano, TICKET_ODYLE, Ticket};
 use crate::{Hora, TICKS_POR_SEGUNDO, segundos};
 
 #[derive(Clone, Debug)]
@@ -112,6 +112,19 @@ pub struct TicketVisto {
     pub chegou: Hora,
 }
 
+/// Barra de groggy de um chefe (0xE005), desde que ele entrou em combate.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Groggy {
+    pub atual: u32,
+    pub maximo: u32,
+    /// Hora da quebra; None fora do groggy (a barra cheia de novo encerra).
+    pub quebrou_em: Option<Hora>,
+    /// Hora do buff do groggy mais a duração dele; None sem o buff.
+    pub fim: Option<Hora>,
+    /// Vezes que a barra quebrou desde o primeiro 0xE005 depois da entrada em combate.
+    pub quebras: u32,
+}
+
 /// O mob em destaque na luta: na guerra com chefe, o chefe; sem chefe, o último mob em que você
 /// bateu; sem isso (você ainda não reconhecido), o que mais apanhou dos jogadores.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -135,6 +148,8 @@ pub struct Alvo {
     pub morto: bool,
     /// Hora limite para matá-lo (0x8D21), na hora do Windows; None sem prazo ou com ele morto.
     pub prazo: Option<Hora>,
+    /// None em mob sem 0xE005 (quase todos) e depois da saída de combate ou da morte.
+    pub groggy: Option<Groggy>,
     /// Dano dos jogadores nele nesta luta.
     pub dano: f64,
     /// O seu dano nele nesta luta.
@@ -331,6 +346,8 @@ pub struct Medidor {
     hp_recente: HashMap<u32, VecDeque<(Hora, u64)>>,
     /// Hora limite para matar cada mob (0x8D21 com prazo), até ele sair de combate (a morte também tira).
     prazo_de: HashMap<u32, Hora>,
+    /// Barra de groggy de cada chefe (0xE005), até ele sair de combate ou morrer.
+    groggy_de: HashMap<u32, Groggy>,
     /// Skill de mob → quantos golpes cada NPC (código) deu com ela: o golpe recebido ganha o nome
     /// do mob que mais a usou (nenhuma base pública tem nome de skill de mob). Nas capturas, 1 de 29
     /// skills de mob veio de dois mobs. Vale entre conexões: o código não muda.
@@ -393,6 +410,7 @@ impl Default for Medidor {
             hp_maximo_de: HashMap::new(),
             hp_recente: HashMap::new(),
             prazo_de: HashMap::new(),
+            groggy_de: HashMap::new(),
             npc_da_skill: HashMap::new(),
             nomes: IndexMap::new(),
             niveis: HashMap::new(),
@@ -528,6 +546,7 @@ impl Medidor {
         self.hp_maximo_de.remove(&entidade);
         self.hp_recente.remove(&entidade);
         self.prazo_de.remove(&entidade);
+        self.groggy_de.remove(&entidade);
         self.mortos.remove(&entidade);
     }
 
@@ -749,6 +768,36 @@ impl Medidor {
         }
     }
 
+    /// 0xE005. O valor grava a barra e, cheia ou não, encerra um groggy; a quebra abre um. Id de
+    /// jogador conhecido fica de fora, como no 0x8D00.
+    pub fn registrar_barra_groggy(&mut self, barra: BarraGroggy, hora: Hora) {
+        let entidade = match barra {
+            BarraGroggy::Valor { entidade, .. } | BarraGroggy::Quebrou { entidade } => entidade,
+        };
+        if self.jogadores_conhecidos.contains(&entidade) {
+            return;
+        }
+        let g = self.groggy_de.entry(entidade).or_default();
+        match barra {
+            BarraGroggy::Valor { maximo, atual, .. } => {
+                *g = Groggy { atual, maximo, quebrou_em: None, fim: None, quebras: g.quebras };
+            }
+            BarraGroggy::Quebrou { .. } => {
+                g.atual = 0;
+                g.quebrou_em = Some(hora);
+                g.quebras += 1;
+            }
+        }
+    }
+
+    /// Buff do groggy (0x382A, código `BUFF_GROGGY`): marca quando ele acaba, pela hora da captura.
+    /// Só em quem tem barra.
+    pub fn registrar_fim_groggy(&mut self, entidade: u32, duracao_ms: u32, hora: Hora) {
+        if let Some(g) = self.groggy_de.get_mut(&entidade) {
+            g.fim = Some(hora + i64::from(duracao_ms) * (TICKS_POR_SEGUNDO / 1000));
+        }
+    }
+
     pub fn registrar_estado_combate(&mut self, entidade: u32, em_combate: bool, hora: Hora) {
         if self.jogadores_conhecidos.contains(&entidade) {
             return;
@@ -768,6 +817,7 @@ impl Medidor {
         }
         self.fora_de_combate.insert(entidade);
         self.prazo_de.remove(&entidade);
+        self.groggy_de.remove(&entidade);
         if !self.fim_pelo_combate
             || !self.em_luta
             || self.encerrada_em.is_some()
@@ -977,6 +1027,7 @@ impl Medidor {
         self.hp_maximo_de.clear();
         self.hp_recente.clear();
         self.prazo_de.clear();
+        self.groggy_de.clear();
         self.meu_id = None; // a memória, o seu nome e o histórico continuam: valem para a conexão nova
     }
 
@@ -1079,6 +1130,7 @@ impl Medidor {
             derrota_em: self.derrota_em(entidade).filter(|_| !self.mortos.contains_key(&entidade)),
             morto: self.mortos.contains_key(&entidade),
             prazo: self.prazo_de.get(&entidade).copied(),
+            groggy: self.groggy_de.get(&entidade).copied(),
             dano: self.dano_no_mob(entidade),
             meu_dano,
         })

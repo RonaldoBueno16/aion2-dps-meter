@@ -117,6 +117,34 @@ pub fn hp_restante(pacote: &[u8]) -> Option<(u32, u64)> {
     ler().ok().flatten()
 }
 
+/// Barra de groggy de um chefe, opcode 0xE005.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BarraGroggy {
+    Valor { entidade: u32, maximo: u32, atual: u32 },
+    /// A barra quebrou: o chefe entra em groggy. Veio no lugar do valor que zeraria a barra.
+    Quebrou { entidade: u32 },
+}
+
+/// Buff que o chefe põe em si ao quebrar a barra (0x382A tipo 0x11, 5.000 ms no 35518).
+pub const BUFF_GROGGY: u32 = 10_000_002;
+
+/// 0xE005: [varint entidade] e `03 01 [u32 máximo][u32 atual] 02` (valor) ou `00 03 02` (quebrou).
+/// Visto num chefe só (o 35518 de 2026-10-06, máximo 1200 nos 223 valores): aceita só as duas
+/// formas, byte a byte; o resto dá None.
+pub fn barra_groggy(pacote: &[u8]) -> Option<BarraGroggy> {
+    let mut r = abrir_corpo(pacote).ok()?;
+    let entidade = r.ler_varint().ok()? as u32;
+    match r.ler_bytes(r.restante()).ok()? {
+        [0x00, 0x03, 0x02] => Some(BarraGroggy::Quebrou { entidade }),
+        &[0x03, 0x01, m0, m1, m2, m3, a0, a1, a2, a3, 0x02] => {
+            let maximo = u32::from_le_bytes([m0, m1, m2, m3]);
+            let atual = u32::from_le_bytes([a0, a1, a2, a3]);
+            (maximo > 0 && atual <= maximo).then_some(BarraGroggy::Valor { entidade, maximo, atual })
+        }
+        _ => None,
+    }
+}
+
 /// Estado de combate de uma entidade (mob ou jogador), opcode 0x8D21.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EstadoCombate {

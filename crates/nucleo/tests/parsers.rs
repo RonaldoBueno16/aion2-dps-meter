@@ -3,7 +3,7 @@
 mod comum;
 
 use comum::hex;
-use nucleo::protocolo::combate;
+use nucleo::protocolo::combate::{self, BarraGroggy};
 
 #[test]
 fn dano_seletor_4() {
@@ -450,4 +450,39 @@ fn chefes_de_campo_com_mascara_que_nao_bate_sao_recusados() {
     assert_eq!(pacote[27], 0xEF);
     pacote[27] = 0xFF;
     assert_eq!(combate::chefes_de_campo(&pacote), None);
+}
+
+/// Chefe 35518, dump de 2026-10-06: a barra caiu de 1200 a 6, quebrou e voltou cheia 5,15 s depois.
+#[test]
+fn barra_de_groggy_do_chefe() {
+    let valor = |atual| Some(BarraGroggy::Valor { entidade: 35518, maximo: 1200, atual });
+    assert_eq!(combate::barra_groggy(&hex("1405E0BE95020301B00400009704000002")), valor(1175));
+    assert_eq!(combate::barra_groggy(&hex("1405E0BE95020301B00400000600000002")), valor(6));
+    assert_eq!(combate::barra_groggy(&hex("0C05E0BE9502000302")), Some(BarraGroggy::Quebrou { entidade: 35518 }));
+    assert_eq!(combate::barra_groggy(&hex("1405E0BE95020301B0040000B004000002")), valor(1200));
+}
+
+#[test]
+fn barra_de_groggy_em_forma_nunca_vista_e_recusada() {
+    for pacote in [
+        "1405E0BE95020302B00400009704000002",   // 03 02 no lugar de 03 01
+        "1405E0BE95020301B004000097040000",     // cortado
+        "1405E0BE95020301B0040000B104000002",   // atual 1201 com máximo 1200
+        "1405E0BE95020301000000000000000002",   // máximo 0
+        "0C05E0BE9502000303",                   // 00 03 03
+        "1505E0BE95020301B0040000970400000200", // byte sobrando
+    ] {
+        assert_eq!(combate::barra_groggy(&hex(pacote)), None, "{pacote}");
+    }
+}
+
+#[test]
+fn buff_do_groggy_no_chefe() {
+    let b = combate::buff(
+        &hex("322A38BE95020111AB06829698008813000000000000F3453614A1010000BE95020100E8031BC70658BBC600DA5847"),
+        true,
+    )
+    .unwrap();
+    assert_eq!((b.alvo, b.instancia, b.codigo, b.duracao_ms), (35518, 811, combate::BUFF_GROGGY, 5000));
+    assert_eq!(combate::buffs_removidos(&hex("0E2C38BE95020100AB0601")), Some((35518, vec![811])));
 }

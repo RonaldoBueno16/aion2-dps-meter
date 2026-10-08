@@ -248,7 +248,16 @@ fn ao_pacote(medidor: &mut Medidor, pacote: &[u8], hora: Hora) {
         }
         opcodes::BUFF_NOVO | opcodes::BUFF_RENOVADO => {
             if let Some(buff) = combate::buff(pacote, op == opcodes::BUFF_NOVO) {
+                // Antes do registrar_buff, que descarta código fora das skills de classe.
+                if buff.codigo == combate::BUFF_GROGGY {
+                    medidor.registrar_fim_groggy(buff.alvo, buff.duracao_ms, hora);
+                }
                 medidor.registrar_buff(buff, hora);
+            }
+        }
+        opcodes::BARRA_GROGGY => {
+            if let Some(barra) = combate::barra_groggy(pacote) {
+                medidor.registrar_barra_groggy(barra, hora);
             }
         }
         opcodes::TICKETS => {
