@@ -86,18 +86,35 @@ pub fn dano_periodico(pacote: &[u8]) -> Result<EventoDano, String> {
     Ok(EventoDano { alvo_id: alvo, autor_id: autor, skill, dano, periodico: true, ..Default::default() })
 }
 
-/// HP atual de uma entidade, opcode 0x8D00: (entidade, hp).
+/// HP atual de uma entidade, opcode 0x8D00: (entidade, hp); None quando o pacote não traz o HP.
+/// [varint entidade][u8 bits]; bit 0: [u8 n] n × [u8 chave][u32]; bit 1: [u8 n] n × [u8 chave][u64].
+/// A chave 0 da lista u64 é o HP, em mob e em jogador. As outras (1, 3, 4, 6, 8 na u32, só no seu
+/// personagem; 7 na u64) ainda não têm significado conferido.
 pub fn hp_restante(pacote: &[u8]) -> Option<(u32, u64)> {
-    let ler = || -> Resultado<(u32, u64)> {
+    let ler = || -> Resultado<Option<(u32, u64)>> {
         let mut r = abrir_corpo(pacote)?;
         let entidade = r.ler_varint()? as u32;
-        r.ler_varint()?; // desconhecido
-        r.ler_varint()?; // desconhecido
-        r.ler_varint()?; // desconhecido
-        let hp = u64::from(r.ler_u32()?) | u64::from(r.ler_u32()?) << 32;
-        Ok((entidade, hp))
+        let bits = r.ler_u8()?;
+        if bits & !0b11 != 0 {
+            return Ok(None);
+        }
+        if bits & 1 != 0 {
+            let n = usize::from(r.ler_u8()?);
+            r.ler_bytes(n * 5)?;
+        }
+        let mut hp = None;
+        if bits & 2 != 0 {
+            for _ in 0..r.ler_u8()? {
+                let chave = r.ler_u8()?;
+                let valor = u64::from(r.ler_u32()?) | u64::from(r.ler_u32()?) << 32;
+                if chave == 0 {
+                    hp = Some(valor);
+                }
+            }
+        }
+        Ok(hp.map(|hp| (entidade, hp)))
     };
-    ler().ok()
+    ler().ok().flatten()
 }
 
 /// Estado de combate de uma entidade (mob ou jogador), opcode 0x8D21.
@@ -340,10 +357,14 @@ pub struct Morte {
     /// Servidor do matador: 1000..9999 em jogador, 0 em mob (o world boss de 2026-10-03).
     pub servidor: u16,
     pub nome_matador: String,
+    /// Código do NPC do matador, o mesmo do spawn 0x3641: veio no abate por mob (2400425, o Axios,
+    /// no world boss de 2026-10-03); 0 em jogador ou sem matador.
+    pub npc_matador: u32,
 }
 
-/// [varint morto][u32 skill que matou][varint matador][u16 servidor][u8 tam][nome do matador][u8 tam][legião]...
-/// Sem matador (invocação que expirou) vem tudo zerado. None quando não há morto.
+/// [varint morto][u32 skill que matou][varint matador][u16 servidor][u8 tam][nome do matador][u8 tam][legião]
+/// [u16 desconhecido][varint código do NPC do matador][6 bytes desconhecidos]. Sem matador (invocação que
+/// expirou) vem tudo zerado. None quando não há morto.
 pub fn morte(pacote: &[u8]) -> Option<Morte> {
     let mut m = Morte::default();
     let mut ler = || -> Resultado<()> {
@@ -353,10 +374,10 @@ pub fn morte(pacote: &[u8]) -> Option<Morte> {
         m.matador = r.ler_varint()? as u32;
         if m.matador != 0 && r.restante() >= 3 {
             m.servidor = r.ler_u16()?;
-            let tamanho = usize::from(r.ler_u8()?);
-            if (1..=72).contains(&tamanho) && r.restante() >= tamanho {
-                m.nome_matador = sem_controle(r.ler_bytes(tamanho)?);
-            }
+            m.nome_matador = texto_curto(&mut r)?;
+            texto_curto(&mut r)?; // legião
+            r.ler_u16()?; // desconhecido: 2 com legião, 0 sem
+            m.npc_matador = r.ler_varint()? as u32;
         }
         Ok(())
     };
@@ -550,6 +571,15 @@ pub fn chefes_de_campo(pacote: &[u8]) -> Option<ChefesDeCampo> {
 }
 
 /// UTF-8 sem os caracteres de controle (bytes inválidos viram U+FFFD).
+/// [u8 tamanho][UTF-8] de nome ou legião. Mais de 72 bytes é leitura desalinhada: para o pacote.
+fn texto_curto(r: &mut LeitorPacote<'_>) -> Resultado<String> {
+    let tamanho = usize::from(r.ler_u8()?);
+    if tamanho > 72 {
+        return Err(format!("Texto de {tamanho} bytes"));
+    }
+    Ok(sem_controle(r.ler_bytes(tamanho)?))
+}
+
 fn sem_controle(bruto: &[u8]) -> String {
     String::from_utf8_lossy(bruto).chars().filter(|c| !c.is_control()).collect()
 }

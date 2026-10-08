@@ -36,6 +36,21 @@ fn hp_de_mob() {
 }
 
 #[test]
+fn hp_pelo_layout_de_bits_do_8d00() {
+    // [varint entidade][u8 bits]; bit 0: n × [u8 chave][u32]; bit 1: n × [u8 chave][u64], chave 0 = HP.
+    // Seu personagem (#371, dump de 2026-10-06): só a lista u64, só a u32 e as duas.
+    assert_eq!(combate::hp_restante(&hex("13008df3020201001c29000000000000")), Some((371, 10524)));
+    assert_eq!(combate::hp_restante(&hex("0f008df302010104dc050000")), None);
+    assert_eq!(combate::hp_restante(&hex("1e008df302030201450c000006d83b050001006612000000000000")), Some((371, 4710)));
+    // Só a chave 7 na lista u64 (dump de 2026-10-02): não é HP.
+    assert_eq!(combate::hp_restante(&hex("13008dca04020107da11000000000000")), None);
+    // Chaves 0 e 7 juntas (dump de 2026-10-03): o HP é o da chave 0.
+    assert_eq!(combate::hp_restante(&hex("1c008dd345020200e91000000000000007e910000000000000")), Some((8915, 4329)));
+    // Bit que nunca apareceu: não arrisca.
+    assert_eq!(combate::hp_restante(&hex("13008dca04060107da11000000000000")), None);
+}
+
+#[test]
 fn spawn_de_armadilha_traz_dono_e_nome_do_dono() {
     let pacote = hex(concat!(
         "C7014136DCC2035F000105596F736869AC902C000002007C12C600F88EC500F1",
@@ -84,6 +99,25 @@ fn morte_de_mob_traz_skill_matador_e_nome() {
     assert_eq!(m.skill, 14020000);
     assert_eq!(m.servidor, 2401);
     assert_eq!(m.nome_matador, "Yoshi");
+    assert_eq!(m.npc_matador, 0); // matador jogador
+}
+
+#[test]
+fn morte_por_mob_traz_o_codigo_do_npc_do_matador() {
+    // World boss de 2026-10-03: o #16201 morto pelo #21799 (Arconte da Alma Perdida Axios).
+    let m = combate::morte(&hex("1f048dc97e82d91200a7aa01000000000000a9c19201000000000102")).unwrap();
+    assert_eq!((m.morto, m.skill, m.matador, m.servidor), (16201, 1235330, 21799, 0));
+    assert_eq!(m.nome_matador, "");
+    assert_eq!(m.npc_matador, 2400425);
+}
+
+#[test]
+fn morte_com_nome_comprido_demais_para_no_nome() {
+    // O pacote do #16201 com tamanho de nome 0x7F: lixo. Morto, skill e matador ficam; o resto não é lido.
+    let m = combate::morte(&hex("1f048dc97e82d91200a7aa0100007f0000000000a9c19201000000000102")).unwrap();
+    assert_eq!((m.morto, m.skill, m.matador), (16201, 1235330, 21799));
+    assert_eq!(m.nome_matador, "");
+    assert_eq!(m.npc_matador, 0);
 }
 
 #[test]
@@ -92,6 +126,7 @@ fn morte_de_armadilha_que_expirou_vem_sem_matador() {
     assert_eq!(m.morto, 57692);
     assert_eq!(m.matador, 0);
     assert_eq!(m.nome_matador, "");
+    assert_eq!(m.npc_matador, 0);
 }
 
 #[test]

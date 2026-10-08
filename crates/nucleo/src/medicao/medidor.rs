@@ -528,7 +528,7 @@ impl Medidor {
         self.hp_de.insert(entidade, atual);
     }
 
-    /// 0x8D00. O de jogador tem outro formato (a leitura dá lixo) e fica de fora.
+    /// 0x8D00. O de jogador conhecido fica de fora: o HP dele não entra no alvo.
     pub fn registrar_hp(&mut self, entidade: u32, hp: u64, hora: Hora) {
         if self.jogadores_conhecidos.contains(&entidade) {
             return;
