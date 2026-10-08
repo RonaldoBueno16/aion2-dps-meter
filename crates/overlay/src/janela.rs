@@ -1113,6 +1113,7 @@ impl Overlay {
         let lista: Vec<LinhaEvento> = eventos::em_ordem(agora)
             .into_iter()
             .map(|(evento, estado)| LinhaEvento {
+                id: Some(evento.id),
                 nome: evento.nome.into(),
                 icone: evento
                     .icone
@@ -1269,6 +1270,26 @@ impl Overlay {
         let horario = montar(ui, LayoutJob::single_section(linha.horario.clone(), formato));
         pintor.galley(pos2(fim - 84.0 - horario.size().x, meio - horario.size().y / 2.0), horario, texto());
         resposta.on_hover_text(&linha.dica);
+        // O 🔔 numa coluna antes da do início, que tem no máximo "qua 04:00".
+        if let Some(id) = linha.id {
+            let antes = self.config.alertas.eventos.get(id).copied();
+            let dica = match antes {
+                Some(0) => "Alerta na hora. Clique para desligar; a antecedência muda em Configurações › Alertas.".into(),
+                Some(n) => format!(
+                    "Alerta {n} min antes e na hora. Clique para desligar; a antecedência muda em Configurações › Alertas."
+                ),
+                None => "Ligar o alerta deste evento: 5 min antes e na hora.".into(),
+            };
+            let centro = pos2(fim - 84.0 - 62.0, meio);
+            if visual::sino(ui, centro, antes.is_some(), ui.id().with(("sino_evento", id))).on_hover_text(dica).clicked() {
+                if antes.is_some() {
+                    self.config.alertas.eventos.remove(id);
+                } else {
+                    self.config.alertas.eventos.insert(id.to_string(), 5);
+                }
+                self.aplicar_config();
+            }
+        }
     }
 
     /// "Chefes de Altgard   20 vivos, 4 mortos" depois dos eventos, sem os chefes um a um: o clique abre
@@ -2278,6 +2299,8 @@ fn montar(ui: &Ui, job: LayoutJob) -> Arc<Galley> {
 
 /// Uma linha da área de eventos: um evento de horário fixo ou um chefe de campo morto.
 struct LinhaEvento {
+    /// Id do evento (eventos.rs), para o 🔔; None nos chefes.
+    id: Option<&'static str>,
     nome: String,
     icone: IconeDaLinha,
     estado: eventos::Estado,

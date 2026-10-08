@@ -2,6 +2,7 @@
 //! direita, o estado atual em poucas palavras ("15 s", "4 arquivos, 2,1 MB"), e o clique abre a
 //! página, que volta pelo "‹ Configurações". Tudo vale na hora e fica salvo.
 
+mod alertas;
 mod medidor;
 mod sistema;
 
@@ -20,6 +21,7 @@ pub(super) enum Pagina {
     Jogadores,
     Luta,
     Visual,
+    Alertas,
     Atalhos,
     Dados,
 }
@@ -27,6 +29,7 @@ pub(super) enum Pagina {
 /// Os grupos do índice, na ordem da tela. Página nova entra aqui e no `match` de `tela_configuracoes`.
 const GRUPOS: &[(&str, &[Pagina])] = &[
     ("Medidor", &[Pagina::Jogadores, Pagina::Luta, Pagina::Visual]),
+    ("Jogo", &[Pagina::Alertas]),
     ("Sistema", &[Pagina::Atalhos, Pagina::Dados]),
 ];
 
@@ -40,6 +43,7 @@ impl Pagina {
             Pagina::Jogadores => "Números e jogadores",
             Pagina::Luta => "Luta",
             Pagina::Visual => "Visual",
+            Pagina::Alertas => "Alertas",
             Pagina::Atalhos => "Atalhos",
             Pagina::Dados => "Dados no PC",
         }
@@ -51,6 +55,7 @@ impl Pagina {
             Some("jogadores") => Pagina::Jogadores,
             Some("luta") => Pagina::Luta,
             Some("visual") => Pagina::Visual,
+            Some("alertas") => Pagina::Alertas,
             Some("atalhos") => Pagina::Atalhos,
             Some("dados") => Pagina::Dados,
             _ => Pagina::Indice,
@@ -106,6 +111,7 @@ impl Overlay {
                 Pagina::Jogadores => self.pagina_jogadores(ui),
                 Pagina::Luta => self.pagina_luta(ui),
                 Pagina::Visual => self.pagina_visual(ui),
+                Pagina::Alertas => self.pagina_alertas(ui),
                 Pagina::Atalhos => self.pagina_atalhos(ui),
                 Pagina::Dados => self.pagina_dados(ui),
             }
@@ -156,6 +162,7 @@ impl Overlay {
             Pagina::Jogadores => medidor::resumo_jogadores(&self.config),
             Pagina::Luta => medidor::resumo_luta(&self.config),
             Pagina::Visual => medidor::resumo_visual(&self.config),
+            Pagina::Alertas => alertas::resumo_alertas(&self.config),
             Pagina::Atalhos => sistema::resumo_atalhos(),
             Pagina::Dados => sistema::resumo_dados(&self.estado_config.arquivos),
         }
@@ -293,7 +300,7 @@ mod testes {
 
     #[test]
     fn toda_pagina_aparece_no_indice_uma_vez() {
-        let todas = [Pagina::Jogadores, Pagina::Luta, Pagina::Visual, Pagina::Atalhos, Pagina::Dados];
+        let todas = [Pagina::Jogadores, Pagina::Luta, Pagina::Visual, Pagina::Alertas, Pagina::Atalhos, Pagina::Dados];
         for pagina in todas {
             let vezes = GRUPOS.iter().flat_map(|(_, paginas)| paginas.iter()).filter(|&&p| p == pagina).count();
             assert_eq!(vezes, 1, "{pagina:?}");

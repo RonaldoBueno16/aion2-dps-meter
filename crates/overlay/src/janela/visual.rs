@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use eframe::egui::epaint::Mesh;
-use eframe::egui::{Color32, CursorIcon, Galley, Painter, Pos2, Rect, Response, Sense, Ui, vec2};
+use eframe::egui::{Color32, CursorIcon, Galley, Id, Painter, Pos2, Rect, Response, Sense, Ui, Vec2, vec2};
 
 use super::{branco, fonte, texto};
 
@@ -69,6 +69,23 @@ pub(super) fn botao_icone(ui: &mut Ui, simbolo: &str, tamanho: f32) -> Response 
     let galley = ui.fonts_mut(|f| f.layout_no_wrap(simbolo.to_string(), fonte(tamanho, false), cor));
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, cor);
     resposta.on_hover_cursor(CursorIcon::PointingHand)
+}
+
+/// O 🔔 de ligar o alerta de um evento ou chefe: dourado ligado, apagado desligado.
+pub(super) fn sino(ui: &Ui, centro: Pos2, ligado: bool, id: Id) -> Response {
+    let rect = Rect::from_center_size(centro, Vec2::splat(18.0));
+    let resposta = ui.interact(rect, id, Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
+    let cor = match (ligado, resposta.hovered()) {
+        (true, _) => DOURADO,
+        (false, true) => branco(0xAA),
+        (false, false) => branco(0x40),
+    };
+    if resposta.hovered() {
+        ui.painter().rect_filled(rect, 4, branco(0x1A));
+    }
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap("🔔".into(), fonte(11.0, false), cor));
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, cor);
+    resposta
 }
 
 /// Aba: texto e, na ativa, um traço dourado embaixo.

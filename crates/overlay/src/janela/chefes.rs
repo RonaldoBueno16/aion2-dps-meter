@@ -30,6 +30,8 @@ pub(super) const ORIGEM_CHEFES: &str = "Hora que o servidor manda na lista dos c
 
 /// Um chefe como a tela mostra.
 pub(super) struct ChefeVisto {
+    /// O do 0x9101 (região × 100 + número), que marca o alerta.
+    pub id: u32,
     /// Código do NPC no questlog, só com o nome confiável (a mesma contagem da região): abre os drops.
     pub codigo: Option<u32>,
     pub nome: String,
@@ -68,6 +70,7 @@ pub(super) fn chefes_vistos(
             let info = numero.and_then(|n| questlog?.chefes.get((n as usize).checked_sub(1)?));
             let renasceu = !c.vivo && c.hora_ms <= agora_ms;
             ChefeVisto {
+                id: c.id,
                 codigo: info.map(|i| i.codigo),
                 nome: info.map_or_else(|| format!("Chefe {}", numero.unwrap_or(c.id)), |i| i.nome.clone()),
                 nivel: info.map_or(0, |i| i.nivel),
@@ -239,7 +242,28 @@ impl Overlay {
             format!("{quem}: vivo, sem hora na lista (provavelmente não morreu desde que o servidor reiniciou).")
         };
         let direita = montar(ui, direita);
-        pintor.galley(pos2(fim - direita.size().x, meio - direita.size().y / 2.0), direita, texto());
+        let x_direita = fim - direita.size().x;
+        pintor.galley(pos2(x_direita, meio - direita.size().y / 2.0), direita, texto());
+        let marcado = self.config.alertas.chefes.contains(&chefe.id);
+        let sobre_o_sino = if marcado {
+            format!(
+                "Alerta ligado: {} min antes de renascer e na hora. Clique para desligar.",
+                self.config.alertas.chefes_antes_min
+            )
+        } else {
+            "Ligar o alerta deste chefe: avisa antes de ele renascer (a antecedência muda em Configurações › \
+             Alertas), mesmo fora da região, pela última lista que o jogo mandou."
+                .to_string()
+        };
+        let sino = visual::sino(ui, pos2(x_direita - 14.0, meio), marcado, ui.id().with(("sino_chefe", chefe.id)));
+        if sino.on_hover_text(sobre_o_sino).clicked() {
+            if marcado {
+                self.config.alertas.chefes.remove(&chefe.id);
+            } else if self.config.alertas.chefes.len() < crate::config::CHEFES_MARCADOS_MAX {
+                self.config.alertas.chefes.insert(chefe.id);
+            }
+            self.aplicar_config();
+        }
         let clique = if chefe.codigo.is_some() { "\n\nClique para ver os drops ao lado." } else { "" };
         let resposta = resposta.on_hover_text(format!("{dica}\n\n{ORIGEM_CHEFES}{clique}"));
         if let Some(codigo) = chefe.codigo
@@ -259,6 +283,7 @@ pub(super) fn hora_com_segundos(ms: i64) -> String {
 /// Chefe morto como linha da área de eventos: retrato, contagem até renascer e a hora.
 pub(super) fn linha_do_chefe(chefe: &ChefeVisto, agora: Hora) -> LinhaEvento {
     LinhaEvento {
+        id: None,
         nome: chefe.nome.clone(),
         icone: chefe.retrato.clone().map_or(IconeDaLinha::Moldura, |r| IconeDaLinha::Web(r, eventos::ROSTO)),
         estado: eventos::Estado::Fechado(falta_para_renascer(chefe, agora)),
