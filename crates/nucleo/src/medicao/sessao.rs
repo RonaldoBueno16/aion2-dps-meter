@@ -224,6 +224,7 @@ fn ao_pacote(medidor: &mut Medidor, pacote: &[u8], hora: Hora) {
         }
         opcodes::MORTE_ENTIDADE => {
             if let Some(m) = combate::morte(pacote) {
+                medidor.registrar_npc_do_matador(m.matador, m.npc_matador);
                 medidor.registrar_morte(m.morto, m.matador, m.skill, m.servidor, &m.nome_matador, hora);
             }
         }

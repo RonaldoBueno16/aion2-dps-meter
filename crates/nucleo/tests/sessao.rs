@@ -171,3 +171,75 @@ fn ping_pelo_ack_do_servidor_no_fluxo_travado() {
     sessao.ao_segmento(&ack, passar(&mut t, 1));
     assert_eq!(sessao.ping(), Some(15 * 10_000));
 }
+
+/// A única morte de jogador das capturas (world boss de 2026-10-03): o #16201 morto pelo #21799
+/// (NPC 2400425), com o #16201 no papel de você. Os 19 pacotes de -4,65 s a 0 s, cada um na sua hora.
+const MORTE_16201: [(f64, &str); 19] = [
+    (-4.650, "13008dc97e0201008613000000000000"),
+    (-4.451, "210438c97e0400a7aa0164d912005e021beb5c0701000000904ed2120100"),
+    (-4.451, "0a218dc97e0001"),
+    (-4.451, "13008dc97e020100340a000000000000"),
+    (-4.201, "200438c97e0400c97e9040150148024b384d6c01000000a0519a0a0100"),
+    (-4.201, "13008dc97e0201004e0f000000000000"),
+    (-3.501, "190538c97e0bc97ed3095fb2fc0bcf02cd02ddaf1e00"),
+    (-3.501, "170538c97e0bc97ed30960b2fc0b7e7bddaf1e00"),
+    (-3.501, "13008dc97e0201001611000000000000"),
+    (-1.502, "180538c97e0bc97ed3095fb2fc0b02cd02ddaf1e00"),
+    (-1.502, "170538c97e0bc97ed30960b2fc0b037bddaf1e00"),
+    (-1.502, "13008dc97e020100de12000000000000"),
+    (-1.450, "0a218dc97e0000"),
+    (-0.451, "13008dc97e020100f212000000000000"),
+    (-0.040, "210438c97e0400a7aa0182d912005f02d3f65c0701000000904ebe260100"),
+    (-0.040, "0a218dc97e0001"),
+    (-0.040, "13008dc97e0201000000000000000000"),
+    (0.000, "1f048dc97e82d91200a7aa01000000000000a9c19201000000000102"),
+    (0.000, "0a218dc97e0000"),
+];
+
+fn npc_de_teste(codigo: u32) -> Option<nucleo::medicao::catalogo::InfoNpc> {
+    Some(nucleo::medicao::catalogo::InfoNpc {
+        nome: format!("NPC {codigo}"),
+        nivel: 45,
+        nomeado: codigo == 2400425,
+        tipo: String::new(),
+        retrato: None,
+    })
+}
+
+#[test]
+fn morte_real_vira_relatorio_com_golpe_final_hp_e_cura() {
+    use nucleo::medicao::medidor::TipoRecebido::{Cura, Efeito, Golpe};
+
+    let mut sessao = Sessao::default();
+    let mut jogo = Conexao::nova("193.202.112.171", 62225, 13328);
+    let mut t = T0;
+    for _ in 0..3 {
+        sessao.ao_segmento(&jogo.dados(HEARTBEAT), passar(&mut t, 50));
+    }
+    sessao.medidor.consultar_npc = npc_de_teste;
+    sessao.medidor.definir_jogador(16201, "Fulano", 0, true);
+    let morte = t + segundos(5.0);
+    for (antes, pacote) in MORTE_16201 {
+        sessao.ao_segmento(&jogo.dados(pacote), morte + segundos(antes));
+    }
+
+    let r = sessao.medidor.ultima_morte().expect("relatório da morte");
+    assert_eq!((r.morto, r.matador, r.npc_matador, r.skill_final), (16201, 21799, 2400425, 1235330));
+    assert!(!r.matador_jogador);
+    // O spawn do #21799 não está nos pacotes: o nome vem do código que o 0x8D04 traz.
+    assert_eq!(r.nome_matador, "NPC 2400425");
+    assert_eq!((r.dano_final, r.hp_antes_final), (Some(4926), Some(4850)));
+    let tipos: Vec<_> = r.linhas.iter().map(|l| l.tipo).collect();
+    assert_eq!(tipos, [Golpe, Cura, Efeito, Efeito, Efeito, Efeito, Golpe]);
+    let valores: Vec<_> = r.linhas.iter().map(|l| l.valor).collect();
+    assert_eq!(valores, [Some(2386), Some(1306), None, None, None, None, Some(4926)]);
+    let hp: Vec<_> = r.linhas.iter().map(|l| l.hp_depois).collect();
+    assert_eq!(hp, [2612, 3918, 4374, 4374, 4830, 4830, 0].map(Some));
+    let finais: Vec<_> = r.linhas.iter().map(|l| l.golpe_final).collect();
+    assert_eq!(finais, [false, false, false, false, false, false, true]);
+    assert_eq!((r.linhas[0].quem.as_str(), r.linhas[1].quem.as_str()), ("NPC 2400425", "você"));
+    assert!((r.linhas[0].antes_s + 4.451).abs() < 0.001);
+    assert_eq!((r.recebido, r.maior, r.monstros, r.curado), (7312, 4926, 1, 1306));
+    // A luta em andamento leva a morte no placar.
+    assert_eq!(sessao.medidor.obter_placar().mortes.len(), 1);
+}

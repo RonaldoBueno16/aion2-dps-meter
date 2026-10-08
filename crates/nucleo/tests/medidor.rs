@@ -831,3 +831,94 @@ fn mob_com_barra_de_groggy_ou_prazo_conta_como_chefe() {
     m2.registrar_npc(OUTRO_CHEFE, 2400031);
     assert_eq!(alvo(&m2), Some((OUTRO_CHEFE, false)));
 }
+
+#[test]
+fn morte_com_a_luta_fechada_gera_relatorio_e_golpe_depois_fica_de_fora() {
+    const EU: u32 = 11174;
+    let mut m = Medidor::default();
+    m.definir_jogador(EU, "Fulano", 31, true);
+    m.registrar(golpe_em(EU, MOB, 1235330, 700), T0);
+    m.registrar_hp(EU, 100, T0);
+    // O mob saiu de combate: a luta acabou, e a morte chega 2 s depois.
+    m.registrar_estado_combate(MOB, false, T0 + segundos(1.0));
+    m.registrar_morte(EU, MOB, 1235330, 0, "", T0 + segundos(3.0));
+    m.registrar(golpe_em(EU, MOB, 1235330, 500), T0 + segundos(3.1)); // depois do 0x8D04
+
+    let r = m.ultima_morte().expect("relatório");
+    assert_eq!(r.linhas.len(), 1);
+    assert_eq!((r.dano_final, r.recebido, r.linhas[0].hp_depois), (Some(700), 700, Some(100)));
+    assert_eq!(r.numero, 1);
+    // A luta já tinha fechado: a morte fica fora dela.
+    assert!(m.lutas_passadas()[0].placar.mortes.is_empty());
+}
+
+#[test]
+fn invocacao_morta_nao_gera_relatorio_e_conexao_nova_limpa_o_buffer() {
+    const EU: u32 = 11174;
+    let mut m = Medidor::default();
+    m.definir_jogador(EU, "Fulano", 31, true);
+    m.definir_invocacao(57692, EU, "Fulano");
+    m.registrar(golpe_em(57692, MOB, 1235300, 900), T0);
+    m.registrar_morte(57692, MOB, 1235300, 0, "", T0 + segundos(1.0));
+    assert!(m.ultima_morte().is_none());
+
+    m.registrar(golpe_em(EU, MOB, 1235300, 900), T0 + segundos(2.0));
+    m.nova_conexao();
+    m.definir_jogador(EU, "Fulano", 31, true);
+    m.registrar_morte(EU, MOB, 1235300, 0, "", T0 + segundos(3.0));
+    let r = m.ultima_morte().expect("relatório");
+    assert!(r.linhas.is_empty());
+    // Sem golpe no buffer: matador e skill do 0x8D04, sem o dano.
+    assert_eq!((r.matador, r.skill_final, r.dano_final), (MOB, 1235300, None));
+}
+
+#[test]
+fn morte_em_pvp_tem_matador_e_skill_sem_o_dano() {
+    const EU: u32 = 11174;
+    const OUTRO: u32 = 22222;
+    let mut m = Medidor::default();
+    m.definir_jogador(EU, "Fulano", 31, true);
+    m.definir_jogador(OUTRO, "Beltrano", 31, false);
+    m.registrar(golpe_em(EU, MOB, 1235300, 900), T0);
+    m.registrar(golpe_em(EU, OUTRO, 11010000, 3000), T0 + segundos(1.0));
+    m.registrar_morte(EU, OUTRO, 11010000, 2401, "Beltrano", T0 + segundos(1.1));
+
+    let r = m.ultima_morte().expect("relatório");
+    assert!(r.matador_jogador);
+    assert_eq!((r.nome_matador.as_str(), r.dano_final), ("Beltrano", None));
+    // O golpe do jogador vira efeito sem valor; o do mob, de antes, não é tomado como golpe final.
+    assert_eq!(r.linhas.iter().map(|l| l.valor).collect::<Vec<_>>(), [Some(900), None]);
+    assert!(r.linhas.iter().all(|l| !l.golpe_final));
+    assert_eq!(r.recebido, 900);
+}
+
+#[test]
+fn buffer_guarda_so_os_128_golpes_mais_novos() {
+    const EU: u32 = 11174;
+    let mut m = Medidor::default();
+    m.definir_jogador(EU, "Fulano", 31, true);
+    m.janela_morte = segundos(30.0);
+    for i in 0..200 {
+        m.registrar(golpe_em(EU, MOB, 1235300, 1 + i), T0 + segundos(i as f64 * 0.1));
+    }
+    m.registrar_morte(EU, MOB, 1235300, 0, "", T0 + segundos(20.0));
+    let r = m.ultima_morte().expect("relatório");
+    assert_eq!(r.linhas.len(), 128);
+    assert_eq!(r.linhas[0].valor, Some(73)); // o 73º golpe (valor 1 + 72)
+    assert_eq!(r.dano_final, Some(200));
+}
+
+#[test]
+fn luta_que_acabou_com_a_morte_guarda_o_relatorio() {
+    const EU: u32 = 11174;
+    let mut m = Medidor::default();
+    m.definir_jogador(EU, "Fulano", 31, true);
+    m.registrar(golpe_em(EU, MOB, 1235300, 900), T0);
+    m.registrar_morte(EU, MOB, 1235300, 0, "", T0 + segundos(0.5));
+    m.reiniciar();
+    let luta = &m.lutas_passadas()[0];
+    assert_eq!(luta.placar.mortes.len(), 1);
+    assert_eq!(luta.placar.mortes[0].dano_final, Some(900));
+    // A luta nova começa sem a morte.
+    assert!(m.obter_placar().mortes.is_empty());
+}

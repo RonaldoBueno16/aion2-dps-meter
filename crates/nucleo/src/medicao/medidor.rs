@@ -170,6 +170,8 @@ pub struct Placar {
     pub cura: Tabela,
     /// Já se sabe qual id é você (login visto nesta conexão ou nome guardado casado num abate).
     pub voce_reconhecido: bool,
+    /// As suas mortes nesta luta, cada uma com o relatório.
+    pub mortes: Vec<Arc<RelatorioMorte>>,
 }
 
 /// Luta que já acabou, para o histórico do overlay. Fica só na memória.
@@ -182,8 +184,87 @@ pub struct LutaPassada {
     pub placar: Arc<Placar>,
 }
 
+/// O que um jogador recebeu, separado como no `registrar`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TipoRecebido {
+    /// Golpe direto de quem não é jogador.
+    Golpe,
+    /// Dano periódico de quem não é jogador.
+    Periodico,
+    /// Skill de cura de jogador (a sua também).
+    Cura,
+    /// Outra skill de jogador: buff, escudo, regeneração ou golpe de PvP. Fica sem valor: o número dela
+    /// não é dano (o efeito 2011101 do #16201 veio com o HP subindo).
+    Efeito,
+}
+
+/// Uma linha do relatório de morte, do evento mais velho ao golpe final. Nomes resolvidos na hora da
+/// morte.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinhaMorte {
+    /// Segundos antes da morte (negativo).
+    pub antes_s: f64,
+    pub autor: u32,
+    /// "você", o nome do jogador ("Jogador #id" sem nome) ou o do monstro ("Monstro #id" sem o código).
+    pub quem: String,
+    /// Classe de quem é jogador; vazio em monstro.
+    pub classe: &'static str,
+    /// Retrato do monstro, do questlog.
+    pub retrato: Option<PathBuf>,
+    pub skill: u32,
+    pub nome_skill: String,
+    pub icone: Option<PathBuf>,
+    /// None no `Efeito`.
+    pub valor: Option<u64>,
+    pub tipo: TipoRecebido,
+    pub critico: bool,
+    pub aparo: bool,
+    /// O primeiro HP (0x8D00) que chegou depois do evento, até `HP_DEPOIS_ATE`.
+    pub hp_depois: Option<u64>,
+    pub golpe_final: bool,
+}
+
+/// A sua morte (0x8D04 com você como morto): quem matou, o golpe final casado no buffer e o que chegou
+/// nos últimos `janela_morte`. Só memória.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RelatorioMorte {
+    /// Sobe a cada morte sua: o overlay sabe se a do card é nova.
+    pub numero: u64,
+    pub hora: Hora,
+    pub morto: u32,
+    pub matador: u32,
+    pub matador_jogador: bool,
+    /// Monstro: o nome do questlog pelo código; jogador: o do 0x8D04.
+    pub nome_matador: String,
+    pub classe_matador: &'static str,
+    /// Código do NPC do matador (do 0x8D04 ou do spawn); 0 em jogador ou sem código.
+    pub npc_matador: u32,
+    pub retrato_matador: Option<PathBuf>,
+    /// A do 0x8D04.
+    pub skill_final: u32,
+    pub nome_skill_final: String,
+    /// None quando o golpe não casou no buffer; sempre em PvP (golpe de jogador em jogador fica sem valor).
+    pub dano_final: Option<u64>,
+    pub hp_antes_final: Option<u64>,
+    pub linhas: Vec<LinhaMorte>,
+    /// Soma e maior dos golpes (diretos e periódicos) das linhas.
+    pub recebido: u64,
+    pub maior: u64,
+    /// Quantos autores diferentes de golpe.
+    pub monstros: usize,
+    pub curado: u64,
+}
+
 /// Quantas lutas o histórico guarda (as mais novas), como o medidor do TK.
 pub const LUTAS_GUARDADAS: usize = 20;
+
+/// O buffer do relatório de morte guarda isso (o máximo da configuração) e até `RECEBIDOS_MAX` eventos
+/// por jogador. No world boss de 2026-10-03, no máximo 17 golpes num mesmo jogador em 10 s.
+const JANELA_MORTE_MAX: i64 = 30 * TICKS_POR_SEGUNDO;
+const RECEBIDOS_MAX: usize = 128;
+
+/// HP que chega depois disso já não é "o HP depois" do evento.
+const HP_DEPOIS_ATE: i64 = TICKS_POR_SEGUNDO;
 
 /// Mob que atacou alguém nesse intervalo conta como "segurando aggro" nesse jogador.
 const JANELA_AGGRO: i64 = 8 * TICKS_POR_SEGUNDO;
@@ -266,6 +347,21 @@ struct Acumulado {
     ativo: Ativo,
 }
 
+/// Um evento num jogador conhecido, guardado para o relatório de morte.
+#[derive(Clone, Copy)]
+struct Recebido {
+    /// Ordem de chegada, junto com a do HP: o 0x8D00 chega na mesma hora do golpe.
+    seq: u64,
+    hora: Hora,
+    /// Já passado pelo `resolver_autor`.
+    autor: u32,
+    skill: u32,
+    valor: u64,
+    tipo: TipoRecebido,
+    critico: bool,
+    aparo: bool,
+}
+
 /// Buff ainda não removido, por (alvo, instância). `ate` = última renovação + duração.
 struct BuffAberto {
     codigo: u32,
@@ -288,6 +384,9 @@ pub struct Medidor {
     /// A luta termina quando todos os mobs dela saem de combate. Desligado no replay, que soma a
     /// captura inteira numa luta só.
     pub fim_pelo_combate: bool,
+    /// Relatório da sua morte, e quanto tempo antes dela ele mostra (em ticks, até `JANELA_MORTE_MAX`).
+    pub relatorio_morte: bool,
+    pub janela_morte: i64,
     /// Energia Odyle (básica, carregada) do último ticket dela (0x610B no login, 0x610C). Não zera
     /// na troca de conexão: é do personagem, e o login manda de novo.
     pub odyle: Option<(u64, Option<u64>)>,
@@ -356,6 +455,18 @@ pub struct Medidor {
     /// skills de mob veio de dois mobs. Vale entre conexões: o código não muda.
     npc_da_skill: HashMap<u32, HashMap<u32, u32>>,
 
+    // Relatório de morte: o que cada jogador conhecido recebeu e o HP dele (0x8D00) nos últimos
+    // `JANELA_MORTE_MAX`, por id até a conexão trocar. `sequencia` põe os dois na ordem de chegada, e
+    // `faxina_em` é a última vez que os jogadores sem evento na janela saíram.
+    recebidos: HashMap<u32, VecDeque<Recebido>>,
+    hp_jogador: HashMap<u32, VecDeque<(u64, Hora, u64)>>,
+    sequencia: u64,
+    faxina_em: Hora,
+    /// As suas mortes na luta atual; a última, que sobrevive ao fim da luta e à troca de conexão.
+    mortes_da_luta: Vec<Arc<RelatorioMorte>>,
+    ultima_morte: Option<Arc<RelatorioMorte>>,
+    mortes_vistas: u64,
+
     // Estado que sobrevive entre lutas.
     nomes: IndexMap<u32, String>,
     niveis: HashMap<u32, i32>,
@@ -384,6 +495,8 @@ impl Default for Medidor {
         Self {
             inatividade: 15 * TICKS_POR_SEGUNDO,
             fim_pelo_combate: true,
+            relatorio_morte: true,
+            janela_morte: 10 * TICKS_POR_SEGUNDO,
             odyle: None,
             tickets: BTreeMap::new(),
             chefes_de_campo: None,
@@ -416,6 +529,13 @@ impl Default for Medidor {
             groggy_de: HashMap::new(),
             chefe_pelo_servidor: HashSet::new(),
             npc_da_skill: HashMap::new(),
+            recebidos: HashMap::new(),
+            hp_jogador: HashMap::new(),
+            sequencia: 0,
+            faxina_em: 0,
+            mortes_da_luta: Vec::new(),
+            ultima_morte: None,
+            mortes_vistas: 0,
             nomes: IndexMap::new(),
             niveis: HashMap::new(),
             poderes: HashMap::new(),
@@ -583,9 +703,16 @@ impl Medidor {
         self.chefes_de_campo = Some((lista, hora));
     }
 
-    /// 0x8D00. O de jogador conhecido fica de fora: o HP dele não entra no alvo.
+    /// 0x8D00. O de jogador conhecido não entra no alvo: fica para o relatório de morte.
     pub fn registrar_hp(&mut self, entidade: u32, hp: u64, hora: Hora) {
         if self.jogadores_conhecidos.contains(&entidade) {
+            if !self.eh_invocacao(entidade) {
+                self.sequencia += 1;
+                let leituras = self.hp_jogador.entry(entidade).or_default();
+                leituras.push_back((self.sequencia, hora, hp));
+                aparar(leituras, hora, |&(_, h, _)| h);
+                self.faxinar(hora);
+            }
             return;
         }
         self.hp_de.insert(entidade, hp);
@@ -675,6 +802,9 @@ impl Medidor {
         let autor_jogador =
             self.jogadores_conhecidos.contains(&e.autor_id) || (skill_diz_o_autor && dados_jogo::eh_skill_de_jogador(e.skill));
         let alvo_jogador = self.jogadores_conhecidos.contains(&e.alvo_id);
+        if alvo_jogador && !self.eh_invocacao(e.alvo_id) {
+            self.guardar_recebido(&e, autor_jogador, hora);
+        }
 
         if autor_jogador && (alvo_jogador || dados_jogo::eh_cura(e.skill)) {
             // Jogador → jogador (inclui si mesmo): só vira cura se a skill for de cura,
@@ -717,6 +847,56 @@ impl Medidor {
         // Mob → mob e golpe em invocação ficam de fora.
     }
 
+    /// Buffer do relatório de morte, antes de a luta decidir se o evento entra nela: com a luta fechada,
+    /// a morte ainda precisa dele.
+    fn guardar_recebido(&mut self, e: &EventoDano, autor_jogador: bool, hora: Hora) {
+        let tipo = match (autor_jogador, e.periodico) {
+            (true, _) if dados_jogo::eh_cura(e.skill) => TipoRecebido::Cura,
+            (true, _) => TipoRecebido::Efeito,
+            (false, true) => TipoRecebido::Periodico,
+            (false, false) => TipoRecebido::Golpe,
+        };
+        self.sequencia += 1;
+        let r = Recebido {
+            seq: self.sequencia,
+            hora,
+            autor: self.resolver_autor(e.autor_id),
+            skill: e.skill,
+            valor: e.dano,
+            tipo,
+            critico: e.critico,
+            aparo: e.aparo,
+        };
+        let fila = self.recebidos.entry(e.alvo_id).or_default();
+        fila.push_back(r);
+        aparar(fila, hora, |r| r.hora);
+        self.faxinar(hora);
+    }
+
+    /// A cada `JANELA_MORTE_MAX`, esquece quem não recebeu nada na janela: no world boss, 115 jogadores
+    /// apanharam, e quem sai da visão não manda mais nada.
+    fn faxinar(&mut self, hora: Hora) {
+        if hora - self.faxina_em <= JANELA_MORTE_MAX {
+            return;
+        }
+        self.faxina_em = hora;
+        self.recebidos.retain(|_, fila| fila.back().is_some_and(|r| hora - r.hora <= JANELA_MORTE_MAX));
+        self.hp_jogador.retain(|_, fila| fila.back().is_some_and(|&(_, h, _)| hora - h <= JANELA_MORTE_MAX));
+    }
+
+    /// Código do NPC do matador no 0x8D04: dá nome e retrato a quem matou mesmo sem o spawn (o do spawn,
+    /// se veio, fica).
+    pub fn registrar_npc_do_matador(&mut self, matador: u32, codigo: u32) {
+        if matador != 0 && codigo != 0 {
+            self.npc_de.entry(matador).or_insert(codigo);
+        }
+    }
+
+    /// A sua última morte nesta execução. A troca de conexão não apaga: os nomes já estão nela.
+    pub fn ultima_morte(&self) -> Option<Arc<RelatorioMorte>> {
+        self.ultima_morte.clone()
+    }
+
     /// 0x8D04: quem morreu e quem matou. Se a skill que matou é de classe e o abate traz servidor, o
     /// matador é jogador e o nome dele vale (mob que mata também pode trazer nome; invocação traz o do
     /// dono). O servidor barra mob que mate com efeito de jogador, como no DoT: nas capturas, jogador
@@ -747,10 +927,121 @@ impl Medidor {
             }
             return;
         }
-        if self.eh_invocacao(entidade) || !self.iniciar_ou_continuar_luta(hora, false) {
+        if self.eh_invocacao(entidade) {
+            return;
+        }
+        // Montado antes de a luta decidir: a morte que chega com a luta fechada também tem relatório.
+        let mut relatorio = None;
+        if self.relatorio_morte && Some(entidade) == self.meu_id {
+            self.mortes_vistas += 1;
+            let r = Arc::new(self.relatorio_de_morte(entidade, matador, skill, matador_jogador, nome_matador, hora));
+            self.ultima_morte = Some(Arc::clone(&r));
+            relatorio = Some(r);
+        }
+        if !self.iniciar_ou_continuar_luta(hora, false) {
             return;
         }
         self.recebido.entry(entidade).or_default().mortes += 1;
+        self.mortes_da_luta.extend(relatorio);
+    }
+
+    /// Congela o buffer na hora do 0x8D04: o que chegar depois fica de fora. Golpe final: o último golpe
+    /// do matador com a mesma skill (nos 2 s antes da morte em 88 de 93 abates das capturas); sem ele e
+    /// com matador monstro, o último golpe; em PvP, só o matador e a skill do pacote.
+    fn relatorio_de_morte(
+        &self,
+        morto: u32,
+        matador: u32,
+        skill: u32,
+        matador_jogador: bool,
+        nome_do_pacote: &str,
+        hora: Hora,
+    ) -> RelatorioMorte {
+        let janela = self.janela_morte.clamp(0, JANELA_MORTE_MAX);
+        let eventos: Vec<&Recebido> =
+            self.recebidos.get(&morto).into_iter().flatten().filter(|r| hora - r.hora <= janela).collect();
+        let vazio = VecDeque::new();
+        let leituras = self.hp_jogador.get(&morto).unwrap_or(&vazio);
+        let com_valor = |r: &Recebido| matches!(r.tipo, TipoRecebido::Golpe | TipoRecebido::Periodico);
+
+        let do_matador = self.resolver_autor(matador);
+        let base = dados_jogo::skill_base(skill);
+        let final_em = eventos
+            .iter()
+            .rposition(|r| com_valor(r) && r.autor == do_matador && dados_jogo::skill_base(r.skill) == base)
+            .or_else(|| eventos.iter().rposition(|r| com_valor(r)).filter(|_| !matador_jogador));
+        let golpe = final_em.map(|i| eventos[i]);
+        let hp_antes_final = golpe.and_then(|g| leituras.iter().rev().find(|l| l.0 < g.seq)).map(|l| l.2);
+
+        let linhas = eventos
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let jogador = matches!(r.tipo, TipoRecebido::Cura | TipoRecebido::Efeito);
+                LinhaMorte {
+                    antes_s: segundos(r.hora - hora),
+                    autor: r.autor,
+                    quem: self.quem(r.autor),
+                    classe: if jogador { self.classe(r.autor) } else { "" },
+                    retrato: if jogador { None } else { self.retrato(r.autor) },
+                    skill: r.skill,
+                    nome_skill: nome_na_morte(r.skill, r.tipo),
+                    icone: if dados_jogo::eh_skill_de_jogador(r.skill) { dados_jogo::icone_skill(r.skill) } else { None },
+                    valor: (r.tipo != TipoRecebido::Efeito).then_some(r.valor),
+                    tipo: r.tipo,
+                    critico: r.critico,
+                    aparo: r.aparo,
+                    hp_depois: leituras.iter().find(|l| l.0 > r.seq && l.1 - r.hora <= HP_DEPOIS_ATE).map(|l| l.2),
+                    golpe_final: Some(i) == final_em,
+                }
+            })
+            .collect();
+
+        let golpes = || eventos.iter().filter(|r| com_valor(r));
+        let classe_matador = match self.classe(do_matador) {
+            "" => dados_jogo::classe(skill),
+            classe => classe,
+        };
+        RelatorioMorte {
+            numero: self.mortes_vistas,
+            hora,
+            morto,
+            matador,
+            matador_jogador,
+            nome_matador: match (matador, matador_jogador) {
+                (0, _) => "desconhecido".into(),
+                (_, true) if !nome_do_pacote.is_empty() => nome_do_pacote.into(),
+                _ => self.quem(do_matador),
+            },
+            classe_matador: if matador_jogador { classe_matador } else { "" },
+            npc_matador: if matador_jogador { 0 } else { self.npc_de.get(&matador).copied().unwrap_or(0) },
+            retrato_matador: if matador_jogador { None } else { self.retrato(matador) },
+            skill_final: skill,
+            nome_skill_final: nome_na_morte(skill, TipoRecebido::Golpe),
+            dano_final: golpe.map(|g| g.valor),
+            hp_antes_final,
+            linhas,
+            recebido: golpes().map(|r| r.valor).sum(),
+            maior: golpes().map(|r| r.valor).max().unwrap_or(0),
+            monstros: golpes().map(|r| r.autor).collect::<HashSet<_>>().len(),
+            curado: eventos.iter().filter(|r| r.tipo == TipoRecebido::Cura).map(|r| r.valor).sum(),
+        }
+    }
+
+    /// Nome de quem aparece no relatório de morte.
+    fn quem(&self, id: u32) -> String {
+        if Some(id) == self.meu_id {
+            "você".into()
+        } else if self.jogadores_conhecidos.contains(&id) {
+            self.nomes.get(&id).cloned().unwrap_or_else(|| format!("Jogador #{id}"))
+        } else {
+            self.npc(id).map_or_else(|| format!("Monstro #{id}"), |n| n.nome)
+        }
+    }
+
+    fn retrato(&self, mob: u32) -> Option<PathBuf> {
+        let npc = self.npc(mob)?;
+        dados_jogo::catalogo()?.caminho_icone(npc.retrato.as_deref())
     }
 
     /// 0x8D21 e morte de mob. Um mob da luta saindo de combate encerra a luta quando nenhum mob dela
@@ -916,6 +1207,7 @@ impl Medidor {
         self.dano_em.clear();
         self.primeiro_golpe_em.clear();
         self.meu_alvo = None;
+        self.mortes_da_luta.clear();
         self.em_luta = false;
     }
 
@@ -1036,6 +1328,8 @@ impl Medidor {
         self.prazo_de.clear();
         self.groggy_de.clear();
         self.chefe_pelo_servidor.clear();
+        self.recebidos.clear();
+        self.hp_jogador.clear();
         self.meu_id = None; // a memória, o seu nome e o histórico continuam: valem para a conexão nova
     }
 
@@ -1092,6 +1386,7 @@ impl Medidor {
             dano_recebido: self.montar_tabela(&self.recebido, &segurando, &buffs),
             cura: self.montar_tabela(&cura, &segurando, &buffs),
             voce_reconhecido: self.meu_id.is_some(),
+            mortes: self.mortes_da_luta.clone(),
         }
     }
 
@@ -1320,6 +1615,22 @@ fn somar<'a>(
     }
     s.maximo = s.maximo.max(valor);
     a
+}
+
+/// Tira do começo da fila o que passou de `JANELA_MORTE_MAX` e o que passa de `RECEBIDOS_MAX`.
+fn aparar<T>(fila: &mut VecDeque<T>, hora: Hora, hora_de: impl Fn(&T) -> Hora) {
+    while fila.len() > RECEBIDOS_MAX || fila.front().is_some_and(|x| hora - hora_de(x) > JANELA_MORTE_MAX) {
+        fila.pop_front();
+    }
+}
+
+/// Skill de jogador pelo catálogo; de monstro, o código (o nome do monstro já está na linha).
+fn nome_na_morte(skill: u32, tipo: TipoRecebido) -> String {
+    match (dados_jogo::eh_skill_de_jogador(skill), tipo) {
+        (true, _) => dados_jogo::nome_skill(skill),
+        (false, TipoRecebido::Cura | TipoRecebido::Efeito) => format!("Efeito {skill}"),
+        (false, _) => format!("Golpe {skill}"),
+    }
 }
 
 /// Faixa de id das skills de classe de jogador.
