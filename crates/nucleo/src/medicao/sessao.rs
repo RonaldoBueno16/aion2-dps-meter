@@ -252,8 +252,8 @@ fn ao_pacote(medidor: &mut Medidor, pacote: &[u8], hora: Hora) {
             }
         }
         opcodes::TICKETS => {
-            for ticket in combate::tickets(pacote).unwrap_or_default() {
-                medidor.registrar_ticket(ticket);
+            if let Some(lista) = combate::tickets(pacote) {
+                medidor.registrar_tickets(lista, hora);
             }
         }
         opcodes::CHEFES_DE_CAMPO => {
@@ -263,7 +263,7 @@ fn ao_pacote(medidor: &mut Medidor, pacote: &[u8], hora: Hora) {
         }
         opcodes::TICKET_MUDOU => {
             if let Some(ticket) = combate::ticket_mudou(pacote) {
-                medidor.registrar_ticket(ticket);
+                medidor.registrar_ticket(ticket, hora);
             }
         }
         opcodes::BUFF_REMOVIDO => {

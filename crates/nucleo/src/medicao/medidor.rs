@@ -6,7 +6,7 @@
 //! combate (0x8D21 ou morte); o próximo golpe zera tudo e a luta que acabou vai para o histórico.
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -102,6 +102,14 @@ pub struct PerfilJogador {
     pub nivel: i32,
     #[serde(rename = "Poder", default)]
     pub poder: i32,
+}
+
+/// Último valor de um ticket de conteúdo (entradas de dungeon, Energia Odyle...) e quando chegou.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TicketVisto {
+    pub valor: Option<u64>,
+    pub extra: Option<u64>,
+    pub chegou: Hora,
 }
 
 /// O mob em destaque na luta: na guerra com chefe, o chefe; sem chefe, o último mob em que você
@@ -268,6 +276,9 @@ pub struct Medidor {
     /// Energia Odyle (básica, carregada) do último ticket dela (0x610B no login, 0x610C). Não zera
     /// na troca de conexão: é do personagem, e o login manda de novo.
     pub odyle: Option<(u64, Option<u64>)>,
+    /// Último valor de cada ticket e quando chegou. Mesma regra da Odyle: não zera na troca de
+    /// conexão nem no Zerar, e o login manda a lista inteira de novo.
+    pub tickets: BTreeMap<u32, TicketVisto>,
     /// Última lista de chefes de campo da região (0x9101) e quando chegou. Não zera na troca de
     /// conexão nem no Zerar: é do mundo, e o servidor repete a cada poucos segundos.
     pub chefes_de_campo: Option<(ChefesDeCampo, Hora)>,
@@ -354,6 +365,7 @@ impl Default for Medidor {
             inatividade: 15 * TICKS_POR_SEGUNDO,
             fim_pelo_combate: true,
             odyle: None,
+            tickets: BTreeMap::new(),
             chefes_de_campo: None,
             chefes_por_regiao: HashMap::new(),
             dano: IndexMap::new(),
@@ -519,8 +531,17 @@ impl Medidor {
         self.mortos.remove(&entidade);
     }
 
-    /// Ticket de conteúdo do login (0x610B) ou da mudança (0x610C); por enquanto só a Odyle interessa.
-    pub fn registrar_ticket(&mut self, ticket: Ticket) {
+    /// Lista do login (0x610B): troca a lista inteira, para não misturar personagens.
+    pub fn registrar_tickets(&mut self, lista: Vec<Ticket>, hora: Hora) {
+        self.tickets.clear();
+        for ticket in lista {
+            self.registrar_ticket(ticket, hora);
+        }
+    }
+
+    /// Mudança de um ticket (0x610C), ou uma entrada da lista do login.
+    pub fn registrar_ticket(&mut self, ticket: Ticket, hora: Hora) {
+        self.tickets.insert(ticket.id, TicketVisto { valor: ticket.valor, extra: ticket.extra, chegou: hora });
         if let (TICKET_ODYLE, Some(valor)) = (ticket.id, ticket.valor) {
             self.odyle = Some((valor, ticket.extra));
         }
