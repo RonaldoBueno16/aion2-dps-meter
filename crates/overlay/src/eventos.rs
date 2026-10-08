@@ -163,6 +163,12 @@ pub fn inicios(evento: &Evento, hora: Hora) -> (i64, i64) {
     (agora - desde, agora + ate)
 }
 
+/// O último reset diário (ou o semanal), em segundos unix; no instante do reset, agora.
+pub fn ultimo_reset(semanal: bool, hora: Hora) -> i64 {
+    let id = if semanal { "reset_semanal" } else { "reset_diario" };
+    EVENTOS.iter().find(|e| e.id == id).map_or(hora.div_euclid(TICKS_POR_SEGUNDO), |e| inicios(e, hora).0)
+}
+
 /// Segundos desde o último início e até o próximo, com a hora local em segundos.
 fn desde_e_ate(evento: &Evento, local: i64) -> (i64, i64) {
     let desde = |inicio: i64, periodo: i64| (local - inicio).rem_euclid(periodo);
