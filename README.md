@@ -256,15 +256,6 @@ cargo build --release -p overlay
   números e datas, nenhum nome. Desligar (Configurações › Recordes) para de ler e de gravar sem
   apagar o arquivo; arquivo que não dá para ler vira `recordes.json.corrompido`, e o replay nunca
   grava.
-- **Diário e semanal** (desde a 0.14.0), na linha "☑ Diário e semanal" no fim dos eventos
-  expandidos: a contagem até o reset diário e o semanal, a Energia Odyle (apagada quando chegou
-  antes do reset das 04h, porque pode ter mudado sem o servidor avisar) e o checklist dos 7 eventos
-  da tabela, marcado por clique. O item desmarca sozinho no reset, todo dia às 04h ou, no semanal,
-  na quarta às 04h (o Cerco de Artefato, os Chefes do Cerco e o Nahma começam semanais; o clique no
-  "Diário"/"Semanal" troca). No
-  `config.json` vão só o id do evento, o período e a hora da marcação. As entradas de cada dungeon
-  (o `0x610B` traz o número, PROTOCOLO.md §7d) entram quando os nomes forem conferidos com a tela
-  do jogo.
 - ⚙ abre as configurações, que valem na hora e ficam em
   `%LOCALAPPDATA%\Aion2Meter\config.json`. Desde a 0.14.0 é um índice em três grupos, com o
   estado de cada página numa linha ao lado; o clique abre a página, e "‹ Configurações" volta:
@@ -409,7 +400,7 @@ na memória e somem ao fechar o Axon. O que o Axon grava na pasta, e nada mais:
 
 | Arquivo | O que tem |
 |---|---|
-| `config.json` | As configurações; os ids dos chefes com 🔔 e a antecedência dos eventos; a lista de desejos (código do item, prioridade e alerta); o checklist (id do evento, período e hora da marcação) |
+| `config.json` | As configurações; os ids dos chefes com 🔔 e a antecedência dos eventos; a lista de desejos (código do item, prioridade e alerta) |
 | `recordes.json` | Os recordes de chefe: código do chefe, a sua classe, tempos, DPS, número de jogadores e datas, sem nome (`.tmp` sobra se o PC desligou no meio da gravação; `.corrompido` guarda o que não deu para ler) |
 | `jogadores.json` | O último level e Power de cada nome visto, inclusive o seu |
 | `skills-pt.json`, `npcs-pt.json`, `icones\` | Nomes de skills e de mobs do questlog e ícones da CDN da NCSoft |
@@ -431,7 +422,7 @@ código foi escrito do zero.
 |---|---|
 | `crates/nucleo` | Protocolo (varint, LZ4, framing, parsers), captura (raw socket, pcapng, remontagem TCP), medição (placar, catálogo de skills) e formatação pt-BR |
 | `crates/nucleo/tests` | LZ4 contra o `lz4_flex`, framing, remontagem TCP, parsers com bytes reais, placar e troca de servidor (`cargo test`). O teste de rede do catálogo é opcional: `cargo test -p nucleo --test catalogo -- --ignored` |
-| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config [página]] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y] [--limite N] [--nova-versao] [--pedir-firewall] [--lutas] [--chefes] [--drops N] [--ficha N] [--desejos] [--diario] [--voce ID] [--testar-alerta] [--ate S]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada; `--config alertas` abre direto numa página; `--lutas` separa as lutas como ao vivo e abre a tela Lutas; `--chefes` abre a tela Bosses; `--drops 2400424` abre o painel de drops do NPC dado e `--ficha 210540076` a ficha do item dado; `--desejos` e `--diario` abrem essas telas; `--voce 16201` trata o jogador dado como você, para ver o relatório de morte de outro; `--ate 90` lê só os 90 primeiros segundos da captura, para ver a janela no meio de uma luta) |
+| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config [página]] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y] [--limite N] [--nova-versao] [--pedir-firewall] [--lutas] [--chefes] [--drops N] [--ficha N] [--desejos] [--voce ID] [--testar-alerta] [--ate S]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada; `--config alertas` abre direto numa página; `--lutas` separa as lutas como ao vivo e abre a tela Lutas; `--chefes` abre a tela Bosses; `--drops 2400424` abre o painel de drops do NPC dado e `--ficha 210540076` a ficha do item dado; `--desejos` abre a lista de desejos; `--voce 16201` trata o jogador dado como você, para ver o relatório de morte de outro; `--ate 90` lê só os 90 primeiros segundos da captura, para ver a janela no meio de uma luta) |
 | `crates/overlay/assets` | `logo-axon.jpg` (a logo original) e `axon.ico`, o hexágono recortado dela com fundo transparente, de 16 a 256 px |
 | `crates/replay` | Replay de `.pcapng` com diagnóstico e modo `ao-vivo` no console; `--lutas` lista as lutas como o overlay ao vivo as separa |
 | `dados/skills.json` | Opcional, fora do repositório e das releases: nomes em inglês do RATmeter (GPL-3.0, ver PROTOCOLO.md §9), só reserva quando o questlog não tem a skill |
@@ -518,9 +509,6 @@ testes → release) fica para quando o Actions voltar; aí a tag sozinha publica
 - **Recordes**: as regras do kill saíram das capturas de 3 chefes, e nenhum recorde foi gravado
   ainda com o jogo aberto. O world boss é reconhecido pelos 30 jogadores: com menos, ele guarda o
   tempo também.
-- **Entradas de dungeon**: o `0x610B` traz um número por dungeon e dificuldade, mas a ligação de
-  cada id com a dungeon é hipótese até um print da tela de entradas do jogo. Também não se sabe se
-  o servidor manda `0x610C` no reset das 04h.
 
 ## Conferido
 

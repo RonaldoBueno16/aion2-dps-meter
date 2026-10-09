@@ -44,34 +44,6 @@ pub struct Desejo {
     pub alertar: bool,
 }
 
-/// Itens no checklist (hoje são os 7 eventos da tabela).
-pub const CHECKLIST_MAX: usize = 50;
-
-/// Um item do checklist: um evento da tabela (o id de `eventos::EVENTOS`), quando ele zera e a hora
-/// da marcação. Feito = marcado depois do último reset do período; nada apaga a hora antiga.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct ItemChecklist {
-    pub nome: String,
-    /// "diario" (todo dia às 04h) ou "semanal" (quarta às 04h), no horário de Brasília.
-    pub periodo: String,
-    /// Unix em segundos da última marcação; None, desmarcado.
-    pub feito_em: Option<i64>,
-}
-
-/// O checklist item a item, como a lista de desejos: o torto sai sozinho.
-fn ler_checklist<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<ItemChecklist>, D::Error> {
-    let lido = serde_json::Value::deserialize(d)?;
-    let itens = lido.as_array().into_iter().flatten().filter_map(|v| {
-        let periodo = if v.get("periodo").and_then(serde_json::Value::as_str) == Some("semanal") { "semanal" } else { "diario" };
-        Some(ItemChecklist {
-            nome: v.get("nome")?.as_str().filter(|n| !n.is_empty())?.to_string(),
-            periodo: periodo.into(),
-            feito_em: v.get("feito_em").and_then(serde_json::Value::as_i64),
-        })
-    });
-    Ok(itens.collect())
-}
-
 /// A lista de desejos item a item: um item torto (código que não é número, prioridade 300) sai
 /// sozinho ou volta à faixa, sem derrubar a config inteira.
 fn ler_desejos<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Desejo>, D::Error> {
@@ -133,9 +105,6 @@ pub struct Config {
     pub desejos_chance_minima: f32,
     /// Filtro da tela Bosses: só os chefes com desejo.
     pub desejos_so_com_desejo: bool,
-    /// Fora do arquivo enquanto ninguém marcar nada.
-    #[serde(deserialize_with = "ler_checklist", skip_serializing_if = "Vec::is_empty")]
-    pub checklist: Vec<ItemChecklist>,
 }
 
 /// Alertas de evento e de chefe de campo marcado (antes e na hora).
@@ -240,7 +209,6 @@ impl Default for Config {
             desejos_destacar: true,
             desejos_chance_minima: 0.5,
             desejos_so_com_desejo: false,
-            checklist: Vec::new(),
         }
     }
 }
@@ -280,9 +248,6 @@ impl Config {
         }
         self.desejos_chance_minima =
             if self.desejos_chance_minima.is_finite() { self.desejos_chance_minima.clamp(0.0, 100.0) } else { 0.5 };
-        let mut vistos = std::collections::HashSet::new();
-        self.checklist.retain(|i| vistos.insert(i.nome.clone()));
-        self.checklist.truncate(CHECKLIST_MAX);
         self
     }
 
@@ -308,9 +273,10 @@ mod testes {
 
     #[test]
     fn arquivo_antigo_ou_torto_fica_com_padrao_e_dentro_das_faixas() {
-        // Com campos da 0.7 (colunas, classe), que a 0.8.0 ignora.
+        // Com campos da 0.7 (colunas, classe), que a 0.8.0 ignora, e o checklist do Diário que saiu da 0.14.0.
         let parcial: Config = serde_json::from_str(
-            r#"{"colunas":[true,false,true,true,true],"classe":false,"so_meu_dano":true,"inatividade":3,"zoom":7.0,"transparencia":250}"#,
+            r#"{"colunas":[true,false,true,true,true],"classe":false,"so_meu_dano":true,"inatividade":3,"zoom":7.0,"transparencia":250,
+                "checklist":[{"nome":"nahma","periodo":"semanal","feito_em":1791273600}]}"#,
         )
         .unwrap();
         let c = parcial.dentro_das_faixas();
@@ -391,23 +357,5 @@ mod testes {
         assert_eq!(c.desejos.len(), DESEJOS_MAX);
         assert!(c.desejos.iter().all(|d| d.prioridade == 1));
         assert_eq!(c.desejos_chance_minima, 0.5);
-    }
-
-    #[test]
-    fn checklist_so_vai_ao_arquivo_quando_usado_e_o_torto_sai_sozinho() {
-        let c = Config::default();
-        assert!(!serde_json::to_string(&c).unwrap().contains("checklist"));
-        let lida: Config = serde_json::from_str(
-            r#"{"checklist":[{"nome":"nahma","periodo":"semanal","feito_em":1791273600},{"nome":"nahma"},
-                {"nome":"fenda","periodo":"mensal"},{"periodo":"diario"},{"nome":""}]}"#,
-        )
-        .unwrap();
-        let c = lida.dentro_das_faixas();
-        let esperado = [
-            ItemChecklist { nome: "nahma".into(), periodo: "semanal".into(), feito_em: Some(1791273600) },
-            ItemChecklist { nome: "fenda".into(), periodo: "diario".into(), feito_em: None },
-        ];
-        assert_eq!(c.checklist, esperado);
-        assert!(serde_json::to_string(&c).unwrap().contains("\"feito_em\":1791273600"));
     }
 }

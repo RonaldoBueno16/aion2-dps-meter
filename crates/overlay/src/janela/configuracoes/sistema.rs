@@ -180,8 +180,8 @@ impl Overlay {
                     if self.estado_config.esperando("config") {
                         dica(
                             ui,
-                            "Volta tudo ao padrão, inclusive os alertas, os chefes marcados, a lista de desejos e o \
-                             checklist. Atalhos trocados voltam a Ctrl+H e Ctrl+T na próxima abertura.",
+                            "Volta tudo ao padrão, inclusive os alertas, os chefes marcados e a lista de desejos. \
+                             Atalhos trocados voltam a Ctrl+H e Ctrl+T na próxima abertura.",
                         );
                     }
                 }

@@ -8,7 +8,6 @@
 mod chefes;
 mod configuracoes;
 mod desejos;
-mod diario;
 mod drops;
 mod faixa;
 mod item;
@@ -43,7 +42,7 @@ use nucleo::medicao::medidor::{
 };
 use nucleo::medicao::recordes::Resultado;
 use nucleo::medicao::sessao::Sessao;
-use nucleo::protocolo::combate::{ChefesDeCampo, TICKET_ODYLE};
+use nucleo::protocolo::combate::ChefesDeCampo;
 use nucleo::{Hora, TICKS_POR_SEGUNDO};
 use recolher::{Dobra, Lado};
 use serde::{Deserialize, Serialize};
@@ -97,8 +96,6 @@ enum Tela {
     Morte(u64),
     Recordes,
     Desejos,
-    /// O checklist do dia e da semana, com os resets e a Odyle.
-    Diario,
 }
 
 /// Buffs mostrados embaixo das skills de um jogador expandido.
@@ -135,8 +132,6 @@ pub struct Overlay {
     ping: Option<i64>,
     /// Energia Odyle (básica, carregada), como o medidor recebeu.
     odyle: Option<(u64, Option<u64>)>,
-    /// Quando o valor da Odyle chegou: antes do último reset diário, ele pode estar velho.
-    odyle_chegou: Option<Hora>,
     /// PNG do cristal da Odyle, depois de baixado.
     icone_odyle: Option<PathBuf>,
     /// Quando a captura abriu e quando o jogo apareceu aberto: o rodapé só aponta um problema
@@ -293,7 +288,6 @@ impl Overlay {
             fluxo: None,
             ping: None,
             odyle: None,
-            odyle_chegou: None,
             icone_odyle: None,
             captura_desde: Instant::now(),
             jogo_desde: None,
@@ -337,8 +331,6 @@ impl Overlay {
                 Tela::Chefes
             } else if tem("--desejos") {
                 Tela::Desejos
-            } else if tem("--diario") {
-                Tela::Diario
             } else {
                 Tela::Medidor
             },
@@ -435,7 +427,6 @@ impl Overlay {
         self.fluxo = sessao.fluxo.clone();
         self.ping = sessao.ping();
         self.odyle = sessao.medidor.odyle;
-        self.odyle_chegou = sessao.medidor.tickets.get(&TICKET_ODYLE).map(|t| t.chegou);
         self.chefes = sessao.medidor.chefes_de_campo.clone();
         let memoria = matches!(self.tela, Tela::Configuracoes(_)).then(|| sessao.medidor.exportar_memoria());
         drop(sessao);
@@ -631,7 +622,6 @@ impl Overlay {
             Tela::Morte(_) => return self.tela_morte(ui),
             Tela::Recordes => return self.tela_recordes(ui),
             Tela::Desejos => return self.tela_desejos(ui),
-            Tela::Diario => return self.tela_diario(ui),
             Tela::Medidor => {}
         }
         let tabela = self.tabela();
@@ -1379,7 +1369,6 @@ impl Overlay {
         if let Some(vistos) = &vistos {
             self.titulo_dos_chefes(ui, vistos, inicio, fim);
         }
-        self.linha_do_diario(ui, inicio, fim);
         ui.add_space(2.0);
     }
 
