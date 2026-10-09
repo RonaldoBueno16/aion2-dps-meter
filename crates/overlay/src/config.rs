@@ -105,6 +105,8 @@ pub struct Config {
     pub desejos_chance_minima: f32,
     /// Filtro da tela Bosses: só os chefes com desejo.
     pub desejos_so_com_desejo: bool,
+    /// O overlay some 5 s depois de o jogo fechar e volta quando ele abre (o ícone da bandeja fica).
+    pub esconder_sem_jogo: bool,
 }
 
 /// Alertas de evento e de chefe de campo marcado (antes e na hora).
@@ -209,6 +211,7 @@ impl Default for Config {
             desejos_destacar: true,
             desejos_chance_minima: 0.5,
             desejos_so_com_desejo: false,
+            esconder_sem_jogo: true,
         }
     }
 }

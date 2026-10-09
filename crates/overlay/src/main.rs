@@ -9,13 +9,34 @@ mod bandeja;
 mod config;
 mod eventos;
 mod firewall;
+mod inicio;
+mod instancia;
 mod janela;
 mod jogo;
 mod recordes;
 
+use std::time::Duration;
+
 use eframe::egui;
 
 fn main() {
+    let argumentos: Vec<String> = std::env::args().collect();
+    let tem = |opcao: &str| argumentos.iter().any(|a| a == opcao);
+    // Um Axon só (o replay de debug não conta). Depois do Atualizar, o velho ainda está fechando.
+    let _unica = if cfg!(debug_assertions) && tem("--replay") {
+        None
+    } else {
+        let esperar = if tem(atualizacao::ATUALIZADO) { Duration::from_secs(10) } else { Duration::ZERO };
+        match instancia::garantir(esperar) {
+            Some(unica) => Some(unica),
+            None => {
+                instancia::pedir_para_aparecer();
+                return;
+            }
+        }
+    };
+    // Aberto pelo Windows com o jogo fechado: já nasce escondido, sem piscar na tela.
+    let escondido = tem(inicio::SEGUNDO_PLANO) && !jogo::aberto();
     // Só no debug: --posicao x y abre a janela em outro lugar (para testar o recolher nas duas bordas).
     let posicao = if cfg!(debug_assertions) {
         let numeros: Vec<f32> = std::env::args().skip_while(|a| a != "--posicao").skip(1).take(2).filter_map(|n| n.parse().ok()).collect();
@@ -33,6 +54,7 @@ fn main() {
             .with_always_on_top()
             .with_resizable(false)
             .with_active(false)
+            .with_visible(!escondido)
             // Fora da barra de tarefas: o Axon fica na bandeja, ao lado do relógio.
             .with_taskbar(false)
             // Sem o logo do egui: a janela usa o ícone do exe.

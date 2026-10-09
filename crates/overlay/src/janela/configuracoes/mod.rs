@@ -4,6 +4,7 @@
 
 mod alertas;
 mod desejos;
+mod inicializacao;
 mod medidor;
 mod recordes;
 mod sistema;
@@ -26,6 +27,7 @@ pub(super) enum Pagina {
     Alertas,
     Desejos,
     Recordes,
+    Inicializacao,
     Atalhos,
     Dados,
 }
@@ -34,7 +36,7 @@ pub(super) enum Pagina {
 const GRUPOS: &[(&str, &[Pagina])] = &[
     ("Medidor", &[Pagina::Jogadores, Pagina::Luta, Pagina::Visual]),
     ("Jogo", &[Pagina::Alertas, Pagina::Desejos, Pagina::Recordes]),
-    ("Sistema", &[Pagina::Atalhos, Pagina::Dados]),
+    ("Sistema", &[Pagina::Inicializacao, Pagina::Atalhos, Pagina::Dados]),
 ];
 
 /// Quanto tempo o "Apagar?" espera o segundo clique.
@@ -50,6 +52,7 @@ impl Pagina {
             Pagina::Alertas => "Alertas",
             Pagina::Desejos => "Lista de desejos",
             Pagina::Recordes => "Recordes",
+            Pagina::Inicializacao => "Inicialização",
             Pagina::Atalhos => "Atalhos",
             Pagina::Dados => "Dados no PC",
         }
@@ -64,6 +67,7 @@ impl Pagina {
             Some("alertas") => Pagina::Alertas,
             Some("desejos") => Pagina::Desejos,
             Some("recordes") => Pagina::Recordes,
+            Some("inicializacao") => Pagina::Inicializacao,
             Some("atalhos") => Pagina::Atalhos,
             Some("dados") => Pagina::Dados,
             _ => Pagina::Indice,
@@ -78,6 +82,8 @@ pub(super) struct EstadoConfig {
     arquivos: Vec<sistema::ArquivoDoPc>,
     /// Ação que espera o segundo clique ("Apagar?") e desde quando.
     confirmando: Option<(&'static str, Instant)>,
+    /// A tarefa do início com o Windows, consultada ao abrir as configurações.
+    tarefa: inicializacao::Tarefa,
 }
 
 impl EstadoConfig {
@@ -100,6 +106,7 @@ impl Overlay {
         self.tela = Tela::Configuracoes(pagina);
         self.estado_config.arquivos = sistema::medir();
         self.estado_config.confirmando = None;
+        inicializacao::consultar(&self.estado_config.tarefa, None);
         self.ler_placar();
     }
 
@@ -122,6 +129,7 @@ impl Overlay {
                 Pagina::Alertas => self.pagina_alertas(ui),
                 Pagina::Desejos => self.pagina_desejos(ui),
                 Pagina::Recordes => self.pagina_recordes(ui),
+                Pagina::Inicializacao => self.pagina_inicializacao(ui),
                 Pagina::Atalhos => self.pagina_atalhos(ui),
                 Pagina::Dados => self.pagina_dados(ui),
             }
@@ -175,6 +183,7 @@ impl Overlay {
             Pagina::Alertas => alertas::resumo_alertas(&self.config),
             Pagina::Desejos => desejos::resumo_desejos(&self.config),
             Pagina::Recordes => recordes::resumo_recordes(&self.config, self.recordes.as_ref()),
+            Pagina::Inicializacao => inicializacao::resumo_inicializacao(&self.estado_config.tarefa, &self.config),
             Pagina::Atalhos => sistema::resumo_atalhos(),
             Pagina::Dados => sistema::resumo_dados(&self.estado_config.arquivos),
         }
@@ -319,6 +328,7 @@ mod testes {
             Pagina::Alertas,
             Pagina::Desejos,
             Pagina::Recordes,
+            Pagina::Inicializacao,
             Pagina::Atalhos,
             Pagina::Dados,
         ];

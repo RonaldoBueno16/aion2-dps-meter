@@ -29,8 +29,8 @@ pub fn liberada() -> bool {
 /// Saída do netsh em texto. No Windows 11 ela vem em UTF-8 quando vai para um pipe (conferido em
 /// 2026-10-03 com o console em 850 e em 65001). Se não for UTF-8 válido, lê na página OEM (850 no
 /// Windows em pt-BR): com o acento lido errado, um caminho como "Área de Trabalho" nunca bateria e
-/// o aviso voltaria em toda abertura.
-fn texto_do_netsh(bytes: &[u8], pagina_oem: u32) -> String {
+/// o aviso voltaria em toda abertura. O schtasks (`inicio`) responde do mesmo jeito.
+pub(crate) fn texto_do_netsh(bytes: &[u8], pagina_oem: u32) -> String {
     if let Ok(texto) = std::str::from_utf8(bytes) {
         return texto.to_string();
     }

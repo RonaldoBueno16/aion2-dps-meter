@@ -206,6 +206,12 @@ impl Overlay {
                  a pasta; ele baixa de novo o que faltar.",
             );
         }
+        ui.add_space(10.0);
+        dica(
+            ui,
+            "Fora da pasta: com \"Iniciar com o Windows\" ligado (Inicialização), a tarefa \"Axon\" no Agendador de \
+             Tarefas, com o caminho deste exe. Desligar a opção apaga a tarefa.",
+        );
         ui.add_space(8.0);
         if botao(ui, "Abrir a pasta", false).on_hover_text("Abre %LOCALAPPDATA%\\Aion2Meter no Explorer").clicked() {
             // O explorer não abre pasta inexistente; a do Axon some só se o usuário apagar.

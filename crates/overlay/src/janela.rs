@@ -360,8 +360,17 @@ impl Overlay {
             [&c.atalho_mostrar, &c.atalho_atravessar, &c.atalho_resumo, &c.atalho_compacta].map(|a| Atalho::ler(a));
         alertas::definir_regras(&overlay.config.alertas);
         overlay.desejos_para_o_alerta();
-        let vigia = Vigia { sessao: overlay.sessao.clone(), ctx: cc.egui_ctx.clone(), memoria: Default::default() };
-        overlay.bandeja = Bandeja::iniciar(overlay.janela, atalhos, vigia);
+        bandeja::definir_esconder_sem_jogo(overlay.config.esconder_sem_jogo);
+        let salvar: Box<dyn Fn() + Send> = if overlay.replay {
+            Box::new(|| {})
+        } else {
+            let sessao = overlay.sessao.clone();
+            Box::new(move || salvar_memoria(&sessao))
+        };
+        let vigia = Vigia { sessao: overlay.sessao.clone(), ctx: cc.egui_ctx.clone(), memoria: Default::default(), salvar };
+        // O aviso do firewall precisa do clique: nunca começa escondido.
+        let pelo_windows = std::env::args().any(|a| a == crate::inicio::SEGUNDO_PLANO) && !overlay.pedir_firewall;
+        overlay.bandeja = Bandeja::iniciar(overlay.janela, atalhos, vigia, pelo_windows);
         // Só no debug: um alerta de teste logo na abertura, inclusive no replay.
         if tem("--testar-alerta") {
             alertas::testar();
@@ -469,26 +478,15 @@ impl Overlay {
 
     fn salvar_memoria(&mut self) {
         self.salvo_em = Instant::now();
-        if self.replay {
-            return;
-        }
-        let (eu, perfis) = travar(&self.sessao).medidor.exportar_memoria();
-        if perfis.is_empty() {
-            return;
-        }
-        let caminho = arquivo_memoria();
-        if let Some(pasta) = caminho.parent() {
-            let _ = std::fs::create_dir_all(pasta);
-        }
-        // Sem disco agora: tenta de novo no próximo ciclo.
-        if let Ok(json) = serde_json::to_string(&MemoriaSalva { eu, perfis }) {
-            let _ = catalogo::escrever_trocando(&caminho, json.as_bytes());
+        if !self.replay {
+            salvar_memoria(&self.sessao);
         }
     }
 
     /// Config mudou: a inatividade vale na hora para o medidor; o zoom, no próximo quadro.
     fn aplicar_config(&mut self) {
         alertas::definir_regras(&self.config.alertas);
+        bandeja::definir_esconder_sem_jogo(self.config.esconder_sem_jogo);
         self.desejos_para_o_alerta();
         {
             let mut s = travar(&self.sessao);
@@ -2101,11 +2099,25 @@ fn procurando(entrada: u64, saida: u64, aberta: Duration, com_jogo: Option<Durat
 
 fn iniciar_captura(sessao: &Arc<Mutex<Sessao>>) -> (Option<CapturaSocketBruto>, Option<String>) {
     let alimentar = sessao.clone();
-    match CapturaSocketBruto::iniciar(Arc::new(move |seg, hora| travar(&alimentar).ao_segmento(&seg, hora))) {
+    let ao_segmento = Arc::new(move |seg, hora| travar(&alimentar).ao_segmento(&seg, hora));
+    match CapturaSocketBruto::iniciar_quando(ao_segmento, Arc::new(captura_ativa)) {
         Ok(captura) => (Some(captura), None),
         Err(erro) => (None, Some(format!("Captura parada: {erro}"))),
     }
 }
+
+/// A captura fica aberta com o jogo aberto e até 10 s depois de ele sumir. Sem o jogo, o raw socket
+/// só leria a rede do PC à toa, e com o início junto com o Windows o Axon roda o dia inteiro.
+fn captura_ativa() -> bool {
+    static VISTO: Mutex<Option<Instant>> = Mutex::new(None);
+    let mut visto = VISTO.lock().unwrap_or_else(PoisonError::into_inner);
+    if jogo::aberto() {
+        *visto = Some(Instant::now());
+    }
+    visto.is_some_and(|t| t.elapsed() < CAPTURA_SEM_O_JOGO)
+}
+
+const CAPTURA_SEM_O_JOGO: Duration = Duration::from_secs(10);
 
 /// Só no build de debug: `--replay captura.pcapng` enche a janela com uma captura, sem o jogo aberto.
 fn arquivo_replay() -> Option<PathBuf> {
@@ -2144,6 +2156,23 @@ fn travar(sessao: &Mutex<Sessao>) -> MutexGuard<'_, Sessao> {
 
 fn arquivo_memoria() -> PathBuf {
     catalogo::pasta_dados().join("jogadores.json")
+}
+
+/// A memória de jogadores para o jogadores.json. Também da thread da bandeja: com a janela
+/// escondida o egui não desenha, e no logoff o processo pode morrer sem o on_exit.
+fn salvar_memoria(sessao: &Mutex<Sessao>) {
+    let (eu, perfis) = travar(sessao).medidor.exportar_memoria();
+    if perfis.is_empty() {
+        return;
+    }
+    let caminho = arquivo_memoria();
+    if let Some(pasta) = caminho.parent() {
+        let _ = std::fs::create_dir_all(pasta);
+    }
+    // Sem disco agora: tenta de novo no próximo ciclo.
+    if let Ok(json) = serde_json::to_string(&MemoriaSalva { eu, perfis }) {
+        let _ = catalogo::escrever_trocando(&caminho, json.as_bytes());
+    }
 }
 
 fn carregar_memoria(medidor: &mut Medidor) {

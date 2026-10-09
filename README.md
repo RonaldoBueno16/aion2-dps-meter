@@ -33,11 +33,27 @@ cargo build --release -p overlay
 - O jogo precisa estar em "tela cheia em janela" (borderless), que é o padrão atual.
 - O Axon fica como ícone na área de notificação (a seta ao lado do relógio), fora da barra
   de tarefas. Desde a 0.12.0 o overlay fica visível com o jogo na frente, atrás de outra
-  janela, minimizado ou fechado; para tirá-lo da tela, use o ícone (ou o atalho, com o jogo
-  na frente). Clique
+  janela ou minimizado (com o jogo fechado, ver "Segundo plano" abaixo); para tirá-lo da
+  tela, use o ícone (ou o atalho, com o jogo na frente). Clique
   esquerdo no ícone liga ou desliga o overlay; o direito abre o menu (Mostrar/Esconder, "Clique
   atravessa o overlay" e "Fechar Axon"). Escondido, o medidor continua contando. O jogo é
   achado pela janela (classe `UnrealWindow`, título "AION2"), sem abrir handle no processo dele.
+- **Segundo plano** (desde a 0.15.0), em Configurações › Inicialização:
+  - "Iniciar com o Windows" cria a tarefa "Axon" no Agendador de Tarefas. O Windows não abre
+    pela chave Run um programa que pede administrador; a tarefa roda com o privilégio mais
+    alto, sem pedir o UAC no logon. Ela abre o Axon 15 s depois do seu logon, com
+    `--segundo-plano`: escondido, só com o ícone, até o jogo abrir. Sem limite de tempo e
+    também na bateria. Desligar a opção apaga a tarefa. Se ela abre outro `Axon.exe` (outra
+    pasta ou cópia), a página diz qual e oferece "Usar este"; nada é trocado sozinho.
+  - "Esconder sem o jogo" (padrão ligado): 5 s depois de a janela do jogo sumir, o overlay
+    some, e volta quando ela aparece. O ícone e os alertas continuam; o clique no ícone mostra
+    o overlay mesmo sem o jogo. Aberto à mão com o jogo fechado, o Axon aparece, como antes.
+  - Um Axon só por vez: abrir o exe com outro já aberto traz o aberto para a tela e sai. O
+    Atualizar abre a versão nova, que espera a velha fechar.
+  - Sem a janela do jogo há 10 s, a captura fecha os sockets, e eles reabrem em até 2 s depois
+    de ela aparecer: rodando desde o logon, o Axon não lê a rede do PC sem o jogo.
+  - A memória de jogadores também é gravada quando o overlay some por falta do jogo e quando o
+    Windows sai da conta ou desliga (com a janela escondida, a gravação a cada 30 s para).
 - **Atalhos** (desde a 0.8.0): `Ctrl+H` mostra ou esconde o overlay; `Ctrl+T` liga ou
   desliga o clique atravessando o overlay até o jogo (o rodapé avisa enquanto está ligado, e
   o item do menu da bandeja também desliga). Os padrões vêm do medidor do TK e não foram
@@ -405,6 +421,10 @@ na memória e somem ao fechar o Axon. O que o Axon grava na pasta, e nada mais:
 | `jogadores.json` | O último level e Power de cada nome visto, inclusive o seu |
 | `skills-pt.json`, `npcs-pt.json`, `icones\` | Nomes de skills e de mobs do questlog e ícones da CDN da NCSoft |
 
+Fora da pasta, só com "Iniciar com o Windows" ligado: a tarefa "Axon" no Agendador de Tarefas,
+com o caminho do exe e o seu usuário do Windows. Ao criá-la, o XML passa por um
+`tarefa-axon.xml` na pasta, apagado logo depois.
+
 ## Licença
 
 MIT, ver [LICENSE](LICENSE). Do RATmeter (GPL-3.0) vieram só fatos sobre o protocolo, como
@@ -470,6 +490,9 @@ testes → release) fica para quando o Actions voltar; aí a tag sozinha publica
 
 ## Pendências conhecidas
 
+- **Segundo plano** (0.15.0): a tabela de quando o overlay aparece, o XML da tarefa e a
+  leitura da consulta têm testes; a tarefa de verdade (logoff e logon), o esconder com o jogo,
+  a segunda instância e a pausa da captura não foram conferidos com o exe de release.
 - **Level e "(você)"**: o seu level e o "(você)" só chegam no login (`0x3633`), então
   abra o overlay antes de entrar no mundo. Troca de servidor é resolvida
   sozinha (PROTOCOLO.md §8) e começa uma luta nova. O dos outros chega quando eles entram no seu

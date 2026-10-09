@@ -111,11 +111,18 @@ impl Atualizacao {
 }
 
 /// Abre o exe novo, que já está no caminho do atual. O processo é elevado, então o filho também
-/// nasce elevado, sem outro pedido de administrador.
+/// nasce elevado, sem outro pedido de administrador. `--atualizado`: o novo espera este fechar em
+/// vez de achar que já tem um Axon aberto (`instancia`).
 pub fn abrir_novo() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    std::process::Command::new(exe).spawn().map(drop).map_err(|e| format!("abrir a versão nova: {e}"))
+    std::process::Command::new(exe)
+        .arg(ATUALIZADO)
+        .spawn()
+        .map(drop)
+        .map_err(|e| format!("abrir a versão nova: {e}"))
 }
+
+pub const ATUALIZADO: &str = "--atualizado";
 
 fn travar(estado: &Mutex<Estado>) -> MutexGuard<'_, Estado> {
     estado.lock().unwrap_or_else(PoisonError::into_inner)

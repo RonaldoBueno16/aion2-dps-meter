@@ -32,6 +32,8 @@ const ERRO_BUFFER_PEQUENO: u32 = 111;
 const CONFERIR_REDE_A_CADA: Duration = Duration::from_secs(2);
 
 pub type AoSegmento = Arc<dyn Fn(SegmentoTcp, Hora) + Send + Sync>;
+/// Se os sockets devem ficar abertos agora; a vigia pergunta a cada volta. O overlay fecha sem o jogo.
+pub type Ativa = Arc<dyn Fn() -> bool + Send + Sync>;
 
 #[derive(Default)]
 pub struct Contadores {
@@ -62,6 +64,7 @@ struct Comum {
     parando: Arc<AtomicBool>,
     contadores: Arc<Contadores>,
     ao_segmento: AoSegmento,
+    ativa: Ativa,
 }
 
 impl CapturaSocketBruto {
@@ -69,6 +72,13 @@ impl CapturaSocketBruto {
     /// interface e nenhuma abriu (sem administrador, todas falham). Sem interface nenhuma agora,
     /// começa assim mesmo: a vigia abre quando a rede voltar.
     pub fn iniciar(ao_segmento: AoSegmento) -> Result<Self, String> {
+        Self::iniciar_quando(ao_segmento, Arc::new(|| true))
+    }
+
+    /// Como `iniciar`, com os sockets abertos só enquanto `ativa` responder sim: fechados, não
+    /// recebem nada, e a vigia reabre em até CONFERIR_REDE_A_CADA. Inativa na largada, nada abre
+    /// agora (e o erro de abrir só apareceria na vigia, que tenta de novo).
+    pub fn iniciar_quando(ao_segmento: AoSegmento, ativa: Ativa) -> Result<Self, String> {
         let mut dados = unsafe { std::mem::zeroed::<WSADATA>() };
         let erro = unsafe { WSAStartup(0x0202, &mut dados) };
         if erro != 0 {
@@ -79,8 +89,9 @@ impl CapturaSocketBruto {
             parando: Arc::new(AtomicBool::new(false)),
             contadores: Arc::new(Contadores::default()),
             ao_segmento,
+            ativa,
         };
-        let enderecos = enderecos_locais()?;
+        let enderecos = if (comum.ativa)() { enderecos_locais()? } else { Vec::new() };
         let mut abertos = Vec::new();
         let falha = abrir_varios(&mut abertos, &enderecos, &comum);
         if abertos.is_empty()
@@ -128,8 +139,10 @@ fn vigiar(mut abertos: Vec<Aberto>, comum: &Comum, publicados: &Mutex<Vec<Ipv4Ad
         if comum.parando.load(Ordering::SeqCst) {
             break;
         }
-        // Falha passageira ao listar as interfaces: tenta de novo na próxima volta.
-        let Ok(atuais) = enderecos_locais() else { continue };
+        // Falha passageira ao listar as interfaces: tenta de novo na próxima volta. Inativa, é como
+        // ficar sem rede: fecha tudo e espera.
+        let atuais = if (comum.ativa)() { enderecos_locais() } else { Ok(Vec::new()) };
+        let Ok(atuais) = atuais else { continue };
         let situacao: Vec<(Ipv4Addr, bool)> = abertos.iter().map(|a| (a.endereco, !a.fio.is_finished())).collect();
         let (fechar, abrir) = reconciliar(&situacao, &atuais);
         if fechar.is_empty() && abrir.is_empty() {
