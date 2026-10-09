@@ -29,6 +29,11 @@ pub fn em_primeiro_plano() -> bool {
     jogo != 0 && unsafe { GetForegroundWindow() } as isize == jogo
 }
 
+/// HWND do jogo (0 = fechado), para a busca devolver o foco a ele.
+pub fn janela_do_jogo() -> isize {
+    janela()
+}
+
 /// Com o jogo aberto, mesmo minimizado ou atrás de outra janela.
 pub fn aberto() -> bool {
     janela() != 0

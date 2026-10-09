@@ -114,6 +114,18 @@ pub struct DropsNpc {
     pub baus: BTreeMap<u32, Vec<ItemDrop>>,
 }
 
+/// Uma página da busca de itens (getItems): os itens na ordem do questlog, sem os desativados.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResultadoBusca {
+    pub itens: Vec<ItemDrop>,
+    /// Quantas páginas o questlog diz ter; ele só entrega as `PAGINAS_DA_BUSCA` primeiras.
+    pub paginas: u32,
+}
+
+/// O questlog só entrega os 1.000 primeiros resultados (25 páginas de 40): a página 30 de "usable" veio
+/// vazia com o pageCount em 125, e a 20 cheia (conferido em 2026-10-09).
+pub const PAGINAS_DA_BUSCA: u32 = 25;
+
 /// Resposta do questlog que pode demorar ou não vir.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Busca<T> {
@@ -259,6 +271,8 @@ struct Estado {
     /// Regiões de cada NPC (getNpc), só para a ficha: o InfoNpc vai para o disco e isto não.
     regioes_npc: Mutex<HashMap<u32, Vec<String>>>,
     receitas: Mutex<HashMap<u32, DetalheReceita>>,
+    /// Páginas da busca de itens, pela chave do pedido (`busca:...`), só na memória.
+    buscas: Mutex<HashMap<String, ResultadoBusca>>,
     atributos: Mutex<Option<Arc<HashMap<String, Atributo>>>>,
     /// PNG da CDN pelo nome, só na memória (retratos dos chefes de campo e ícones dos drops).
     imagens: Mutex<HashMap<String, Arc<Vec<u8>>>>,
@@ -312,6 +326,7 @@ impl CatalogoSkills {
             itens: Mutex::new(HashMap::new()),
             regioes_npc: Mutex::new(HashMap::new()),
             receitas: Mutex::new(HashMap::new()),
+            buscas: Mutex::new(HashMap::new()),
             atributos: Mutex::new(None),
             imagens: Mutex::new(HashMap::new()),
             falhas: Mutex::new(HashSet::new()),
@@ -436,6 +451,16 @@ impl CatalogoSkills {
         self.buscar(format!("receita:{codigo}"))
     }
 
+    /// Uma página da busca de itens, só na memória (pede uma vez; com falha, só depois de
+    /// `repetir_falhas`). `categoria` vazia: todas. "Luvas", "luvas" e "luvas " são o mesmo pedido.
+    pub fn buscar_itens(&self, termo: &str, categoria: &str, pagina: u32) -> Busca<ResultadoBusca> {
+        let chave = chave_da_busca(termo, categoria, pagina);
+        if let Some(resultado) = self.estado.buscas.lock().unwrap_or_else(|e| e.into_inner()).get(&chave) {
+            return Busca::Pronto(resultado.clone());
+        }
+        self.buscar(chave)
+    }
+
     /// Nome e formato de cada atributo, só na memória (uma consulta de ~200 KB por execução).
     pub fn atributos(&self) -> Busca<Arc<HashMap<String, Atributo>>> {
         if let Some(atributos) = &*self.estado.atributos.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -492,7 +517,7 @@ impl CatalogoSkills {
         } else if novo {
             // Retrato de mob e emblema de classe (UT_), ícone de item (Icon_ e icon_; os das skills são
             // ICON_), os chefes da região e os drops de um chefe não esperam as skills.
-            let urgente = ["npc:", "regiao", "drops:", "item:", "receita:", "atributos", "icone:UT_", "icone:Icon_", "icone:icon_"]
+            let urgente = ["npc:", "regiao", "drops:", "item:", "receita:", "busca:", "atributos", "icone:UT_", "icone:Icon_", "icone:icon_"]
                 .iter()
                 .any(|p| item.starts_with(p));
             let _ = if urgente { self.urgente.send(item) } else { self.fila.send(item) };
@@ -620,6 +645,16 @@ fn trabalhar(estado: &Estado, urgentes: &Receiver<String>, fila: &Receiver<Strin
             match ficha {
                 Some(ficha) => {
                     estado.itens().insert(ficha.codigo, ficha);
+                }
+                None => {
+                    estado.falhas().insert(item.clone());
+                }
+            }
+        } else if let Some((categoria, pagina, termo)) = partes_da_busca(&item) {
+            let resultado = trpc(&http, "getItems", &entrada_da_busca(termo, categoria, pagina)).ok().and_then(|d| ler_busca(&d));
+            match resultado {
+                Some(resultado) => {
+                    estado.buscas.lock().unwrap_or_else(|e| e.into_inner()).insert(item.clone(), resultado);
                 }
                 None => {
                     estado.falhas().insert(item.clone());
@@ -859,6 +894,38 @@ fn ler_fontes(r: &Value) -> Fontes {
     Fontes { npcs, baus: ler_itens(r.get("itemIsContainedInItems")), receitas, outras }
 }
 
+/// Resposta do getItems: uma página da busca. Item desativado no jogo (`isDisabled`) fica de fora.
+pub fn ler_busca(r: &Value) -> Option<ResultadoBusca> {
+    let itens = r.get("pageData")?.as_array()?;
+    Some(ResultadoBusca {
+        itens: itens.iter().filter(|i| i.get("isDisabled").and_then(Value::as_bool) != Some(true)).filter_map(ler_item).collect(),
+        paginas: r.get("pageCount").and_then(Value::as_u64).map_or(0, |p| p.min(u64::from(u32::MAX)) as u32),
+    })
+}
+
+/// O termo por último: um `:` digitado na busca não quebra a chave.
+fn chave_da_busca(termo: &str, categoria: &str, pagina: u32) -> String {
+    let termo = termo.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    format!("busca:{categoria}:{pagina}:{termo}")
+}
+
+/// (categoria, página, termo) de uma chave `busca:`.
+fn partes_da_busca(chave: &str) -> Option<(&str, u32, &str)> {
+    let mut partes = chave.strip_prefix("busca:")?.splitn(3, ':');
+    let categoria = partes.next()?;
+    let pagina = partes.next()?.parse().ok()?;
+    Some((categoria, pagina, partes.next()?))
+}
+
+/// O JSON do getItems pelo serde (o termo pode ter aspas ou barra); sem categoria, sem o campo.
+fn entrada_da_busca(termo: &str, categoria: &str, pagina: u32) -> String {
+    let mut entrada = serde_json::json!({ "language": IDIOMA, "page": pagina, "searchTerm": termo });
+    if !categoria.is_empty() {
+        entrada["mainCategory"] = Value::from(categoria);
+    }
+    entrada.to_string()
+}
+
 /// Resposta do getRecipe: maestria e raça.
 pub fn ler_receita(r: &Value) -> Option<DetalheReceita> {
     r.get("id")?;
@@ -995,4 +1062,43 @@ pub fn escrever_trocando(destino: &Path, conteudo: &[u8]) -> std::io::Result<()>
     tmp.push(".tmp");
     std::fs::write(&tmp, conteudo)?;
     std::fs::rename(&tmp, destino)
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn busca_sem_os_desativados_e_com_o_total_de_paginas() {
+        // Formato do getItems (01-busca-newbold.json da pesquisa da F7), com um item desativado a mais.
+        let resposta: Value = serde_json::from_str(
+            r#"{"pageData":[
+                {"id":"210140076","name":"Peitoral de Newbold","icon":"/assets/x/Icon_Equip_AR_L_0013_T03_Torso.Icon_Equip_AR_L_0013_T03_Torso",
+                 "grade":31,"mainCategory":"armor","subCategory":"torso","isDisabled":false},
+                {"id":"210140999","name":"Peitoral Desativado","grade":31,"mainCategory":"armor","isDisabled":true},
+                {"id":"210540076","name":"Luvas de Newbold","grade":"31","mainCategory":"armor","subCategory":"gloves"}],
+              "pageCount":3,"currentPage":1}"#,
+        )
+        .unwrap();
+        let busca = ler_busca(&resposta).unwrap();
+        let codigos: Vec<u32> = busca.itens.iter().map(|i| i.codigo).collect();
+        assert_eq!(codigos, [210140076, 210540076]);
+        assert_eq!(busca.paginas, 3);
+        assert_eq!(busca.itens[0].icone.as_deref(), Some("Icon_Equip_AR_L_0013_T03_Torso"));
+        assert_eq!((busca.itens[1].raridade, busca.itens[1].categoria.as_str()), (31, "armor"));
+        assert_eq!(ler_busca(&serde_json::json!({"pageCount": 1})), None);
+    }
+
+    #[test]
+    fn chave_da_busca_ignora_caixa_e_espacos_e_aguenta_dois_pontos_e_aspas() {
+        assert_eq!(chave_da_busca("  Luvas   GARTUA ", "armor", 2), chave_da_busca("luvas gartua", "armor", 2));
+        let chave = chave_da_busca("a: \"b\"", "", 1);
+        assert_eq!(partes_da_busca(&chave), Some(("", 1, "a: \"b\"")));
+        let entrada: Value = serde_json::from_str(&entrada_da_busca("a: \"b\" \\", "", 1)).unwrap();
+        assert_eq!(entrada["searchTerm"], "a: \"b\" \\");
+        assert!(entrada.get("mainCategory").is_none());
+        let entrada: Value = serde_json::from_str(&entrada_da_busca("newb", "usable", 3)).unwrap();
+        assert_eq!((entrada["mainCategory"].as_str(), entrada["page"].as_u64()), (Some("usable"), Some(3)));
+        assert_eq!(partes_da_busca("item:123"), None);
+    }
 }

@@ -554,12 +554,15 @@ impl Overlay {
                 if botao(ui, "Voltar", true).on_hover_text("Volta ao medidor").clicked() {
                     self.tela = Tela::Medidor;
                 }
+                if botao(ui, "Buscar item", false).on_hover_text("Busca pelo nome no questlog").clicked() {
+                    self.abrir_busca();
+                }
             });
         });
         ui.add_space(4.0);
-        let explicacao = "Os itens que você procura e de onde cada um vem, pelo questlog. Marque na ☆ da ficha de um \
-                          item (Bosses ♛ › chefe › item). A tela Bosses destaca o chefe que derruba um desejo, e o 🔔 \
-                          avisa quando ele renasce. Clique num item para ver de onde ele vem.";
+        let explicacao = "Os itens que você procura e de onde cada um vem, pelo questlog. Marque na ☆ da busca ou da \
+                          ficha de um item (Bosses ♛ › chefe › item). A tela Bosses destaca o chefe que derruba um \
+                          desejo, e o 🔔 avisa quando ele renasce. Clique num item para ver de onde ele vem.";
         ui.add(eframe::egui::Label::new(RichText::new(explicacao).font(fonte(10.0, false)).color(branco(0x88))).wrap());
         ui.add_space(6.0);
         if self.config.desejos.is_empty() {

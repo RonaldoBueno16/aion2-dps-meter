@@ -6,6 +6,7 @@
 //! chefes de campo da região e recolher para a borda.
 
 mod chefes;
+mod busca;
 mod configuracoes;
 mod desejos;
 mod drops;
@@ -96,6 +97,8 @@ enum Tela {
     Morte(u64),
     Recordes,
     Desejos,
+    /// A busca de itens no questlog, aberta pela lista de desejos.
+    Busca,
 }
 
 /// Buffs mostrados embaixo das skills de um jogador expandido.
@@ -173,6 +176,7 @@ pub struct Overlay {
     ficha_inicial: Option<u32>,
     /// Desejo que espera o segundo clique no "Tirar?" da lista, e desde quando.
     desejo_tirando: Option<(u32, Instant)>,
+    busca: busca::EstadoBusca,
     logo: Option<Option<TextureHandle>>,
     /// Altura do conteúdo (em pontos) e escala (pixels por ponto) com que o tamanho da janela foi
     /// pedido por último. A escala e não o zoom da config: ela muda também com o DPI do monitor.
@@ -310,6 +314,7 @@ impl Overlay {
             drops_inicial: opcoes_debug.iter().skip_while(|a| *a != "--drops").nth(1).and_then(|c| c.parse().ok()),
             ficha_inicial: opcoes_debug.iter().skip_while(|a| *a != "--ficha").nth(1).and_then(|c| c.parse().ok()),
             desejo_tirando: None,
+            busca: Default::default(),
             logo: None,
             altura: 0.0,
             escala_aplicada: 0.0,
@@ -331,11 +336,13 @@ impl Overlay {
                 Tela::Chefes
             } else if tem("--desejos") {
                 Tela::Desejos
+            } else if tem("--busca") {
+                Tela::Busca
             } else {
                 Tela::Medidor
             },
             dobra: Dobra::Aberto,
-            janela: manter_sem_ativar(cc),
+            janela: manter_sem_ativar(cc, true),
             arraste: None,
             amostra: None,
             estado_config: configuracoes::EstadoConfig::default(),
@@ -620,6 +627,7 @@ impl Overlay {
             Tela::Morte(_) => return self.tela_morte(ui),
             Tela::Recordes => return self.tela_recordes(ui),
             Tela::Desejos => return self.tela_desejos(ui),
+            Tela::Busca => return self.tela_busca(ui),
             Tela::Medidor => {}
         }
         let tabela = self.tabela();
@@ -1809,7 +1817,11 @@ impl Overlay {
 
 impl eframe::App for Overlay {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        self.janela = manter_sem_ativar(frame);
+        // Saiu da busca no meio da digitação (atalho, bandeja): o foco volta ao jogo.
+        if self.tela != Tela::Busca {
+            self.parar_de_digitar(true);
+        }
+        self.janela = manter_sem_ativar(frame, self.busca.digitando.is_none());
         self.carregando = false;
         // Pelo winit (WS_EX_TRANSPARENT): ele guarda o estado e não apaga o bit ao recalcular o estilo.
         if bandeja::atravessando() != self.atravessando {
@@ -2395,21 +2407,33 @@ fn seguir_cursor(janela: isize, inicio_cursor: [i32; 2], inicio_canto: [i32; 4])
 /// Sem isto, clicar no overlay tira o foco do teclado do jogo. Conferido a cada quadro: o winit
 /// recalcula o estilo da janela quando ela aparece e apaga o bit aplicado na criação. Devolve o
 /// HWND (0 sem janela), que o recolher usa para achar o monitor.
-fn manter_sem_ativar(janela: &impl raw_window_handle::HasWindowHandle) -> isize {
+fn manter_sem_ativar(janela: &impl raw_window_handle::HasWindowHandle, sem_ativar: bool) -> isize {
     use raw_window_handle::RawWindowHandle;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW, WS_EX_NOACTIVATE};
 
     let Ok(handle) = janela.window_handle() else { return 0 };
     let RawWindowHandle::Win32(win32) = handle.as_raw() else { return 0 };
     let hwnd = win32.hwnd.get();
+    definir_sem_ativar(hwnd, sem_ativar);
+    hwnd
+}
+
+/// Liga ou tira o WS_EX_NOACTIVATE. Tirado só enquanto você digita na busca.
+fn definir_sem_ativar(hwnd: isize, sim: bool) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW, WS_EX_NOACTIVATE};
+
     let janela = hwnd as windows_sys::Win32::Foundation::HWND;
+    if janela.is_null() {
+        return;
+    }
     unsafe {
         let estilo = GetWindowLongPtrW(janela, GWL_EXSTYLE);
-        if estilo & WS_EX_NOACTIVATE as isize == 0 {
+        let tem = estilo & WS_EX_NOACTIVATE as isize != 0;
+        if sim && !tem {
             SetWindowLongPtrW(janela, GWL_EXSTYLE, estilo | WS_EX_NOACTIVATE as isize);
+        } else if !sim && tem {
+            SetWindowLongPtrW(janela, GWL_EXSTYLE, estilo & !(WS_EX_NOACTIVATE as isize));
         }
     }
-    hwnd
 }
 
 /// Caixa de mensagem do Windows (o build de release não tem console).

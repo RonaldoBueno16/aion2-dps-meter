@@ -220,8 +220,16 @@ cargo build --release -p overlay
   dele. E missão, dungeon, conquista, vendedor, coleta, pedido de suprimento e passe. "‹ Voltar"
   volta à ficha de antes. As fontes e as % são as do questlog, não conferidas no jogo.
 - **Lista de desejos** (desde a 0.14.0), ★ no cabeçalho: os itens que você procura. A ☆ no topo da
-  ficha marca o item; nesta versão não há busca por nome, então dá para marcar o que aparece nos
-  drops de um chefe, num baú ou numa receita. Cada linha mostra a melhor fonte (o chefe da região
+  ficha marca o item, inclusive o que aparece nos drops de um chefe, num baú ou numa receita.
+  **Buscar item** (desde a 0.15.0), no topo da lista: o nome pela metade, sem acento e sem caixa
+  ("luvas gartua"), com as categorias do questlog (Armadura, Arma, Acessório, Usável e Materiais)
+  e páginas de 40 no "Mais" (o questlog entrega só os 1.000 primeiros). A busca sai meio segundo
+  depois da última tecla ou no Enter. Itens com o mesmo nome (como as duas Luvas de Newbold, uma do
+  chefe e outra do baú) ficam numa linha, e a ☆ dela marca todos; o clique abre a ficha com "Onde
+  conseguir". O overlay não recebe teclado, para não tirar o foco do jogo: o clique no campo traz
+  o Axon para a frente só enquanto você digita, e Enter, Esc ou o clique fora devolvem o foco ao
+  jogo. Se o Windows não passar o foco, o campo não aceita o clique e avisa, porque as letras iriam
+  para o jogo. Cada linha mostra a melhor fonte (o chefe da região
   que derruba o item, com a chance e quando renasce; senão o monstro de maior chance, o baú, a
   receita ou a primeira das outras), a prioridade (Alta, Média ou Baixa; o clique troca, e a lista
   começa pelas altas), o 🔔 do alerta e o ✕, que pede o segundo clique. O clique no item abre a
@@ -405,7 +413,7 @@ pessoal)`:
 
 | Para onde | Quando | O que vai no pedido |
 |---|---|---|
-| `questlog.gg` | Com o cache vazio, uma listagem por classe; depois, uma vez por skill ou mob que ainda não está no cache; a cada execução, uma vez por região (chefes de campo), ao abrir os drops de um chefe ou a ficha de um item (mais o baú em que ele vem, a região dos 5 monstros de maior chance e a receita aberta), e uma vez a lista dos nomes de atributo (`statFormat`); com itens na lista de desejos, uma vez por item e por baú dele, ao abrir a lista ou a tela Bosses ou, com o 🔔 de um desejo ligado, quando chega a lista de chefes de uma região | Nome da classe, código da skill, do NPC, da região, do baú de saque, do item ou da receita; o idioma |
+| `questlog.gg` | Com o cache vazio, uma listagem por classe; depois, uma vez por skill ou mob que ainda não está no cache; a cada execução, uma vez por região (chefes de campo), ao abrir os drops de um chefe ou a ficha de um item (mais o baú em que ele vem, a região dos 5 monstros de maior chance e a receita aberta), e uma vez a lista dos nomes de atributo (`statFormat`); com itens na lista de desejos, uma vez por item e por baú dele, ao abrir a lista ou a tela Bosses ou, com o 🔔 de um desejo ligado, quando chega a lista de chefes de uma região; na busca de itens, uma vez por página (meio segundo depois da última tecla) | Nome da classe, código da skill, do NPC, da região, do baú de saque, do item ou da receita; na busca, o texto digitado, a categoria e a página; o idioma |
 | `assets.playnccdn.com` (CDN da NCSoft) | Uma vez por ícone (skill, emblema de classe, Odyle, evento) ou retrato de mob que ainda não foi baixado; a cada execução, uma vez por retrato de chefe de campo e ícone de item dos drops | Nome do arquivo do ícone |
 | `api.github.com` | A cada abertura | Pedido da última release deste repositório |
 | `github.com` e o servidor de arquivos do GitHub | Só ao clicar em Atualizar | Pedido do `Axon.exe` da release |
@@ -442,7 +450,7 @@ código foi escrito do zero.
 |---|---|
 | `crates/nucleo` | Protocolo (varint, LZ4, framing, parsers), captura (raw socket, pcapng, remontagem TCP), medição (placar, catálogo de skills) e formatação pt-BR |
 | `crates/nucleo/tests` | LZ4 contra o `lz4_flex`, framing, remontagem TCP, parsers com bytes reais, placar e troca de servidor (`cargo test`). O teste de rede do catálogo é opcional: `cargo test -p nucleo --test catalogo -- --ignored` |
-| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config [página]] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y] [--limite N] [--nova-versao] [--pedir-firewall] [--lutas] [--chefes] [--drops N] [--ficha N] [--desejos] [--voce ID] [--testar-alerta] [--ate S]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada; `--config alertas` abre direto numa página; `--lutas` separa as lutas como ao vivo e abre a tela Lutas; `--chefes` abre a tela Bosses; `--drops 2400424` abre o painel de drops do NPC dado e `--ficha 210540076` a ficha do item dado; `--desejos` abre a lista de desejos; `--voce 16201` trata o jogador dado como você, para ver o relatório de morte de outro; `--ate 90` lê só os 90 primeiros segundos da captura, para ver a janela no meio de uma luta) |
+| `crates/overlay` | Janela sempre no topo (egui/eframe), gera o `Axon.exe` (ícone de `assets/axon.ico`, embutido pelo `build.rs`). O build de debug abre sem administrador e aceita `cargo run -p overlay -- --replay captura.pcapng [--tank] [--expandir] [--config [página]] [--zoom 1.3] [--recolher \| --recolher-e-voltar] [--posicao x y] [--limite N] [--nova-versao] [--pedir-firewall] [--lutas] [--chefes] [--drops N] [--ficha N] [--desejos] [--busca] [--voce ID] [--testar-alerta] [--ate S]` para ver a janela sem o jogo (no replay, a config é lida mas não é gravada; `--config alertas` abre direto numa página; `--lutas` separa as lutas como ao vivo e abre a tela Lutas; `--chefes` abre a tela Bosses; `--drops 2400424` abre o painel de drops do NPC dado e `--ficha 210540076` a ficha do item dado; `--desejos` abre a lista de desejos e `--busca` a busca de itens; `--voce 16201` trata o jogador dado como você, para ver o relatório de morte de outro; `--ate 90` lê só os 90 primeiros segundos da captura, para ver a janela no meio de uma luta) |
 | `crates/overlay/assets` | `logo-axon.jpg` (a logo original) e `axon.ico`, o hexágono recortado dela com fundo transparente, de 16 a 256 px |
 | `crates/replay` | Replay de `.pcapng` com diagnóstico e modo `ao-vivo` no console; `--lutas` lista as lutas como o overlay ao vivo as separa |
 | `dados/skills.json` | Opcional, fora do repositório e das releases: nomes em inglês do RATmeter (GPL-3.0, ver PROTOCOLO.md §9), só reserva quando o questlog não tem a skill |
@@ -526,6 +534,9 @@ testes → release) fica para quando o Actions voltar; aí a tag sozinha publica
 - **Alertas**: a regra de quando cada alerta sai tem testes; a entrega (faixa, som e balão) ainda
   não foi conferida com o jogo aberto em tela cheia sem borda, nem o alerta de um chefe pela lista
   de desejos (o replay não roda os alertas).
+- **Busca de item** (0.15.0): o foco do teclado não foi conferido com o jogo aberto. Se o jogo ler o
+  teclado mesmo sem o foco (Raw Input em segundo plano), as letras digitadas na busca podem virar
+  comando no jogo; aí a busca passa a um teclado desenhado no overlay.
 - **Lista de desejos**: fontes e % do questlog, não conferidas no jogo. A chance pelo baú supõe
   que o baú e o item dentro dele são sorteados à parte. O destaque na tela Bosses depende da ordem
   dos chefes da região (conferida só em Altgard).

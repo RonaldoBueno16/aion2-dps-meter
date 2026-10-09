@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use super::catalogo::{Atributo, Busca, CatalogoSkills, DetalheItem, DetalheReceita, DropsNpc, InfoRegiao};
+use super::catalogo::{Atributo, Busca, CatalogoSkills, DetalheItem, DetalheReceita, DropsNpc, InfoRegiao, ResultadoBusca};
 
 // Curas que chegam pelo mesmo opcode do dano e não podem entrar na soma.
 const CURAS: [u32; 8] = [18120000, 18170000, 16770000, 16190000, 17120000, 17800000, 17100000, 17410000];
@@ -147,6 +147,11 @@ pub fn item_de_fundo(codigo: u32) -> Busca<DetalheItem> {
 /// Regiões em que o NPC aparece, pelo questlog, só na memória.
 pub fn regioes_do_npc(codigo: u32) -> Busca<Vec<String>> {
     catalogo().map_or(Busca::Falhou, |c| c.regioes_do_npc(codigo))
+}
+
+/// Uma página da busca de itens do questlog, só na memória (`categoria` vazia: todas).
+pub fn buscar_itens(termo: &str, categoria: &str, pagina: u32) -> Busca<ResultadoBusca> {
+    catalogo().map_or(Busca::Falhou, |c| c.buscar_itens(termo, categoria, pagina))
 }
 
 /// Maestria e raça da receita, pelo questlog, só na memória.
