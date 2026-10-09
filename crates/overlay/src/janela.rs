@@ -2161,6 +2161,9 @@ fn arquivo_memoria() -> PathBuf {
 /// A memória de jogadores para o jogadores.json. Também da thread da bandeja: com a janela
 /// escondida o egui não desenha, e no logoff o processo pode morrer sem o on_exit.
 fn salvar_memoria(sessao: &Mutex<Sessao>) {
+    // No logoff, a bandeja e o on_exit podem gravar juntos o mesmo arquivo temporário.
+    static GRAVANDO: Mutex<()> = Mutex::new(());
+    let _uma_por_vez = GRAVANDO.lock().unwrap_or_else(PoisonError::into_inner);
     let (eu, perfis) = travar(sessao).medidor.exportar_memoria();
     if perfis.is_empty() {
         return;

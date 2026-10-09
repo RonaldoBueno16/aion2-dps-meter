@@ -42,8 +42,9 @@ use crate::atalho::Atalho;
 use crate::config::{Alertas, Balao};
 use crate::{instancia, janela, jogo};
 
-/// A classe da janela oculta, pela qual a segunda instância a acha.
-pub const CLASSE: &str = "AxonBandeja";
+/// A classe da janela oculta, pela qual a segunda instância a acha. A do debug é outra: o pedido de
+/// aparecer de um debug não pode chegar ao Axon de verdade aberto ao lado.
+pub const CLASSE: &str = if cfg!(debug_assertions) { "AxonBandejaDebug" } else { "AxonBandeja" };
 /// Mensagem que o Windows manda à janela oculta quando o ícone é clicado.
 const AVISO: u32 = WM_APP + 1;
 const ALTERNAR: usize = 1;
@@ -299,7 +300,7 @@ unsafe fn icone_na_bandeja(janela: HWND, acao: u32) {
 unsafe fn menu(janela: HWND, overlay: HWND) {
     unsafe {
         let menu = CreatePopupMenu();
-        let visivel = LIGADO.load(Ordering::Relaxed) && !SEM_JOGO.with_borrow(|s| s.esperando);
+        let visivel = LIGADO.load(Ordering::Relaxed) && !esperando_o_jogo();
         let rotulo = if visivel { "Esconder overlay" } else { "Mostrar overlay" };
         AppendMenuW(menu, MF_STRING, ALTERNAR, utf16(rotulo).as_ptr());
         // Com o clique atravessando, o overlay não responde ao mouse: o menu é a saída garantida
@@ -377,7 +378,7 @@ unsafe fn entregar(janela: HWND, regras: &Alertas, saida: Vec<Alerta>, ctx: &egu
     if som {
         alertas::tocar();
     }
-    let faixa_aparece = LIGADO.load(Ordering::Relaxed) && !RECOLHIDO.load(Ordering::Relaxed);
+    let faixa_aparece = LIGADO.load(Ordering::Relaxed) && !RECOLHIDO.load(Ordering::Relaxed) && !esperando_o_jogo();
     let balao = !ausente
         && match regras.balao() {
             Balao::Nunca => false,
@@ -496,6 +497,11 @@ unsafe fn alternar(overlay: HWND) {
 /// "Esconder sem o jogo" mudou na config.
 pub fn definir_esconder_sem_jogo(sim: bool) {
     ESCONDER_SEM_JOGO.store(sim, Ordering::Relaxed);
+}
+
+/// A janela está escondida esperando o jogo (no replay, nunca).
+fn esperando_o_jogo() -> bool {
+    jogo::seguindo() && SEM_JOGO.with_borrow(|s| s.esperando)
 }
 
 fn salvar() {

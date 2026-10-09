@@ -91,11 +91,14 @@ fn mesmo_exe(comando: &Path, exe: &Path) -> bool {
     comando.to_string_lossy().to_lowercase() == exe.to_string_lossy().to_lowercase()
 }
 
-/// O `<Command>` da consulta `/XML`, sem o escape do XML.
+/// O `<Command>` da consulta `/XML`, sem o escape do XML. O Agendador aceita o caminho com espaço
+/// com ou sem aspas (as tarefas do Windows Defender e do OneDrive vêm sem; a tela do Agendador pode
+/// pôr), e o Axon grava sem.
 fn comando_da_tarefa(xml: &str) -> Option<PathBuf> {
     let inicio = xml.find("<Command>")? + "<Command>".len();
     let fim = inicio + xml[inicio..].find("</Command>")?;
     let comando = desescapar(xml[inicio..fim].trim());
+    let comando = comando.trim_matches('"');
     (!comando.is_empty()).then(|| PathBuf::from(comando))
 }
 
@@ -196,7 +199,14 @@ mod testes {
         let comando = comando_da_tarefa(consulta).unwrap();
         assert!(mesmo_exe(&comando, Path::new(r"c:\users\fulano\downloads\AXON.exe")));
         assert!(!mesmo_exe(&comando, Path::new(r"C:\Users\Fulano\Downloads\Axon (1).exe")));
+        // Com aspas (como a tela do Agendador pode gravar) e com espaço no caminho.
+        let com_aspas = r#"<Command>"C:\Users\Fulano Beltrano\Downloads\Axon.exe"</Command>"#;
+        let sem_aspas = r"<Command>C:\Users\Fulano Beltrano\Downloads\Axon.exe</Command>";
+        let exe = Path::new(r"C:\Users\Fulano Beltrano\Downloads\Axon.exe");
+        assert!(mesmo_exe(&comando_da_tarefa(com_aspas).unwrap(), exe));
+        assert!(mesmo_exe(&comando_da_tarefa(sem_aspas).unwrap(), exe));
         assert_eq!(comando_da_tarefa("<Task><Command></Command></Task>"), None);
+        assert_eq!(comando_da_tarefa("<Command>\"\"</Command>"), None);
         assert_eq!(comando_da_tarefa("<Task></Task>"), None);
         assert_eq!(desescapar("&amp;lt;"), "&lt;");
     }
